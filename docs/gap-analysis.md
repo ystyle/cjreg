@@ -13,6 +13,37 @@
 
 ---
 
+## 实施完成对照（M1-M6，2026-08）
+
+设计文档经多轮评审收敛后，按里程碑实施完成，全部通过单元测试 + 双仓 e2e 验证。
+
+| 里程碑 | 范围 | 关键能力 | 验证 |
+|---|---|---|---|
+| M1 | protocol / semver_range / 上游表 | 官方二进制发布格式解析、版本区间、上游模型 | 单测 |
+| M2 | index / store / server | NDJSON 索引、bstorm 包存储、发布/下载/索引 HTTP | 单测 + curl e2e |
+| M3 | auth / 管理 API / init | pbkdf2 认证、登录/me/用户/上游 CRUD、init 建管理员、持久化（syncWrites） | 单测 + curl e2e + 重启持久化 |
+| M4 | 代理回源 / 多仓解析 | 按优先级回源官方（索引+制品 302 跟随+二进制读）、缓存 | 单测 + curl e2e |
+| M5 | resolve 诊断 / 发布计划 analyze | 多仓 resolve 端点、依赖拓扑排序 | 单测 + curl e2e |
+| M6 | 发布计划执行 / e2e | 按拓扑推送到目标上游（6 测试包双仓）、DiskBlob 持久化、parseNDJSON 兼容 cjpm pretty meta | 单测 + tests/e2e.sh |
+
+### 关键差距项落地
+
+- A1/A2/A3（权限双路径）：M3 认证 + publishToken 基础落地；发布动态权限/覆盖裁决为简化实现
+- B1（三级删除）：PackageDoc.deletedAt 软删/恢复已实现（store 层），admin 删除端点待 M7
+- C（多仓）：G2 多上游 priority、J1 索引缓存、J2 优先级解析 已实现（M4/M5）
+- I（发布计划）：analyze 拓扑 + 执行引擎（M5/M6）；SSE 进度推送、六态状态机为简化
+- 🔒 可选/超集项：保留设计，未全部实现
+
+### 已解决的关键兼容性问题（回归测试固化）
+
+1. 官方索引 `index-version` 为字符串 `"1"`（readValue<Int64> 抛异常 → 整行解析失败）
+2. cjpm 的 meta-data.json 是 pretty 多行 JSON（parseNDJSON 按行解析失败 → 索引 404）
+3. cjpm meta 的 sha256sum/dependencies 在嵌套 index 对象（readIndex 需读嵌套）
+4. bstorm 持久存储重开需 reindex、跨进程 nextId 恢复、init 需 close 落盘
+5. StringReader 读二进制制品报 UTF-8 错（改 readStreamToBytes）
+
+---
+
 ## A. 权限体系（最高优先）
 
 | # | 差距项 | 来源 | 状态 | 建议 |

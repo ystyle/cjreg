@@ -1,0 +1,11 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "encryptUtils"
+  organization = "test"
+  description = "Encryption utilities"
+  version = "1.0.0"
+  output-type = "static"
+
+[dependencies]
+  "test::mathUtils" = "1.0.0"
+  "test::strUtils" = "1.0.0"

@@ -1,0 +1,11 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "dataUtils"
+  organization = "test"
+  description = "Data processing utilities"
+  version = "1.0.0"
+  output-type = "static"
+
+[dependencies]
+  "test::mathUtils" = "1.0.0"
+  "test::netUtils" = "1.0.0"

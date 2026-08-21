@@ -308,3 +308,110 @@ public func parsePackagesBody(body: String, out: ArrayList<(String, String, Stri
         ()
     }
 }
+
+// 构造官方发布二进制段 [version(1B)][size(4B LE)][data]
+func makePublishSection(version: UInt8, data: Array<Byte>): Array<Byte> {
+    let buf = ArrayList<Byte>()
+    buf.add(version)
+    let size = data.size
+    buf.add(UInt8(size & 0xFF))
+    buf.add(UInt8((size >> 8) & 0xFF))
+    buf.add(UInt8((size >> 16) & 0xFF))
+    buf.add(UInt8((size >> 24) & 0xFF))
+    for (b in data) {
+        buf.add(b)
+    }
+    return buf.toArray()
+}
+
+// 发布计划执行引擎：按拓扑顺序把本地包推送到目标上游
+public class PublishExecutor {
+    public var pkgStore: PackageStore
+    public var blobStore: BlobStore
+
+    public init(pkgStore: PackageStore, blobStore: BlobStore) {
+        this.pkgStore = pkgStore
+        this.blobStore = blobStore
+    }
+
+    // 执行：对 items（拓扑序）逐个推送；返回 (成功数, 总数, 失败详情)
+    // targetUrl 为目标上游 registry base（如 http://localhost:8070）
+    public func execute(items: ArrayList<PlanItem>, targetUrl: String, token: String): (Int64, Int64, ArrayList<String>) {
+        let total = items.size
+        var success: Int64 = 0
+        let errors = ArrayList<String>()
+
+        // 先按 order 排序（拓扑顺序）
+        var sorted = ArrayList<PlanItem>()
+        for (it in items) {
+            sorted.add(it)
+        }
+        // 插入排序（order 升序）
+        var i: Int64 = 1
+        while (i < sorted.size) {
+            let key = sorted[i]
+            var j = i - 1
+            while (j >= 0 && sorted[j].order > key.order) {
+                sorted[j + 1] = sorted[j]
+                j--
+            }
+            sorted[j + 1] = key
+            i++
+        }
+
+        for (it in sorted) {
+            // 取本地包文档（含 meta + sha）
+            match (this.pkgStore.getById(it.pkgId)) {
+                case Some(doc) =>
+                    // 从 indexJson 提取 sha256sum
+                    let sha = extractSha256(doc.indexJson)
+                    if (sha.isEmpty()) {
+                        errors.add("${doc.name}@${doc.version}: 无 sha256sum")
+                        continue
+                    }
+                    // 从 blob 取制品
+                    match (this.blobStore.get(sha)) {
+                        case Some(tar) =>
+                            // 组装官方二进制 [meta][tar]
+                            let metaBytes = doc.indexJson.toArray()
+                            let body = ArrayList<Byte>()
+                            for (b in makePublishSection(UInt8(1), metaBytes)) {
+                                body.add(b)
+                            }
+                            for (b in makePublishSection(UInt8(1), tar)) {
+                                body.add(b)
+                            }
+                            let url = buildPackagePublishURL(targetUrl, doc.name, doc.organization)
+                            let (ok, code) = httpPostBinary(url, body.toArray(), token)
+                            if (ok) {
+                                success++
+                                it.status = PlanItemStatus.Completed
+                            } else {
+                                it.status = PlanItemStatus.Failed
+                                it.error = "HTTP ${code}"
+                                errors.add("${doc.name}@${doc.version}: 推送失败 HTTP ${code}")
+                            }
+                        case None =>
+                            it.status = PlanItemStatus.Failed
+                            errors.add("${doc.name}@${doc.version}: 制品缺失（sha=${sha}）")
+                    }
+                case None =>
+                    errors.add("pkg#${it.pkgId} 不存在")
+            }
+        }
+        return (success, total, errors)
+    }
+}
+
+// 目标上游发布 URL：POST /pkg/{name}?organization={org}
+public func buildPackagePublishURL(targetUrl: String, name: String, org: String): String {
+    var base = targetUrl
+    // 去掉末尾斜杠
+    while (base.endsWith("/")) {
+        base = base[0..base.size - 1]
+    }
+    if (org.isEmpty()) {
+        return "${base}/pkg/${name}"
+    }
+    return "${base}/pkg/${name}?organization=${org}"
+}

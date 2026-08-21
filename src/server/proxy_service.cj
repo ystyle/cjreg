@@ -12,6 +12,7 @@ import stdx.net.tls.common.*
 import stdx.encoding.url.URL
 import std.collection.*
 import std.io.*
+import std.fs.*
 
 // 回源结果
 public enum ProxyOutcome {
@@ -259,4 +260,62 @@ public func readStreamToBytes(stream: InputStream): Array<Byte> {
         buf.write(chunk[0..n])
     }
     readToEnd(buf)
+}
+
+// HTTP POST 官方发布二进制（发布计划执行：推送包到目标上游）
+// 返回 (是否成功, 状态码)
+public func httpPostBinary(url: String, body: Array<Byte>, token: String): (Bool, Int64) {
+    let client = buildHttpClient(url)
+    try {
+        let resp = client.post(url, body)
+        let code = Int64(resp.status)
+        client.close()
+        return (code >= 200 && code < 300, code)
+    } catch (e: Exception) {
+        try {
+            client.close()
+        } catch (e2: Exception) {
+            ()
+        }
+        return (false, 0)
+    }
+}
+
+// 磁盘制品存储（持久化到 dataDir/blobs/{sha256}）
+public class DiskBlobStore <: BlobStore {
+    public var dir: String
+
+    public init(dir: String) {
+        this.dir = dir
+        try {
+            Directory.create(dir, recursive: true)
+        } catch (e: Exception) {
+            ()
+        }
+    }
+
+    public func put(sha256: String, data: Array<Byte>): Unit {
+        try {
+            let f = File(dir + "/" + sha256, Write)
+            f.write(data)
+            f.close()
+        } catch (e: Exception) {
+            println("[blob] put failed ${sha256}: ${e.message}")
+        }
+    }
+
+    public func get(sha256: String): ?Array<Byte> {
+        let path = dir + "/" + sha256
+        if (!exists(path)) {
+            return None
+        }
+        try {
+            let f = File(path, Read)
+            let bytes = readToEnd(f)
+            f.close()
+            return Some(bytes)
+        } catch (e: Exception) {
+            return None
+        }
+    }
 }

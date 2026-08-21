@@ -16,15 +16,16 @@ public func buildServer(
     store: PackageStore,
     admin: ?AdminService,
     upstreamSvc: ?UpstreamService,
+    blobStore: BlobStore,
     port: UInt16
 ): Tang {
     let app = Tang()
-    let publishSvc = PublishService(store)
+    let publishSvc = PublishService(store, blobStore)
     let indexSvc = IndexService(store)
     let downloadSvc = DownloadService(store)
     // 代理回源服务（传入上游服务时启用；不可变，供 handler lambda 捕获）
     let proxySvc: ?ProxyService = match (upstreamSvc) {
-        case Some(ups) => Some(ProxyService(store, MemoryBlobStore(), ups))
+        case Some(ups) => Some(ProxyService(store, blobStore, ups))
         case None => None
     }
 
@@ -113,6 +114,7 @@ public func buildServer(
             app.delete("/api/admin/upstreams/:id", { ctx => adm.deleteUpstream(ctx) })
             app.get("/api/admin/resolve", { ctx => adm.resolvePackage(ctx) })
             app.post("/api/admin/publish-plans/analyze", { ctx => adm.analyzePlan(ctx) })
+            app.post("/api/admin/publish-plans/execute", { ctx => adm.executePlan(ctx) })
         case None => ()
     }
 
@@ -122,10 +124,10 @@ public func buildServer(
 
 // 兼容：无管理 API / 无上游的构建
 public func buildServer(store: PackageStore, port: UInt16): Tang {
-    buildServer(store, None, None, port)
+    buildServer(store, None, None, MemoryBlobStore(), port)
 }
 
 // 兼容：有管理 API 无上游
 public func buildServer(store: PackageStore, admin: AdminService, port: UInt16): Tang {
-    buildServer(store, Some(admin), None, port)
+    buildServer(store, Some(admin), None, MemoryBlobStore(), port)
 }

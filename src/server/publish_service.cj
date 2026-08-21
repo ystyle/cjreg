@@ -69,12 +69,14 @@ public func sha256Hex(data: Array<Byte>): String {
     toHexString(sha.finish())
 }
 
-// 发布服务（校验 + 入库）
+// 发布服务（校验 + 入库 + 制品字节存 blob 供发布计划执行）
 public class PublishService {
     public var store: PackageStore
+    public var blobStore: BlobStore
 
-    public init(store: PackageStore) {
+    public init(store: PackageStore, blobStore: BlobStore) {
         this.store = store
+        this.blobStore = blobStore
     }
 
     // 发布；urlOrg 为 URL 里的 organization 参数（可空）
@@ -122,7 +124,10 @@ public class PublishService {
             }
         }
 
-        // 6. 入库
+        // 6. 制品字节存 blob（sha256 寻址，供发布计划执行推送到目标上游）
+        this.blobStore.put(actualSha, pd.tarball)
+
+        // 7. 入库
         let doc = PackageDoc()
         doc.organization = metaInfo.org
         doc.name = metaInfo.name

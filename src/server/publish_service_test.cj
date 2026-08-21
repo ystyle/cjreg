@@ -32,7 +32,7 @@ func makeStore(): PackageStore {
 }
 
 func makePublishService(): PublishService {
-    PublishService(makeStore())
+    PublishService(makeStore(), MemoryBlobStore())
 }
 
 // 构造一个合法发布 body：meta（含 index.sha256sum）+ tar
@@ -136,7 +136,7 @@ func testPublishConflict() {
 @Test
 func testIndexAndDownload() {
     let store = makeStore()
-    let svc = PublishService(store)
+    let svc = PublishService(store, MemoryBlobStore())
     let body = makePublishBodyConsistent("test", "demo", "1.0.0")
     svc.publish("test", "demo", body)
     // 再发一个版本

@@ -1,0 +1,9 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "strUtils"
+  organization = "test"
+  description = "String utilities"
+  version = "1.0.0"
+  output-type = "static"
+
+[dependencies]

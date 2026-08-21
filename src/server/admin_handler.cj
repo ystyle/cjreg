@@ -43,11 +43,12 @@ public class AdminService {
     public var resolveSvc: ResolveService
     public var proxySvc: ?ProxyService
     public var planSvc: PublishPlanService
+    public var executor: PublishExecutor
 
     public init(auth: AuthService, upstreamSvc: UpstreamService,
                 userStore: UserStore, upstreamStore: UpstreamStore,
                 resolveSvc: ResolveService, proxySvc: ?ProxyService,
-                planSvc: PublishPlanService) {
+                planSvc: PublishPlanService, executor: PublishExecutor) {
         this.auth = auth
         this.upstreamSvc = upstreamSvc
         this.userStore = userStore
@@ -55,6 +56,7 @@ public class AdminService {
         this.resolveSvc = resolveSvc
         this.proxySvc = proxySvc
         this.planSvc = planSvc
+        this.executor = executor
     }
 
     // 从 Authorization 头取 token
@@ -315,6 +317,63 @@ public class AdminService {
             sb.append("{\"name\":\"${it.name}\",\"org\":\"${it.org}\",\"version\":\"${it.version}\",\"order\":${it.order}}")
         }
         sb.append("],\"hasCycle\":${cycle}}")
+        writeJson(ctx, 200u16, sb.toString())
+    }
+
+    // 发布计划执行：POST /api/admin/publish-plans/execute
+    // body: {packages:[{organization,name,version}], target_url}
+    public func executePlan(ctx: TangHttpContext): Unit {
+        if (!requireAdmin(ctx)) {
+            return
+        }
+        let body = String.fromUtf8(ctx.bodyRaw())
+        var roots = ArrayList<(String, String, String)>()
+        parsePackagesBody(body, roots)
+        var targetUrl = ""
+        let bb = ByteBuffer()
+        bb.write(body.toArray())
+        let r = JsonReader(bb)
+        try {
+            while (let Some(v) <- r.peek()) {
+                match (v) {
+                    case BeginObject =>
+                        r.startObject()
+                        while (r.peek() != EndObject) {
+                            let n = r.readName()
+                            if (n == "target_url") {
+                                targetUrl = r.readValue<String>()
+                            } else {
+                                r.skip()
+                            }
+                        }
+                        r.endObject()
+                        break
+                    case _ => r.skip()
+                }
+            }
+        } catch (e: Exception) {
+            ()
+        }
+        if (roots.size == 0 || targetUrl.isEmpty()) {
+            writeJson(ctx, 400u16, "{\"error\":\"packages and target_url required\"}")
+            return
+        }
+        // 先 analyze 得拓扑 items
+        let (items, _) = this.planSvc.analyze(roots)
+        if (items.size == 0) {
+            writeJson(ctx, 400u16, "{\"error\":\"no packages found locally\"}")
+            return
+        }
+        let (ok, total, errors) = this.executor.execute(items, targetUrl, "")
+        let sb = StringBuilder()
+        sb.append("{\"success\":${ok},\"total\":${total},\"errors\":[")
+        for (i in 0..errors.size) {
+            if (i > 0) {
+                sb.append(",")
+            }
+            sb.append("\"${errors[i]}\"")
+        }
+        sb.append("]}")
         writeJson(ctx, 200u16, sb.toString())
     }
 

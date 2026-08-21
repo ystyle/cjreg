@@ -168,6 +168,28 @@ func readIndex(r: JsonReader): PackageIndex {
             case "test-dependencies" => idx.testDependencies = readDeps(r)
             case "script-dependencies" => idx.scriptDependencies = readDeps(r)
             case "sha256sum" => idx.sha256sum = r.readValue<String>()
+            case "index" =>
+                // cjpm meta 的 sha256sum/dependencies/index-version 在嵌套 index 对象
+                r.startObject()
+                while (r.peek() != EndObject) {
+                    let in2 = r.readName()
+                    match (in2) {
+                        case "sha256sum" => idx.sha256sum = r.readValue<String>()
+                        case "yanked" => idx.yanked = r.readValue<Bool>()
+                        case "dependencies" => idx.dependencies = readDeps(r)
+                        case "test-dependencies" => idx.testDependencies = readDeps(r)
+                        case "script-dependencies" => idx.scriptDependencies = readDeps(r)
+                        case "index-version" =>
+                            let iv = r.peek()
+                            match (iv) {
+                                case Some(JsonToken.JsonString) => idx.indexVersion = Int64.parse(r.readValue<String>())
+                                case Some(JsonToken.JsonNumber) => idx.indexVersion = r.readValue<Int64>()
+                                case _ => r.skip()
+                            }
+                        case _ => r.skip()
+                    }
+                }
+                r.endObject()
             case "yanked" => idx.yanked = r.readValue<Bool>()
             case "index-version" =>
                 // 官方索引实际返回字符串 "1"，兼容数字
@@ -184,33 +206,49 @@ func readIndex(r: JsonReader): PackageIndex {
     return idx
 }
 
-// 解析 NDJSON：逐行解析，跳过空行/非法行
+// 解析 NDJSON / 多行 JSON：扫描所有顶层 JSON 对象（兼容单行/pretty-print 多行）
 public func parseNDJSON(body: String): ArrayList<PackageIndex> {
     let result = ArrayList<PackageIndex>()
-    for (line in body.lines()) {
-        let s = line.trimAscii()
-        if (s.isEmpty()) {
-            continue
-        }
-        let bb = ByteBuffer()
-        bb.write(s.toArray())
-        let r = JsonReader(bb)
-        try {
-            // 跳到第一个对象
-            while (let Some(v) <- r.peek()) {
-                match (v) {
-                    case BeginObject =>
+    let bb = ByteBuffer()
+    bb.write(body.toArray())
+    let r = JsonReader(bb)
+    while (true) {
+        // 找一个顶层 BeginObject；peek() 在文档末尾返回 None
+        var found = false
+        while (let Some(v) <- r.peek()) {
+            match (v) {
+                case BeginObject =>
+                    try {
                         result.add(readIndex(r))
+                        found = true
                         break
-                    case _ => r.skip()
-                }
+                    } catch (e: Exception) {
+                        // 该对象非索引条目或解析失败 → 跳过整个对象继续
+                        skipObject(r)
+                        found = false
+                        break
+                    }
+                case _ => r.skip()
             }
-        } catch (e: Exception) {
-            // 跳过非法行
-            ()
+        }
+        if (!found) {
+            return result
         }
     }
     return result
+}
+
+// 跳过当前顶层对象（用 peek 循环到 EndObject）
+func skipObject(r: JsonReader): Unit {
+    try {
+        r.startObject()
+        while (r.peek() != EndObject) {
+            r.skip()
+        }
+        r.endObject()
+    } catch (e: Exception) {
+        ()
+    }
 }
 
 // 从索引列表中按 name+version 找条目

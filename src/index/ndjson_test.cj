@@ -100,3 +100,39 @@ func testFullOfficialEntry() {
     @Expect(parsed[0].version, "1.0.1")
     @Expect(parsed[0].indexVersion, 1)
 }
+
+@Test
+func testParsePrettyMultilineJSON() {
+    // cjpm 的 meta-data.json 是 pretty-printed 多行 JSON（含嵌套 index）
+    let body = "{\n  \"organization\": \"test\",\n  \"name\": \"mathUtils\",\n  \"version\": \"1.0.0\",\n" +
+        "  \"cjc-version\": \"1.1.0\",\n  \"index\": {\n    \"sha256sum\": \"abc\",\n" +
+        "    \"index-version\": 1\n  },\n  \"meta-version\": 1\n}\n"
+    let parsed = parseNDJSON(body)
+    @Expect(parsed.size, 1)
+    @Expect(parsed[0].name, "mathUtils")
+    @Expect(parsed[0].organization, "test")
+    @Expect(parsed[0].version, "1.0.0")
+}
+
+@Test
+func testParseNDJSONStillWorks() {
+    // 原有 NDJSON 单行多条目仍正常
+    let body = "{\"name\":\"a\",\"version\":\"1.0.0\",\"sha256sum\":\"s1\",\"yanked\":false,\"index-version\":1}\n" +
+        "{\"name\":\"a\",\"version\":\"1.1.0\",\"sha256sum\":\"s2\",\"yanked\":false,\"index-version\":1}\n"
+    let parsed = parseNDJSON(body)
+    @Expect(parsed.size, 2)
+    @Expect(parsed[1].version, "1.1.0")
+}
+
+@Test
+func testParseNestedDepsAndSha() {
+    // cjpm pretty meta：sha/dependencies 都在嵌套 index
+    let body = "{\n  \"organization\": \"test\",\n  \"name\": \"app\",\n  \"version\": \"1.0.0\",\n" +
+        "  \"index\": {\n    \"dependencies\": [{\"name\": \"test::encryptUtils\", \"require\": \"1.0.0\"}],\n" +
+        "    \"sha256sum\": \"shaXYZ\",\n    \"index-version\": 1\n  }\n}\n"
+    let parsed = parseNDJSON(body)
+    @Expect(parsed.size, 1)
+    @Expect(parsed[0].sha256sum, "shaXYZ")
+    @Expect(parsed[0].dependencies.size, 1)
+    @Expect(parsed[0].dependencies[0].name, "test::encryptUtils")
+}

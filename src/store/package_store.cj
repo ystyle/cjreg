@@ -47,6 +47,21 @@ public class PackageStore {
     public init(storm: Storm) {
         this.storm = storm
         this.nextId = 1
+        this.storm.reindex<PackageDoc>()
+        recoverNextId()
+    }
+
+    // 从已有包恢复最大 id（跨进程复用数据目录时避免 id 冲突）
+    public func recoverNextId(): Unit {
+        var maxId: Int64 = 0
+        for (d in this.storm.all<PackageDoc>()) {
+            if (d.id >= maxId) {
+                maxId = d.id
+            }
+        }
+        if (maxId >= this.nextId) {
+            this.nextId = maxId + 1
+        }
     }
 
     // 保存；id==0 时自动分配递增 id（bstorm @Id 不自动生成，需业务层分配）

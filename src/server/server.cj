@@ -5,13 +5,16 @@ package ystyle::cjreg.server
 import tang.*
 import ystyle::cjreg.protocol.*
 import ystyle::cjreg.store.*
+import ystyle::cjreg.auth.*
+import ystyle::cjreg.config.*
 import std.collection.*
 import stdx.encoding.json.stream.*
 import std.io.*
 
-// 组装 HTTP 服务：注册官方协议三端点 + 健康检查
+// 组装 HTTP 服务：官方协议三端点 + 健康检查 + 管理 API
 public func buildServer(
     store: PackageStore,
+    admin: ?AdminService,
     port: UInt16
 ): Tang {
     let app = Tang()
@@ -76,6 +79,25 @@ public func buildServer(
         }
     })
 
+    // 管理 API（可选：传入了 admin 服务才注册）
+    match (admin) {
+        case Some(adm) =>
+            app.post("/api/admin/login", { ctx => adm.login(ctx) })
+            app.post("/api/admin/logout", { ctx => adm.logout(ctx) })
+            app.get("/api/admin/me", { ctx => adm.me(ctx) })
+            app.get("/api/admin/users", { ctx => adm.listUsers(ctx) })
+            app.post("/api/admin/users", { ctx => adm.createUser(ctx) })
+            app.get("/api/admin/upstreams", { ctx => adm.listUpstreams(ctx) })
+            app.post("/api/admin/upstreams", { ctx => adm.addUpstream(ctx) })
+            app.delete("/api/admin/upstreams/:id", { ctx => adm.deleteUpstream(ctx) })
+        case None => ()
+    }
+
     app.setPort(port)
     return app
+}
+
+// 兼容：无管理 API 的构建（仅官方协议 + 健康检查）
+public func buildServer(store: PackageStore, port: UInt16): Tang {
+    buildServer(store, None, port)
 }

@@ -1,0 +1,87 @@
+// BstormUserStore 单元测试（持久化 + auth 集成）
+package ystyle::cjreg.store
+
+import bstorm.*
+import ystyle::cjreg.auth.*
+import ystyle::cjreg.auth.model.*
+import ystyle::cjreg.auth.util.*
+import std.unittest.testmacro.*
+import std.collection.*
+
+func makeUserStore(): BstormUserStore {
+    BstormUserStore(Storm.inMemory())
+}
+
+func makeService(store: UserStore): AuthService {
+    AuthService(store, 3600)
+}
+
+@Test
+func testUserPersist() {
+    let store = makeUserStore()
+    let svc = makeService(store)
+    // initAdmin（空库创建管理员）
+    PasswordHash.ITERATIONS = 1000
+    let admin = svc.initAdmin("admin", "AdminPass1")
+    @Expect(admin.isSome(), true)
+
+    // 从同一 store 重新查（模拟重启）
+    let reloaded = store.getUserByUsername("admin")
+    match (reloaded) {
+        case Some(u) =>
+            @Expect(u.isAdmin, true)
+            @Expect(u.isActive, true)
+            @Expect(u.publishToken.startsWith("publish-"), true)
+        case None => @Fail("user should persist")
+    }
+    // 登录（校验密码）
+    let r = svc.login("admin", "AdminPass1")
+    @Expect(r.isSome(), true)
+}
+
+@Test
+func testTokenPersist() {
+    let store = makeUserStore()
+    let svc = makeService(store)
+    PasswordHash.ITERATIONS = 1000
+    svc.initAdmin("admin", "AdminPass1")
+    let (_, token) = svc.login("admin", "AdminPass1").getOrThrow()
+
+    // token 持久化，从 store 直接读
+    let stored = store.getToken(token.token)
+    @Expect(stored.isSome(), true)
+    match (stored) {
+        case Some(t) =>
+            @Expect(t.kind, "session")
+            @Expect(t.userId, token.userId)
+        case None => ()
+    }
+    // 校验 token 仍有效
+    @Expect(svc.validateSessionToken(token.token).isSome(), true)
+    // 登出后 token 被删
+    svc.logout(token.token)
+    @Expect(store.getToken(token.token).isNone(), true)
+}
+
+@Test
+func testIsEmptyAndInitGuard() {
+    let store = makeUserStore()
+    @Expect(store.isEmpty(), true)
+    let svc = makeService(store)
+    PasswordHash.ITERATIONS = 1000
+    svc.initAdmin("admin", "AdminPass1")
+    @Expect(store.isEmpty(), false)
+    // 已初始化 → 拒绝再 initAdmin
+    @Expect(svc.initAdmin("admin2", "Pass123").isNone(), true)
+}
+
+@Test
+func testPublishTokenCheck() {
+    let store = makeUserStore()
+    let svc = makeService(store)
+    PasswordHash.ITERATIONS = 1000
+    let admin = svc.initAdmin("admin", "AdminPass1").getOrThrow()
+    // 发布 token 校验走 listAllUsers
+    @Expect(svc.validatePublishToken(admin.publishToken).isSome(), true)
+    @Expect(svc.validatePublishToken("publish-fake").isNone(), true)
+}

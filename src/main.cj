@@ -8,6 +8,9 @@ import std.io.*
 import bstorm.*
 import ystyle::cjreg.server.*
 import ystyle::cjreg.store.*
+import ystyle::cjreg.auth.*
+import ystyle::cjreg.auth.model.*
+import ystyle::cjreg.config.*
 
 func printUsage(): Unit {
     println("cjreg - 仓颉私有中心仓与多仓工具")
@@ -29,6 +32,8 @@ main(args: Array<String>): Int64 {
     let specs = [
         Full("data", r'd', RequiredValue),
         Full("port", r'p', RequiredValue),
+        Long("username", RequiredValue),
+        Long("password", RequiredValue),
         Full("help", r'h', NoValue)
     ]
     var result: ParsedArguments
@@ -56,6 +61,16 @@ main(args: Array<String>): Int64 {
         }
         case None => ()
     }
+    var username = ""
+    match (result.options.get("username")) {
+        case Some(v) => username = v
+        case None => ()
+    }
+    var password = ""
+    match (result.options.get("password")) {
+        case Some(v) => password = v
+        case None => ()
+    }
     var port: UInt16 = 8060
     match (result.options.get("port")) {
         case Some(v) =>
@@ -71,11 +86,9 @@ main(args: Array<String>): Int64 {
         case "serve" =>
             return cmdServe(dataDir, port)
         case "init" =>
-            println("cjreg: init 尚未实现（M3 部署引导）")
-            return 1
+            return cmdInit(dataDir, username, password)
         case "admin" =>
-            println("cjreg: admin 尚未实现（M3 应急管理）")
-            return 1
+            return cmdAdmin(dataDir)
         case _ =>
             println("cjreg: 未知命令 ${command}")
             printUsage()
@@ -83,20 +96,80 @@ main(args: Array<String>): Int64 {
     }
 }
 
-// serve：启动 HTTP 服务
-func cmdServe(dataDir: String, port: UInt16): Int64 {
-    // 打开 bstorm 存储（数据目录）
-    var store: PackageStore
+// 打开共享存储（PackageStore + BstormUserStore + 上游 store）
+func openStores(dataDir: String): ?(PackageStore, BstormUserStore, BstormUpstreamStore) {
+    var storm: Storm
     try {
-        let storm = Storm.open(dataDir + "/cjreg.db")
-        store = PackageStore(storm)
+        storm = Storm.open(dataDir + "/cjreg.db", syncWrites: true)
+    } catch (e: Exception) {
+        println("cjreg: 无法打开数据目录 ${dataDir}: ${e.message}")
+        return None
+    }
+    return Some((PackageStore(storm), BstormUserStore(storm), BstormUpstreamStore(storm)))
+}
+
+// serve：启动 HTTP 服务（含管理 API）
+func cmdServe(dataDir: String, port: UInt16): Int64 {
+    let stores = openStores(dataDir)
+    if (stores.isNone()) {
+        return 1
+    }
+    let (pkgStore, userStore, upStore) = stores.getOrThrow()
+    let authSvc = AuthService(userStore, 86400)
+    let upSvc = UpstreamService(upStore)
+    let admin = AdminService(authSvc, upSvc, userStore, upStore)
+
+    let app = buildServer(pkgStore, Some(admin), port)
+    println("cjreg: serving on port ${port} (data=${dataDir})")
+    app.listen(port)
+    return 0
+}
+
+// init：空数据目录创建首个管理员 + 默认官方上游
+func cmdInit(dataDir: String, username: String, password: String): Int64 {
+    var storm: Storm
+    try {
+        storm = Storm.open(dataDir + "/cjreg.db", syncWrites: true)
     } catch (e: Exception) {
         println("cjreg: 无法打开数据目录 ${dataDir}: ${e.message}")
         return 1
     }
+    let userStore = BstormUserStore(storm)
+    let upStore = BstormUpstreamStore(storm)
+    let authSvc = AuthService(userStore, 86400)
 
-    let app = buildServer(store, port)
-    println("cjreg: serving on port ${port} (data=${dataDir})")
-    app.listen(port)
+    if (!userStore.isEmpty()) {
+        println("cjreg: 数据目录已初始化（存在用户），拒绝重复 init")
+        storm.close()
+        return 1
+    }
+    // 首个管理员（需 --username/--password）
+    if (username.isEmpty() || password.isEmpty()) {
+        println("cjreg: init 需要 --username 和 --password 创建首个管理员")
+        storm.close()
+        return 1
+    }
+    match (authSvc.initAdmin(username, password)) {
+        case Some(u) =>
+            println("cjreg: 已创建管理员 ${u.username}（id=${u.id}）")
+        case None =>
+            println("cjreg: 创建管理员失败")
+            storm.close()
+            return 1
+    }
+    // 默认官方上游
+    let upSvc = UpstreamService(upStore)
+    upSvc.add("official", "https://pkg.cangjie-lang.cn/registry", 0, "", 0)
+
+    println("cjreg: 初始化完成")
+    println("  数据目录: ${dataDir}")
+    println("  官方上游: official (https://pkg.cangjie-lang.cn/registry)")
+    storm.close()  // 必须 close 才落盘（badger flush）
     return 0
+}
+
+// admin：应急管理（reset-password）——当前占位
+func cmdAdmin(dataDir: String): Int64 {
+    println("cjreg: admin reset-password 尚未实现（需命令行参数用户名/密码）")
+    return 1
 }

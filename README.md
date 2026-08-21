@@ -22,8 +22,6 @@ cjreg <command> [options]
   -h, --help          帮助
 ```
 
-> 说明：`config`/`resolve`/`proxy`/`mirror`/`sync` 等设计阶段规划的 CLI 子命令已在评审中移除；多仓配置通过管理 API（`/api/admin/upstreams`）维护，解析/回源能力通过 HTTP 端点提供。
-
 ## 构建与测试
 
 ```bash

@@ -119,7 +119,7 @@ func cmdServe(dataDir: String, port: UInt16): Int64 {
     let upSvc = UpstreamService(upStore)
     let admin = AdminService(authSvc, upSvc, userStore, upStore)
 
-    let app = buildServer(pkgStore, Some(admin), port)
+    let app = buildServer(pkgStore, Some(admin), Some(upSvc), port)
     println("cjreg: serving on port ${port} (data=${dataDir})")
     app.listen(port)
     return 0

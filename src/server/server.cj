@@ -15,12 +15,18 @@ import std.io.*
 public func buildServer(
     store: PackageStore,
     admin: ?AdminService,
+    upstreamSvc: ?UpstreamService,
     port: UInt16
 ): Tang {
     let app = Tang()
     let publishSvc = PublishService(store)
     let indexSvc = IndexService(store)
     let downloadSvc = DownloadService(store)
+    // 代理回源服务（传入上游服务时启用；不可变，供 handler lambda 捕获）
+    let proxySvc: ?ProxyService = match (upstreamSvc) {
+        case Some(ups) => Some(ProxyService(store, MemoryBlobStore(), ups))
+        case None => None
+    }
 
     // 健康检查（自有端点，非官方协议）
     app.get("/api/health", { ctx =>
@@ -49,33 +55,48 @@ public func buildServer(
         }
     })
 
-    // 下载 GET /pkg/:name/:version[?organization=]
+    // 下载 GET /pkg/:name/:version[?organization=]（统一走代理：blob 有则本地，否则回源）
     app.get("/pkg/:name/:version", { ctx =>
         let name = ctx.param("name")
         let version = ctx.param("version")
         let org = ctx.query("organization") ?? ""
-        let doc = downloadSvc.find(org, name, version)
-        match (doc) {
-            case Some(d) =>
-                ctx.attachment("${name}-${version}.cjp")
-                    .set("Content-Type", "application/x-gzip")
-                // TODO(M3)：从 blob 存储取真实制品字节；当前返回占位
-                let placeholder: Array<Byte> = [UInt8(31), UInt8(139)]
-                ctx.write(placeholder)
+        // 计数（本地有该版本才计）
+        downloadSvc.find(org, name, version)
+        match (proxySvc) {
+            case Some(proxy) =>
+                let (outcome, blob, sha) = proxy.fetchArtifact(org, name, version)
+                match (blob) {
+                    case Some(bytes) =>
+                        ctx.attachment("${name}-${version}.cjp")
+                            .set("Content-Type", "application/x-gzip")
+                        ctx.write(bytes)
+                    case None =>
+                        ctx.status(404u16).writeStringWithCode(404u16, "{\"error\":\"not found\"}")
+                }
             case None =>
                 ctx.status(404u16).writeStringWithCode(404u16, "{\"error\":\"not found\"}")
         }
     })
 
-    // 索引 GET /index/:mo/:du/:name[?organization=]
+    // 索引 GET /index/:mo/:du/:name[?organization=]（本地无则回源上游）
     app.get("/index/:mo/:du/:name", { ctx =>
         let name = ctx.param("name")
         let org = ctx.query("organization") ?? ""
-        let ndjson = indexSvc.generate(org, name, false)
-        if (ndjson.isEmpty()) {
-            ctx.status(404u16).writeStringWithCode(404u16, "{\"error\":\"not found\"}")
-        } else {
-            ctx.contentType("application/x-ndjson").writeString(ndjson)
+        let local = indexSvc.generate(org, name, false)
+        if (!local.isEmpty()) {
+            ctx.contentType("application/x-ndjson").writeString(local)
+            return
+        }
+        match (proxySvc) {
+            case Some(proxy) =>
+                let (outcome, ndjson) = proxy.fetchIndex(org, name)
+                if (ndjson.isEmpty()) {
+                    ctx.status(404u16).writeStringWithCode(404u16, "{\"error\":\"not found\"}")
+                } else {
+                    ctx.contentType("application/x-ndjson").writeString(ndjson)
+                }
+            case None =>
+                ctx.status(404u16).writeStringWithCode(404u16, "{\"error\":\"not found\"}")
         }
     })
 
@@ -97,7 +118,12 @@ public func buildServer(
     return app
 }
 
-// 兼容：无管理 API 的构建（仅官方协议 + 健康检查）
+// 兼容：无管理 API / 无上游的构建
 public func buildServer(store: PackageStore, port: UInt16): Tang {
-    buildServer(store, None, port)
+    buildServer(store, None, None, port)
+}
+
+// 兼容：有管理 API 无上游
+public func buildServer(store: PackageStore, admin: AdminService, port: UInt16): Tang {
+    buildServer(store, Some(admin), None, port)
 }

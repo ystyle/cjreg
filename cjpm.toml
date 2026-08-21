@@ -23,6 +23,7 @@
   "tang" = { path = "../tang" }
   "bstorm" = "1.4.3"
   "gjson" = "1.2.0"
+  "cjxt" = { path = "../cjxt" }
 
 # badger-cj（bstorm 底层）的 io_uring 支持
 [target.x86_64-unknown-linux-gnu]

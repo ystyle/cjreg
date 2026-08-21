@@ -11,6 +11,9 @@ import ystyle::cjreg.store.*
 import ystyle::cjreg.auth.*
 import ystyle::cjreg.auth.model.*
 import ystyle::cjreg.config.*
+import ystyle::cjreg.ui.*
+import cjxt.*
+import cjxt.components.*
 
 func printUsage(): Unit {
     println("cjreg - 仓颉私有中心仓与多仓工具")
@@ -89,6 +92,8 @@ main(args: Array<String>): Int64 {
             return cmdInit(dataDir, username, password)
         case "admin" =>
             return cmdAdmin(dataDir)
+        case "admin-ui" =>
+            return cmdAdminUI(dataDir, port)
         case _ =>
             println("cjreg: 未知命令 ${command}")
             printUsage()
@@ -176,4 +181,21 @@ func cmdInit(dataDir: String, username: String, password: String): Int64 {
 func cmdAdmin(dataDir: String): Int64 {
     println("cjreg: admin reset-password 尚未实现（需命令行参数用户名/密码）")
     return 1
+}
+
+// admin-ui：启动 cjxt 管理界面（直接访问同进程 store/service）
+func cmdAdminUI(dataDir: String, port: UInt16): Int64 {
+    let stores = openStores(dataDir)
+    if (stores.isNone()) {
+        return 1
+    }
+    let (pkgStore, userStore, upStore) = stores.getOrThrow()
+    let adminData = AdminDataStore(userStore.storm)
+    let authSvc = AuthService(userStore, 86400)
+    App()
+        .UseComponent()
+        .state<CjregState>({ => CjregState(pkgStore, userStore, upStore, adminData, authSvc) })
+        .host("127.0.0.1").port(port)
+        .serve()
+    return 0
 }

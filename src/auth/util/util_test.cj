@@ -50,3 +50,30 @@ func testTimestamp() {
     let future = expiresAt(3600)
     @Expect(future > now, true)
 }
+
+@Test
+func testVerifyStability() {
+    PasswordHash.ITERATIONS = 1000
+    let hashed = PasswordHash.hash("AdminPass1")
+    var ok = 0
+    for (i in 0..20) {
+        if (PasswordHash.verify("AdminPass1", hashed)) {
+            ok++
+        }
+    }
+    @Expect(ok, 20)
+}
+
+@Test
+func testVerifyStabilityRealIterations() {
+    // 用接近生产的迭代（降一点避免太慢：10万次）验证稳定性
+    PasswordHash.ITERATIONS = 100000
+    let hashed = PasswordHash.hash("AdminPass1")
+    var ok = 0
+    for (i in 0..5) {
+        if (PasswordHash.verify("AdminPass1", hashed)) {
+            ok++
+        }
+    }
+    @Expect(ok, 5)
+}

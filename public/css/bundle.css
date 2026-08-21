@@ -1,0 +1,20 @@
+.admin-layout_2913943871375041327 { display: flex; min-height: 100vh; }
+.admin-sidebar_2913943871375041327 { width: 200px; background: #1d2b3a; color: #fff; padding: 16px 0; flex-shrink: 0; }
+.admin-brand_2913943871375041327 { padding: 12px 20px; font-size: 16px; font-weight: 600; color: #fff; border-bottom: 1px solid rgba(255,255,255,.1); margin-bottom: 8px; }
+.nav-item_2913943871375041327 { padding: 10px 20px; cursor: pointer; font-size: 14px; color: #c0c4cc; }
+.nav-item_2913943871375041327:hover { background: rgba(255,255,255,.08); color: #fff; }
+.nav-active_2913943871375041327 { background: #409eff; color: #fff; }
+.admin-main_2913943871375041327 { flex: 1; padding: 24px; background: #f5f7fa; }
+.admin-card_2913943871375041327 { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+.admin-card-title_2913943871375041327 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #303133; }
+.page-title_2913943871375041327 { font-size: 20px; font-weight: 600; margin-bottom: 16px; color: #303133; }
+.login-container_2913943871375041327 { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: #1d2b3a; flex-direction: column; }
+.login-title_2913943871375041327 { font-size: 22px; font-weight: 600; color: #fff; margin-bottom: 24px; }
+.login-card_2913943871375041327 { background: #fff; border-radius: 8px; padding: 32px; width: 360px; box-shadow: 0 4px 16px rgba(0,0,0,.2); }
+.login-error_2913943871375041327 { color: #f56c6c; font-size: 13px; margin: 8px 0; }
+.form-item_2913943871375041327 { margin-bottom: 4px; color: #606266; font-size: 14px; }
+.toolbar_2913943871375041327 { display: flex; gap: 12px; margin-bottom: 16px; align-items: center; }
+.stat-grid_2913943871375041327 { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.stat-card_2913943871375041327 { background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+.stat-value_2913943871375041327 { font-size: 28px; font-weight: 700; color: #303133; }
+.stat-label_2913943871375041327 { font-size: 13px; color: #909399; margin-top: 4px; }

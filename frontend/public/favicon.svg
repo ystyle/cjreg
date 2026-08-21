@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="box-front" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4A90D9"/>
+      <stop offset="100%" stop-color="#357ABD"/>
+    </linearGradient>
+    <linearGradient id="box-side" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#2B6CB0"/>
+      <stop offset="100%" stop-color="#3B82C4"/>
+    </linearGradient>
+    <linearGradient id="box-lid" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5BA3E6"/>
+      <stop offset="100%" stop-color="#4A90D9"/>
+    </linearGradient>
+    <linearGradient id="box-bottom" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2B6CB0"/>
+      <stop offset="100%" stop-color="#1E5799"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 盒子内部（后壁） -->
+  <rect x="14" y="20" width="36" height="24" rx="1" fill="#1E5799"/>
+
+  <!-- 盒子左侧壁 -->
+  <polygon points="6,28 6,52 14,44 14,20" fill="url(#box-side)"/>
+
+  <!-- 盒子右侧壁 -->
+  <polygon points="58,28 58,52 50,44 50,20" fill="url(#box-side)"/>
+
+  <!-- 盒子底部 -->
+  <polygon points="6,52 32,62 58,52 32,42" fill="url(#box-bottom)"/>
+
+  <!-- 盒子前壁 -->
+  <rect x="14" y="30" width="36" height="22" rx="1" fill="url(#box-front)" opacity="0.92"/>
+
+  <!-- 前壁内部阴影 -->
+  <rect x="14" y="30" width="36" height="4" rx="1" fill="#5BA3E6" opacity="0.4"/>
+
+  <!-- cj 文字 -->
+  <text x="32" y="39" font-family="'Segoe UI', Arial, sans-serif" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">cj</text>
+
+  <!-- 打开的盖子 -->
+  <polygon points="14,20 32,10 50,20 50,16 32,6 14,16" fill="url(#box-lid)"/>
+  <polygon points="14,16 32,26 50,16 50,20 32,30 14,20" fill="#357ABD"/>
+
+  <!-- 盖子内侧 -->
+  <polygon points="14,16 32,26 50,16 32,6" fill="#5BA3E6"/>
+
+  <!-- 盖子高光 -->
+  <polygon points="14,16 32,26 50,16 32,6" fill="#FFFFFF" opacity="0.08"/>
+
+  <!-- 边缘高光线 -->
+  <line x1="14" y1="20" x2="14" y2="52" stroke="#FFFFFF" stroke-width="0.3" opacity="0.25"/>
+  <line x1="50" y1="20" x2="50" y2="52" stroke="#FFFFFF" stroke-width="0.3" opacity="0.15"/>
+</svg>

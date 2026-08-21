@@ -21,7 +21,8 @@
   "semver" = "0.0.3"
   "pbkdf2" = { path = "../pbkdf2" }
   "tang" = { path = "../tang" }
-  "bstorm" = { path = "../storm-cj" }
+  "bstorm" = "1.4.3"
+  "gjson" = "1.2.0"
 
 # badger-cj（bstorm 底层）的 io_uring 支持
 [target.x86_64-unknown-linux-gnu]

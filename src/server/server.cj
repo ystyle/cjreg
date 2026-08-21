@@ -111,6 +111,8 @@ public func buildServer(
             app.get("/api/admin/upstreams", { ctx => adm.listUpstreams(ctx) })
             app.post("/api/admin/upstreams", { ctx => adm.addUpstream(ctx) })
             app.delete("/api/admin/upstreams/:id", { ctx => adm.deleteUpstream(ctx) })
+            app.get("/api/admin/resolve", { ctx => adm.resolvePackage(ctx) })
+            app.post("/api/admin/publish-plans/analyze", { ctx => adm.analyzePlan(ctx) })
         case None => ()
     }
 

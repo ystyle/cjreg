@@ -178,7 +178,8 @@ public class ProxyService {
             doc.version = e.version
             doc.upstreamId = up.id
             doc.upstreamName = up.name
-            doc.indexJson = ndjson
+            // 每个 doc 只存对应版本的单行索引（避免多行取 [0] 导致重复）
+            doc.indexJson = generateNDJSON(ArrayList<PackageIndex>([e]))
             this.pkgStore.save(doc)
         }
     }

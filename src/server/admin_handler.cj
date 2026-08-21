@@ -1,5 +1,4 @@
-// 管理 API handler：认证（login/logout/me）+ 用户管理 + 上游管理
-// 基于 tang 路由；业务逻辑复用 auth/upstream 模块
+// 管理 API handler：认证（login/logout/me）+ 用户管理 + 上游管理 + resolve + 发布计划 analyze
 package ystyle::cjreg.server
 
 import tang.*
@@ -35,19 +34,27 @@ public class LoginRequest <: JsonDeserializable<LoginRequest> {
     }
 }
 
-// 管理服务：组装 auth + 上游，注册管理路由
+// 管理服务：组装 auth + 上游 + resolve + 发布计划
 public class AdminService {
     public var auth: AuthService
     public var upstreamSvc: UpstreamService
     public var userStore: UserStore
     public var upstreamStore: UpstreamStore
+    public var resolveSvc: ResolveService
+    public var proxySvc: ?ProxyService
+    public var planSvc: PublishPlanService
 
     public init(auth: AuthService, upstreamSvc: UpstreamService,
-                userStore: UserStore, upstreamStore: UpstreamStore) {
+                userStore: UserStore, upstreamStore: UpstreamStore,
+                resolveSvc: ResolveService, proxySvc: ?ProxyService,
+                planSvc: PublishPlanService) {
         this.auth = auth
         this.upstreamSvc = upstreamSvc
         this.userStore = userStore
         this.upstreamStore = upstreamStore
+        this.resolveSvc = resolveSvc
+        this.proxySvc = proxySvc
+        this.planSvc = planSvc
     }
 
     // 从 Authorization 头取 token
@@ -73,7 +80,6 @@ public class AdminService {
     }
 
     public func login(ctx: TangHttpContext): Unit {
-        // 手动解析 JSON body（bindJson 对流位置敏感，这里用 bodyRaw 更稳）
         let req = parseLoginBody(ctx.bodyRaw())
         match (req) {
             case Some(lr) =>
@@ -88,13 +94,6 @@ public class AdminService {
                             "\"isAdmin\":${user.isAdmin},\"token\":\"${token.token}\"," +
                             "\"expiresAt\":${token.expiresAt}}")
                     case None =>
-                        // 诊断：区分用户不存在与密码错误
-                        match (this.userStore.getUserByUsername(lr.username)) {
-                            case Some(u) =>
-                                println("[login] user ${lr.username} exists, password verify failed")
-                            case None =>
-                                println("[login] user ${lr.username} NOT FOUND (users=${this.userStore.listAllUsers().size})")
-                        }
                         writeJson(ctx, 401u16, "{\"error\":\"invalid username or password\"}")
                 }
             case None =>
@@ -145,7 +144,6 @@ public class AdminService {
         if (!requireAdmin(ctx)) {
             return
         }
-        // 从 body 解析 username/password（表单字段）
         let username = ctx.fromValue("username") ?? ""
         let password = ctx.fromValue("password") ?? ""
         if (username.isEmpty() || password.isEmpty()) {
@@ -185,7 +183,6 @@ public class AdminService {
         if (!requireAdmin(ctx)) {
             return
         }
-        // 手动解析 JSON body {name, url, priority}
         let body = String.fromUtf8(ctx.bodyRaw())
         var name = ""
         var url = ""
@@ -239,6 +236,86 @@ public class AdminService {
         } else {
             writeJson(ctx, 409u16, "{\"error\":\"cannot delete (not found or official protected)\"}")
         }
+    }
+
+    // ===== resolve 诊断端点 =====
+    public func resolvePackage(ctx: TangHttpContext): Unit {
+        if (!requireAdmin(ctx)) {
+            return
+        }
+        let name = ctx.query("name") ?? ""
+        let org = ctx.query("organization") ?? ""
+        let require = ctx.query("require") ?? ""
+        if (name.isEmpty()) {
+            writeJson(ctx, 400u16, "{\"error\":\"name required\"}")
+            return
+        }
+        let fetchIndex: (String, String) -> ?String = { o: String, n: String =>
+            match (this.proxySvc) {
+                case Some(proxy) =>
+                    let (outcome, ndjson) = proxy.fetchIndex(o, n)
+                    if (ndjson.isEmpty()) {
+                        None
+                    } else {
+                        Some(ndjson)
+                    }
+                case None => None
+            }
+        }
+        let r = this.resolveSvc.resolve(name, org, require, fetchIndex)
+        let sb = StringBuilder()
+        sb.append("{\"name\":\"${r.name}\",\"org\":\"${r.org}\",\"require\":\"${r.require}\",")
+        sb.append("\"found\":${r.found},\"replaced\":${r.replaced},")
+        sb.append("\"replacedBy\":\"${r.replacedBy}\",")
+        sb.append("\"selected\":")
+        match (r.selected) {
+            case Some(c) =>
+                sb.append("{\"repo\":\"${c.repo}\",\"version\":\"${c.version}\",\"sha256sum\":\"${c.sha256sum}\",\"conflict\":${c.conflict}}")
+            case None => sb.append("null")
+        }
+        sb.append(",\"candidates\":[")
+        for (i in 0..r.candidates.size) {
+            let c = r.candidates[i]
+            if (i > 0) {
+                sb.append(",")
+            }
+            sb.append("{\"repo\":\"${c.repo}\",\"version\":\"${c.version}\",\"sha256sum\":\"${c.sha256sum}\",\"conflict\":${c.conflict}}")
+        }
+        sb.append("],\"trace\":[")
+        for (i in 0..r.trace.size) {
+            if (i > 0) {
+                sb.append(",")
+            }
+            sb.append("\"${r.trace[i]}\"")
+        }
+        sb.append("]}")
+        writeJson(ctx, 200u16, sb.toString())
+    }
+
+    // ===== 发布计划 analyze =====
+    public func analyzePlan(ctx: TangHttpContext): Unit {
+        if (!requireAdmin(ctx)) {
+            return
+        }
+        let body = String.fromUtf8(ctx.bodyRaw())
+        var roots = ArrayList<(String, String, String)>()
+        parsePackagesBody(body, roots)
+        if (roots.size == 0) {
+            writeJson(ctx, 400u16, "{\"error\":\"packages required\"}")
+            return
+        }
+        let (items, cycle) = this.planSvc.analyze(roots)
+        let sb = StringBuilder()
+        sb.append("{\"publish_order\":[")
+        for (i in 0..items.size) {
+            if (i > 0) {
+                sb.append(",")
+            }
+            let it = items[i]
+            sb.append("{\"name\":\"${it.name}\",\"org\":\"${it.org}\",\"version\":\"${it.version}\",\"order\":${it.order}}")
+        }
+        sb.append("],\"hasCycle\":${cycle}}")
+        writeJson(ctx, 200u16, sb.toString())
     }
 
     func requireAdmin(ctx: TangHttpContext): Bool {

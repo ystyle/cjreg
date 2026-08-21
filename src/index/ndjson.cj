@@ -6,6 +6,7 @@ package ystyle::cjreg.index
 import stdx.encoding.json.stream.*
 import std.collection.*
 import std.io.*
+import std.convert.*
 
 // 依赖条目（含平台隔离/编译模式/产物类型字段，需原样透传）
 public class DependencyEntry {
@@ -168,7 +169,14 @@ func readIndex(r: JsonReader): PackageIndex {
             case "script-dependencies" => idx.scriptDependencies = readDeps(r)
             case "sha256sum" => idx.sha256sum = r.readValue<String>()
             case "yanked" => idx.yanked = r.readValue<Bool>()
-            case "index-version" => idx.indexVersion = r.readValue<Int64>()
+            case "index-version" =>
+                // 官方索引实际返回字符串 "1"，兼容数字
+                let iv = r.peek()
+                match (iv) {
+                    case Some(JsonToken.JsonString) => idx.indexVersion = Int64.parse(r.readValue<String>())
+                    case Some(JsonToken.JsonNumber) => idx.indexVersion = r.readValue<Int64>()
+                    case _ => r.skip()
+                }
             case _ => r.skip()
         }
     }

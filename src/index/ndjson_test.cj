@@ -79,3 +79,24 @@ func testFindIndexVersion() {
     // 不存在版本
     @Expect(findIndexVersion(indexes, "9.9.9").isNone(), true)
 }
+
+@Test
+func testIndexVersionStringCompat() {
+    // 官方索引实际返回 index-version 为字符串 "1"
+    let body = "{\"name\":\"a\",\"version\":\"1.0.0\",\"sha256sum\":\"s1\",\"yanked\":false,\"index-version\":\"1\"}\n"
+    let parsed = parseNDJSON(body)
+    @Expect(parsed.size, 1)
+    @Expect(parsed[0].indexVersion, 1)
+    @Expect(parsed[0].version, "1.0.0")
+}
+
+@Test
+func testFullOfficialEntry() {
+    // 官方完整索引条目（含 test/script-dependencies、cjc-version、字符串 index-version）
+    let line = "{\"organization\":\"\",\"name\":\"jsonvalue\",\"version\":\"1.0.1\",\"dependencies\":[],\"sha256sum\":\"ffa3a7c57f8aa57e2ef3bae9b241f1d38479aecb07e176995ab4c2f0b5d3d4eb\",\"yanked\":false,\"test-dependencies\":[],\"script-dependencies\":[],\"cjc-version\":\"1.0.0\",\"index-version\":\"1\"}"
+    let parsed = parseNDJSON(line + "\n")
+    @Expect(parsed.size, 1)
+    @Expect(parsed[0].name, "jsonvalue")
+    @Expect(parsed[0].version, "1.0.1")
+    @Expect(parsed[0].indexVersion, 1)
+}

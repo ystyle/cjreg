@@ -1,5 +1,5 @@
 // 中心仓协议 URL 构造单元测试
-package ystyle::cjreg
+package ystyle::cjreg.protocol
 
 import std.unittest.testmacro.*
 
@@ -11,7 +11,7 @@ func testBuildIndexURL() {
     // 3 字符
     @Expect(buildIndexURL("https://x/registry", "tea", ""), "https://x/registry/index/te/a/tea")
     @Expect(buildIndexURL("https://x/registry", "dep", ""), "https://x/registry/index/de/p/dep")
-    // < 3 字符 → 不支持
+    // < 3 字符 → 防御性返回空
     @Expect(buildIndexURL("https://x/registry", "di", ""), "")
     // org 参数
     @Expect(buildIndexURL("https://x/registry", "cordis_core", "ystyle"),
@@ -26,4 +26,12 @@ func testBuildPackageURL() {
         "https://x/registry/pkg/cordis_core/0.1.0?organization=ystyle")
     @Expect(buildPackageURL("https://x/registry/", "bstorm", "1.4.3", ""),
         "https://x/registry/pkg/bstorm/1.4.3")
+}
+
+@Test
+func testIsOfficialRegistry() {
+    @Expect(isOfficialRegistry("https://pkg.cangjie-lang.cn/registry"), true)
+    @Expect(isOfficialRegistry("https://pkg.cangjie-lang.cn/registry/"), true)
+    @Expect(isOfficialRegistry("https://mirror.example.com/registry"), false)
+    @Expect(isOfficialRegistry("http://localhost:8060"), false)
 }

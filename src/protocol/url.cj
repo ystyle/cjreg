@@ -1,5 +1,5 @@
 // 中心仓协议：索引/制品 URL 构造（对齐官方 /index、/pkg 格式）
-package ystyle::cjreg
+package ystyle::cjreg.protocol
 
 // 去除末尾斜杠
 public func trimTrailing(base: String): String {
@@ -13,7 +13,7 @@ public func trimTrailing(base: String): String {
 // 索引 URL：/index/{mo}/{du}/{name}[?organization={org}]
 // 短名规则：name >= 4 字符 → mo=name[0:2], du=name[2:4]
 //           name == 3 字符 → mo=name[0:2], du=name[2]（第 3 字符）
-//           name <  3 字符 → 不支持，返回空串
+//           name <  3 字符 → 官方模块名规格为 [3,64]，此分支为防御性处理，返回空串
 public func buildIndexURL(base: String, name: String, org: String): String {
     let b = trimTrailing(base)
     if (name.size < 3) {
@@ -41,4 +41,9 @@ public func buildPackageURL(base: String, name: String, version: String, org: St
         url += "?organization=" + org
     }
     return url
+}
+
+// 官方仓 base URL 识别（isOfficial 判定前缀）
+public func isOfficialRegistry(base: String): Bool {
+    trimTrailing(base) == "https://pkg.cangjie-lang.cn/registry"
 }

@@ -19,6 +19,7 @@
 [dependencies]
   "tomlcj" = "1.0.0"
   "semver" = "0.0.3"
+  "pbkdf2" = { path = "../pbkdf2" }
   "tang" = { path = "../tang" }
   "bstorm" = { path = "../storm-cj" }
 

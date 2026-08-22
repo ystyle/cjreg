@@ -9,7 +9,7 @@ import std.collection.*
 import std.convert.*
 
 // ===== 用户管理 =====
-@Page["/admin/users"]
+@Page["/admin/users", "用户管理", requireAdmin]
 class UsersPage <: Component {
     var state: Option<CjregState> = None
     var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
@@ -69,6 +69,10 @@ class UsersPage <: Component {
             case Some(x) => x
             case None => return PatchResult.ReRender
         }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
+        }
         if (this.newUser.get().isEmpty() || this.newPass.get().isEmpty()) {
             this.msg.set("用户名和密码必填")
             return PatchResult.ReRender
@@ -88,7 +92,7 @@ class UsersPage <: Component {
 }
 
 // ===== 组织管理 =====
-@Page["/admin/organizations"]
+@Page["/admin/organizations", "组织管理", requireAdmin]
 class OrganizationsPage <: Component {
     var state: Option<CjregState> = None
     var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
@@ -146,6 +150,10 @@ class OrganizationsPage <: Component {
             case Some(x) => x
             case None => return PatchResult.ReRender
         }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
+        }
         if (this.newName.get().isEmpty()) {
             this.msg.set("组织名必填")
             return PatchResult.ReRender
@@ -161,7 +169,7 @@ class OrganizationsPage <: Component {
 }
 
 // ===== 团队管理 =====
-@Page["/admin/teams"]
+@Page["/admin/teams", "团队管理", requireAdmin]
 class TeamsPage <: Component {
     var state: Option<CjregState> = None
     var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
@@ -218,6 +226,10 @@ class TeamsPage <: Component {
         let st = match (this.state) {
             case Some(x) => x
             case None => return PatchResult.ReRender
+        }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
         }
         if (this.newName.get().isEmpty()) {
             this.msg.set("团队名必填")

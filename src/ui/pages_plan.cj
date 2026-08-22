@@ -11,7 +11,7 @@ import std.collection.*
 import std.convert.*
 
 // ===== 发布计划 =====
-@Page["/admin/publish-plans"]
+@Page["/admin/publish-plans", "发布计划", requireAdmin]
 class PublishPlansPage <: Component {
     var state: Option<CjregState> = None
     var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
@@ -73,6 +73,10 @@ class PublishPlansPage <: Component {
             case Some(x) => x
             case None => return PatchResult.ReRender
         }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
+        }
         if (this.planName.get().isEmpty() || this.targetUrl.get().isEmpty()) {
             this.msg.set("计划名和目标 URL 必填")
             return PatchResult.ReRender
@@ -127,7 +131,7 @@ public func getDataDir(): String {
 }
 
 // ===== 日志页 =====
-@Page["/admin/logs"]
+@Page["/admin/logs", "日志", requireAdmin]
 class LogsPage <: Component {
     var state: Option<CjregState> = None
     var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())

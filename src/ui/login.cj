@@ -57,7 +57,18 @@ class LoginPage <: Component {
         }
         match (s.auth.login(u, p)) {
             case Some((user, token)) =>
+                if (!user.isAdmin) {
+                    println("[login] denied: user ${user.username} is not admin")
+                    this.errorMsg.set("无权限：仅管理员可登录管理后台")
+                    return PatchResult.ReRender
+                }
                 println("[login] success user=${user.username}")
+                // 写会话上下文（守卫/操作鉴权的权威来源；token 由框架同步给前端 localStorage，
+                // 页面刷新后随 WS 连接回传恢复会话）
+                ctx.setContext("uid", user.id.toString())
+                ctx.setContext("username", user.username)
+                ctx.setContext("isAdmin", "1")
+                ctx.setContext("token", token.token)
                 s.currentUser.set(Some(user))
                 s.sessionToken.set(token.token)
                 s.adminData.addLog(LogKind.Auth, user.id, user.username, "login", "ok", nowMs())

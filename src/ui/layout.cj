@@ -4,6 +4,7 @@ package ystyle::cjreg.ui
 import cjxt.*
 import cjxt.macros.*
 import cjxt.components.*
+import ystyle::cjreg.auth.model.*
 import std.collection.*
 
 let adminCSS = @importCSS("admin.css")
@@ -36,7 +37,24 @@ public func adminSidebar(activePath: String): IComponent {
         let active = path == activePath
         children.add(navLink(path, label, active))
     }
+    children.add(logoutNav())
     div(children.toArray(), attrs: Some(HashMap<String, String>([("class", cls("admin-sidebar"))])))
+}
+
+// 退出登录：清除会话鉴权上下文 + 登录态信号，回到登录页
+func logoutNav(): IComponent {
+    let item = div([text("退出登录")], attrs: Some(HashMap<String, String>([("class", cls("nav-item"))])))
+    item.onClick({ c =>
+        c.setContext("uid", "")
+        c.setContext("username", "")
+        c.setContext("isAdmin", "")
+        c.setContext("token", "")
+        try {
+            c.getState<CjregState>().currentUser.set(Option<User>.None)
+        } catch (e: Exception) { () }
+        c.route.push("/admin/login")
+        PatchResult.ReRender
+    })
 }
 
 // 页面主区容器

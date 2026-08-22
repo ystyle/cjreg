@@ -10,7 +10,7 @@ import std.collection.*
 import std.convert.*
 
 // ===== 仪表盘 =====
-@Page["/admin"]
+@Page["/admin", "仪表盘", requireAdmin]
 class DashboardPage <: Component {
     var state: Option<CjregState> = None
 
@@ -49,7 +49,7 @@ func statCard(value: String, label: String): IComponent {
 }
 
 // ===== 上游管理 =====
-@Page["/admin/upstreams"]
+@Page["/admin/upstreams", "上游管理", requireAdmin]
 class UpstreamsPage <: Component {
     var state: Option<CjregState> = None
     var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
@@ -115,6 +115,10 @@ class UpstreamsPage <: Component {
             case Some(x) => x
             case None => return PatchResult.ReRender
         }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
+        }
         if (this.newName.get().isEmpty() || this.newUrl.get().isEmpty()) {
             this.msg.set("名称和 URL 必填")
             return PatchResult.ReRender
@@ -142,7 +146,7 @@ class UpstreamsPage <: Component {
 }
 
 // ===== 包管理 =====
-@Page["/admin/packages"]
+@Page["/admin/packages", "包管理", requireAdmin]
 class PackagesPage <: Component {
     var state: Option<CjregState> = None
     var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())

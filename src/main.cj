@@ -136,6 +136,7 @@ func cmdServe(dataDir: String, port: UInt16): Int64 {
         .serveStatic("/css", "public/css")
         .UseComponent()
         .state<CjregState>({ => CjregState(pkgStore, userStore, upStore, adminData, authSvc) })
+        .auth({ t => restoreAdminSession(authSvc, t) })
         .port(port)
         .setTang(app)
         .serve()
@@ -205,6 +206,7 @@ func cmdAdminUI(dataDir: String, port: UInt16): Int64 {
         .serveStatic("/css", "public/css")
         .UseComponent()
         .state<CjregState>({ => CjregState(pkgStore, userStore, upStore, adminData, authSvc) })
+        .auth({ t => restoreAdminSession(authSvc, t) })
         .host("0.0.0.0").port(port)
         .serve()
     return 0

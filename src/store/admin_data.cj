@@ -454,6 +454,13 @@ public class AdminDataStore {
         return r
     }
 
+    /// 清理日志（全部删除）
+    public func clearLogs(): Unit {
+        for (d in this.storm.all<LogDoc>()) {
+            this.storm.delete(d)
+        }
+    }
+
     // ===== 发布计划 =====
     public func createPlan(name: String, targetUpstream: Int64, pollInterval: Int64, pollTimeout: Int64, now: Int64): Int64 {
         let d = PlanDoc()

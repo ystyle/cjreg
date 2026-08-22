@@ -528,6 +528,10 @@ public func getDataDir(): String {
 class LogsPage <: Component {
     var state: Option<CjregState> = None
     var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    var kindFilter = Signal<String>("all")
+    var statusFilter = Signal<String>("all")
+    var msg = Signal<String>("")
+    var confirmVisible = Signal<Bool>(false)
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
@@ -537,14 +541,19 @@ class LogsPage <: Component {
     func refresh(): Unit {
         match (this.state) {
             case Some(st) =>
-                let logs = st.adminData.listLogs(Option<String>.None, 200)
+                let kind = if (this.kindFilter.get() == "all") { Option<String>.None } else { Some(this.kindFilter.get()) }
+                let logs = st.adminData.listLogs(kind, 300)
                 let data = ArrayList<HashMap<String, String>>()
                 for (l in logs) {
+                    if (this.statusFilter.get() != "all" && l.status != this.statusFilter.get()) {
+                        continue
+                    }
                     let m = HashMap<String, String>()
                     m["id"] = l.id.toString()
-                    m["kind"] = l.kind
+                    m["kind"] = kindLabel(l.kind)
                     m["actor"] = l.actorName
                     m["action"] = l.action
+                    m["target"] = l.target
                     m["status"] = l.status
                     data.add(m)
                 }
@@ -553,18 +562,90 @@ class LogsPage <: Component {
         }
     }
 
+    func kindLabel(k: String): String {
+        match (k) {
+            case "publish" => "发布"
+            case "auth" => "认证"
+            case _ => "管理"
+        }
+    }
+
+    func doRefresh(ctx: ActionContext): PatchResult {
+        this.refresh()
+        PatchResult.ReRender
+    }
+
+    func askClear(ctx: ActionContext): PatchResult {
+        this.confirmVisible.set(true)
+        PatchResult.ReRender
+    }
+
+    func cancelClear(ctx: ActionContext): PatchResult {
+        this.confirmVisible.set(false)
+        PatchResult.ReRender
+    }
+
+    func confirmClear(ctx: ActionContext): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
+        }
+        st.adminData.clearLogs()
+        this.msg.set("已清空日志")
+        st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "clear logs", "ok", nowMs())
+        this.confirmVisible.set(false)
+        this.refresh()
+        PatchResult.ReRender
+    }
+
     public func render(): IComponent {
+        let kindOptions = ArrayList<IComponent>()
+        kindOptions.add(SelectOption([text("全部类型")], "all"))
+        kindOptions.add(SelectOption([text("发布")], "publish"))
+        kindOptions.add(SelectOption([text("管理")], "admin"))
+        kindOptions.add(SelectOption([text("认证")], "auth"))
+        let statusOptions = ArrayList<IComponent>()
+        statusOptions.add(SelectOption([text("全部结果")], "all"))
+        statusOptions.add(SelectOption([text("成功")], "ok"))
+        statusOptions.add(SelectOption([text("失败")], "failed"))
+        let toolbar = div([
+            Select(kindOptions.toArray()).bind(this.kindFilter).placeholder("类型"),
+            Select(statusOptions.toArray()).bind(this.statusFilter).placeholder("结果"),
+            Button([text("筛选")]).kind(ButtonKind.Primary).onClick(doRefresh),
+            Button([text("清空日志")]).kind(ButtonKind.Danger).onClick(askClear),
+            if (this.msg.get() != "") {
+                Tag([text(this.msg.get())]).kind(ComponentKind.Success)
+            } else {
+                div()
+            },
+        ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))])))
         let table = Table()
             .data(this.rows)
             .stripe()
             .add(TableColumn().label("ID").colProp("id").width(60))
-            .add(TableColumn().label("类型").colProp("kind").width(100))
+            .add(TableColumn().label("类型").colProp("kind").width(80))
             .add(TableColumn().label("操作者").colProp("actor").width(100))
             .add(TableColumn().label("操作").colProp("action"))
+            .add(TableColumn().label("对象").colProp("target").width(120))
             .add(TableColumn().label("结果").colProp("status").width(80))
+        let confirmDlg = Dialog([
+            div([text("确定要清空全部日志吗？此操作不可恢复。")]),
+        ])
+            .visible(this.confirmVisible)
+            .title("清空确认")
+            .width("400px")
+            .closeOnClickModal(false)
+            .footer([
+                Button([text("取消")]).onClick(cancelClear),
+                Button([text("清空")]).kind(ButtonKind.Danger).onClick(confirmClear),
+            ])
         adminLayout("/admin/logs", [
             div([text("日志")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
-            adminCard("操作日志", [table]),
+            adminCard("操作日志", [toolbar, table, confirmDlg]),
         ])
     }
 }

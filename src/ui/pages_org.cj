@@ -297,57 +297,60 @@ class UsersPage <: Component {
 @Page["/admin/organizations", "组织管理", requireAdmin]
 class OrganizationsPage <: Component {
     var state: Option<CjregState> = None
-    var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
-    var newName = Signal<String>("")
-    var newDisplay = Signal<String>("")
     var msg = Signal<String>("")
+    // 新增/编辑 Dialog
+    var dialogVisible = Signal<Bool>(false)
+    var dialogMode = Signal<String>("create")
+    var editingId: Int64 = 0
+    var formName = Signal<String>("")
+    var formDisplay = Signal<String>("")
+    var formDesc = Signal<String>("")
+    var formIsDefault = Signal<Bool>(false)
+    // 删除确认
+    var confirmVisible = Signal<Bool>(false)
+    var pendingDeleteId: Int64 = 0
+    var pendingDeleteName: String = ""
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
-        refresh()
     }
 
-    func refresh(): Unit {
-        match (this.state) {
-            case Some(st) =>
-                let orgs = st.adminData.listOrgs()
-                let data = ArrayList<HashMap<String, String>>()
-                for (o in orgs) {
-                    let m = HashMap<String, String>()
-                    m["id"] = o.id.toString()
-                    m["name"] = o.name
-                    m["display"] = o.displayName
-                    data.add(m)
-                }
-                this.rows.set(data)
+    // ===== 新增/编辑 =====
+    func openCreate(ctx: ActionContext): PatchResult {
+        this.dialogMode.set("create")
+        this.formName.set("")
+        this.formDisplay.set("")
+        this.formDesc.set("")
+        this.formIsDefault.set(false)
+        this.dialogVisible.set(true)
+        PatchResult.ReRender
+    }
+
+    func openEdit(ctx: ActionContext, id: Int64): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        match (st.adminData.getOrg(id)) {
+            case Some(o) =>
+                this.dialogMode.set("edit")
+                this.editingId = o.id
+                this.formName.set(o.name)
+                this.formDisplay.set(o.displayName)
+                this.formDesc.set(o.description)
+                this.formIsDefault.set(o.isDefault)
+                this.dialogVisible.set(true)
             case None => ()
         }
+        PatchResult.ReRender
     }
 
-    public func render(): IComponent {
-        let toolbar = div([
-            Input().bind(this.newName).placeholder("组织名"),
-            Input().bind(this.newDisplay).placeholder("显示名"),
-            Button([text("创建组织")]).kind(ButtonKind.Primary).onClick(createOrg),
-            if (this.msg.get() != "") {
-                Tag([text(this.msg.get())]).kind(ComponentKind.Success)
-            } else {
-                div()
-            },
-        ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))])))
-        let table = Table()
-            .data(this.rows)
-            .stripe()
-            .add(TableColumn().label("ID").colProp("id").width(60))
-            .add(TableColumn().label("组织名").colProp("name"))
-            .add(TableColumn().label("显示名").colProp("display"))
-        adminLayout("/admin/organizations", [
-            div([text("组织管理")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
-            adminCard("组织列表", [toolbar, table]),
-        ])
+    func closeDialog(ctx: ActionContext): PatchResult {
+        this.dialogVisible.set(false)
+        PatchResult.ReRender
     }
 
-    func createOrg(ctx: ActionContext): PatchResult {
+    func submitForm(ctx: ActionContext): PatchResult {
         let st = match (this.state) {
             case Some(x) => x
             case None => return PatchResult.ReRender
@@ -356,21 +359,166 @@ class OrganizationsPage <: Component {
             this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
-        let name = this.newName.get()
-        let display = this.newDisplay.get()
+        let name = this.formName.get()
+        let display = this.formDisplay.get()
+        let desc = this.formDesc.get()
+        let isDefault = this.formIsDefault.get()
         if (name.isEmpty()) {
             this.msg.set("组织名必填")
             return PatchResult.ReRender
         }
         let uid = sessionUid(ctx)
         let uname = sessionUsername(ctx)
-        let id = st.adminData.createOrg(name, display, uid, nowMs())
-        this.msg.set("已创建组织 #${id}")
-        this.newName.set("")
-        this.newDisplay.set("")
-        st.adminData.addLog(LogKind.Admin, uid, uname, "create org ${name}", "ok", nowMs())
-        refresh()
+        if (this.dialogMode.get() == "create") {
+            let id = st.adminData.createOrg(name, display, uid, nowMs(), description: desc, isDefault: isDefault)
+            this.msg.set("已创建组织 #${id}")
+            st.adminData.addLog(LogKind.Admin, uid, uname, "create org ${name}", "ok", nowMs())
+        } else {
+            if (st.adminData.updateOrg(this.editingId, display, desc, isDefault, nowMs())) {
+                this.msg.set("已更新组织 ${name}")
+                st.adminData.addLog(LogKind.Admin, uid, uname, "update org ${name}", "ok", nowMs())
+            } else {
+                this.msg.set("更新失败")
+            }
+        }
+        this.dialogVisible.set(false)
         PatchResult.ReRender
+    }
+
+    // ===== 删除 =====
+    func askDelete(ctx: ActionContext, o: OrgDoc): PatchResult {
+        this.pendingDeleteId = o.id
+        this.pendingDeleteName = o.name
+        this.confirmVisible.set(true)
+        PatchResult.ReRender
+    }
+
+    func cancelDelete(ctx: ActionContext): PatchResult {
+        this.confirmVisible.set(false)
+        PatchResult.ReRender
+    }
+
+    func confirmDelete(ctx: ActionContext): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
+        }
+        if (st.adminData.deleteOrg(this.pendingDeleteId, nowMs())) {
+            this.msg.set("已删除组织 ${this.pendingDeleteName}")
+            st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "delete org ${this.pendingDeleteName}", "ok", nowMs())
+        } else {
+            this.msg.set("删除失败")
+        }
+        this.confirmVisible.set(false)
+        this.pendingDeleteId = 0
+        PatchResult.ReRender
+    }
+
+    // ===== 渲染 =====
+    func renderOrgRow(o: OrgDoc): IComponent {
+        let editHandler: ActionHandler = { c => this.openEdit(c, o.id) }
+        let deleteHandler: ActionHandler = { c => this.askDelete(c, o) }
+        let defaultTag = if (o.isDefault) {
+            Tag([text("默认")]).kind(ComponentKind.Primary)
+        } else {
+            Tag([text("普通")]).kind(ComponentKind.Info)
+        }
+        div([
+            div([text(o.id.toString())], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text(o.name)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text(o.displayName)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text(o.description)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([defaultTag], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([
+                Button([text("编辑")]).size(ButtonSize.Small).onClick(editHandler),
+                Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteHandler),
+            ], attrs: Some(HashMap<String, String>([("class", cls("admin-td") + " " + cls("admin-actions"))]))),
+        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr"))])))
+    }
+
+    func renderList(): IComponent {
+        let orgs = match (this.state) {
+            case Some(st) => st.adminData.listOrgs()
+            case None => ArrayList<OrgDoc>()
+        }
+        let rows = ArrayList<IComponent>()
+        rows.add(div([
+            div([text("ID")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("组织名")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("显示名")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("描述")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("默认")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("操作")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr") + " " + cls("admin-th"))]))))
+        for (o in orgs) {
+            rows.add(this.renderOrgRow(o))
+        }
+        div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("admin-table"))])))
+    }
+
+    func renderFormDialog(): IComponent {
+        let title = if (this.dialogMode.get() == "create") { "新增组织" } else { "编辑组织" }
+        let isEdit = this.dialogMode.get() == "edit"
+        let nameInput = if (isEdit) {
+            Input().bind(this.formName).disabled()
+        } else {
+            Input().bind(this.formName)
+        }
+        let dlg = Dialog([
+            div([
+                div([text("组织名")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                nameInput,
+                div([text("显示名")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                Input().bind(this.formDisplay).placeholder("可选"),
+                div([text("描述")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                Input().bind(this.formDesc).placeholder("可选"),
+                div([text("默认组织")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                Switch().bind(this.formIsDefault).activeText("默认").inactiveText("普通"),
+            ], attrs: Some(HashMap<String, String>([("class", cls("dialog-form"))]))),
+        ])
+            .visible(this.dialogVisible)
+            .title(title)
+            .width("440px")
+            .closeOnClickModal(false)
+            .footer([
+                Button([text("取消")]).onClick(closeDialog),
+                Button([text("确定")]).kind(ButtonKind.Primary).onClick(submitForm),
+            ])
+        dlg
+    }
+
+    func renderConfirmDialog(): IComponent {
+        let dlg = Dialog([
+            div([text("确定要删除组织「${this.pendingDeleteName}」吗？")]),
+        ])
+            .visible(this.confirmVisible)
+            .title("删除确认")
+            .width("400px")
+            .closeOnClickModal(false)
+            .footer([
+                Button([text("取消")]).onClick(cancelDelete),
+                Button([text("删除")]).kind(ButtonKind.Danger).onClick(confirmDelete),
+            ])
+        dlg
+    }
+
+    public func render(): IComponent {
+        let toolbar = div([
+            Button([text("新增组织")]).kind(ButtonKind.Primary).onClick(openCreate),
+            if (this.msg.get() != "") {
+                Tag([text(this.msg.get())]).kind(ComponentKind.Success)
+            } else {
+                div()
+            },
+        ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))])))
+        adminLayout("/admin/organizations", [
+            div([text("组织管理")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
+            adminCard("组织列表", [toolbar, this.renderList(), this.renderFormDialog(), this.renderConfirmDialog()]),
+        ])
     }
 }
 

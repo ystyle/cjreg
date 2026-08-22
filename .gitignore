@@ -3,3 +3,4 @@ cangjie-repo.toml
 target
 *.lock
 data
+.smoke/

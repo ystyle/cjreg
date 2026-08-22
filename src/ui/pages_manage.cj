@@ -23,22 +23,53 @@ class DashboardPage <: Component {
             case Some(s) => s
             case None => return div()
         }
-        let pkgCount = st.pkgStore.storm.all<PackageDoc>().size
+        let allPkgs = st.pkgStore.storm.all<PackageDoc>()
+        var versions: Int64 = 0
+        var downloads: Int64 = 0
+        for (d in allPkgs) {
+            versions++
+            downloads += d.downloadCount
+        }
         let userCount = st.userStore.listAllUsers().size
         let upCount = st.upStore.listAll().size
         let planCount = st.adminData.listPlans().size
         let logCount = st.adminData.listLogs(Option<String>.None, 1000).size
         let stats = ArrayList<IComponent>()
-        stats.add(statCard("${pkgCount}", "包总数"))
+        stats.add(statCard("${allPkgs.size}", "包总数"))
+        stats.add(statCard("${versions}", "版本总数"))
+        stats.add(statCard("${downloads}", "累计下载"))
         stats.add(statCard("${userCount}", "用户数"))
         stats.add(statCard("${upCount}", "上游数"))
         stats.add(statCard("${planCount}", "发布计划"))
         stats.add(statCard("${logCount}", "日志条数"))
+        // 快捷入口
+        let quick = ArrayList<IComponent>()
+        quick.add(quickLink("/admin/packages", "包管理"))
+        quick.add(quickLink("/admin/upstreams", "上游管理"))
+        quick.add(quickLink("/admin/publish-plans", "发布计划"))
+        quick.add(quickLink("/admin/organizations", "组织管理"))
+        quick.add(quickLink("/admin/teams", "团队管理"))
+        quick.add(quickLink("/admin/users", "用户管理"))
+        quick.add(quickLink("/admin/logs", "日志"))
         adminLayout("/admin", [
             div([text("仪表盘")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
             div(stats.toArray(), attrs: Some(HashMap<String, String>([("class", cls("stat-grid"))]))),
+            adminCard("快捷入口", [
+                div(quick.toArray(), attrs: Some(HashMap<String, String>([("class", cls("stat-grid"))]))),
+            ]),
         ])
     }
+}
+
+// 快捷入口卡片
+func quickLink(path: String, label: String): IComponent {
+    let go: ActionHandler = { c =>
+        c.route.push(path)
+        PatchResult.ReRender
+    }
+    div([
+        div([text(label)], attrs: Some(HashMap<String, String>([("class", cls("stat-label"))]))),
+    ], attrs: Some(HashMap<String, String>([("class", cls("stat-card"))]))).onClick(go)
 }
 
 func statCard(value: String, label: String): IComponent {

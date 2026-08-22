@@ -82,7 +82,7 @@ class UsersPage <: Component {
                 this.msg.set("已创建 ${u.username}")
                 this.newUser.set("")
                 this.newPass.set("")
-                st.adminData.addLog(LogKind.Admin, 0, "admin", "create user ${u.username}", "ok", nowMs())
+                st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "create user ${u.username}", "ok", nowMs())
             case None =>
                 this.msg.set("创建失败（用户已存在）")
         }
@@ -154,15 +154,19 @@ class OrganizationsPage <: Component {
             this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
-        if (this.newName.get().isEmpty()) {
+        let name = this.newName.get()
+        let display = this.newDisplay.get()
+        if (name.isEmpty()) {
             this.msg.set("组织名必填")
             return PatchResult.ReRender
         }
-        let id = st.adminData.createOrg(this.newName.get(), this.newDisplay.get(), 0, nowMs())
+        let uid = sessionUid(ctx)
+        let uname = sessionUsername(ctx)
+        let id = st.adminData.createOrg(name, display, uid, nowMs())
         this.msg.set("已创建组织 #${id}")
         this.newName.set("")
         this.newDisplay.set("")
-        st.adminData.addLog(LogKind.Admin, 0, "admin", "create org ${this.newName.get()}", "ok", nowMs())
+        st.adminData.addLog(LogKind.Admin, uid, uname, "create org ${name}", "ok", nowMs())
         refresh()
         PatchResult.ReRender
     }
@@ -174,7 +178,6 @@ class TeamsPage <: Component {
     var state: Option<CjregState> = None
     var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
     var newName = Signal<String>("")
-    var newOrgId = Signal<String>("0")
     var msg = Signal<String>("")
 
     public func onMount(ctx: LifecycleContext): Unit {
@@ -191,7 +194,9 @@ class TeamsPage <: Component {
                     let m = HashMap<String, String>()
                     m["id"] = t.id.toString()
                     m["name"] = t.name
-                    m["org"] = t.orgId.toString()
+                    m["display"] = t.displayName
+                    m["permission"] = t.permission
+                    m["memberCount"] = st.adminData.listTeamMembers(t.id).size.toString()
                     data.add(m)
                 }
                 this.rows.set(data)
@@ -202,7 +207,6 @@ class TeamsPage <: Component {
     public func render(): IComponent {
         let toolbar = div([
             Input().bind(this.newName).placeholder("团队名"),
-            Input().bind(this.newOrgId).placeholder("组织ID(0=全局)"),
             Button([text("创建团队")]).kind(ButtonKind.Primary).onClick(createTeam),
             if (this.msg.get() != "") {
                 Tag([text(this.msg.get())]).kind(ComponentKind.Success)
@@ -215,7 +219,9 @@ class TeamsPage <: Component {
             .stripe()
             .add(TableColumn().label("ID").colProp("id").width(60))
             .add(TableColumn().label("团队名").colProp("name"))
-            .add(TableColumn().label("组织ID").colProp("org").width(100))
+            .add(TableColumn().label("显示名").colProp("display"))
+            .add(TableColumn().label("权限").colProp("permission").width(100))
+            .add(TableColumn().label("成员数").colProp("memberCount").width(80))
         adminLayout("/admin/teams", [
             div([text("团队管理")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
             adminCard("团队列表", [toolbar, table]),
@@ -231,15 +237,17 @@ class TeamsPage <: Component {
             this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
-        if (this.newName.get().isEmpty()) {
+        let name = this.newName.get()
+        if (name.isEmpty()) {
             this.msg.set("团队名必填")
             return PatchResult.ReRender
         }
-        let orgId = Int64.parse(this.newOrgId.get())
-        let id = st.adminData.createTeam(this.newName.get(), orgId, nowMs())
+        let uid = sessionUid(ctx)
+        let uname = sessionUsername(ctx)
+        let id = st.adminData.createTeam(name, nowMs())
         this.msg.set("已创建团队 #${id}")
         this.newName.set("")
-        st.adminData.addLog(LogKind.Admin, 0, "admin", "create team ${this.newName.get()}", "ok", nowMs())
+        st.adminData.addLog(LogKind.Admin, uid, uname, "create team ${name}", "ok", nowMs())
         refresh()
         PatchResult.ReRender
     }

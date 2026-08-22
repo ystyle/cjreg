@@ -1,10 +1,14 @@
-// 管理数据 store（bstorm）：组织/团队/日志/发布计划持久化
+// 管理数据 store（bstorm）：组织/团队/团队关联/日志/发布计划持久化
+// 数据模型对齐 cjrepo（参见 docs/ui-gap-report.md）：
+// - Team 去单组织外键，改为 团队↔组织/包/成员 三类关联表
+// - Plan.targetUpstream 存上游 ID（Int64），items 独立成 PlanItemDoc 表
 package ystyle::cjreg.store
 
 import bstorm.*
 import bstorm.macros.*
 import stdx.encoding.json.stream.*
 import std.collection.*
+import std.sort.*
 
 // ===== 组织 =====
 @Model
@@ -13,19 +17,43 @@ public class OrgDoc {
     public var name: String = ""
     public var displayName: String = ""
     public var description: String = ""
+    public var isDefault: Bool = false
     public var ownerId: Int64 = 0
     public var createdAt: Int64 = 0
+    public var updatedAt: Int64 = 0
     public var deletedAt: Int64 = 0
 }
 
+// ===== 团队 =====
 @Model
 public class TeamDoc {
     @Id public var id: Int64 = 0
     public var name: String = ""
-    public var orgId: Int64 = 0        // 0 = 全局团队
+    public var displayName: String = ""
     public var description: String = ""
+    public var permission: String = "read"  // read/write/overwrite
     public var createdAt: Int64 = 0
+    public var updatedAt: Int64 = 0
     public var deletedAt: Int64 = 0
+}
+
+// 团队-组织关联（organizationId = 0 表示「无组织包」，对齐 cjrepo 的 NULL）
+@Model
+public class TeamOrganizationDoc {
+    @Id public var id: Int64 = 0
+    public var teamId: Int64 = 0
+    public var organizationId: Int64 = 0
+    public var createdAt: Int64 = 0
+}
+
+// 团队-包关联（organization 空串表示「无组织包」）
+@Model
+public class TeamPackageDoc {
+    @Id public var id: Int64 = 0
+    public var teamId: Int64 = 0
+    public var organization: String = ""
+    public var packageName: String = ""
+    public var createdAt: Int64 = 0
 }
 
 // 团队-用户绑定
@@ -69,6 +97,10 @@ public class LogDoc {
     public var action: String = ""   // 描述（如 "publish demo@1.0.0"）
     public var detail: String = ""
     public var status: String = ""   // ok/failed
+    public var target: String = ""   // 操作对象（包名/团队名等）
+    public var error: String = ""    // 失败详情
+    public var ipAddr: String = ""
+    public var userAgent: String = ""
     public var createdAt: Int64 = 0
 }
 
@@ -78,11 +110,31 @@ public class PlanDoc {
     @Id public var id: Int64 = 0
     public var name: String = ""
     public var status: String = ""        // pending/running/paused/completed/failed
-    public var targetUpstream: String = "" // 目标上游 URL
+    public var targetUpstream: Int64 = 0  // 目标上游 ID（对齐 cjrepo）
     public var totalCount: Int64 = 0
     public var completedCount: Int64 = 0
+    public var pollInterval: Int64 = 60
+    public var pollTimeout: Int64 = 600
     public var createdAt: Int64 = 0
-    public var itemsJson: String = ""     // 计划项 JSON（name/org/version/order/status）
+    public var updatedAt: Int64 = 0
+}
+
+// 计划项（独立表，对齐 cjrepo PublishPlanItem）
+@Model
+public class PlanItemDoc {
+    @Id public var id: Int64 = 0
+    public var planId: Int64 = 0
+    public var packageId: Int64 = 0
+    public var packageOrg: String = ""
+    public var packageName: String = ""
+    public var packageVersion: String = ""
+    public var order: Int64 = 0
+    public var category: String = ""       // app/deps/...
+    public var status: String = "pending"  // pending/running/completed/failed
+    public var selected: Bool = true
+    public var error: String = ""
+    public var startedAt: Int64 = 0
+    public var completedAt: Int64 = 0
 }
 
 // 管理 store 聚合服务
@@ -90,22 +142,31 @@ public class AdminDataStore {
     public var storm: Storm
     public var nextOrg: Int64
     public var nextTeam: Int64
+    public var nextTeamOrg: Int64
+    public var nextTeamPkg: Int64
     public var nextMember: Int64
     public var nextLog: Int64
     public var nextPlan: Int64
+    public var nextPlanItem: Int64
 
     public init(storm: Storm) {
         this.storm = storm
         this.nextOrg = 1
         this.nextTeam = 1
+        this.nextTeamOrg = 1
+        this.nextTeamPkg = 1
         this.nextMember = 1
         this.nextLog = 1
         this.nextPlan = 1
+        this.nextPlanItem = 1
         this.storm.reindex<OrgDoc>()
         this.storm.reindex<TeamDoc>()
+        this.storm.reindex<TeamOrganizationDoc>()
+        this.storm.reindex<TeamPackageDoc>()
         this.storm.reindex<TeamMemberDoc>()
         this.storm.reindex<LogDoc>()
         this.storm.reindex<PlanDoc>()
+        this.storm.reindex<PlanItemDoc>()
         recoverNextIds()
     }
 
@@ -117,6 +178,12 @@ public class AdminDataStore {
         for (d in this.storm.all<TeamDoc>()) { if (d.id >= m) { m = d.id } }
         if (m >= this.nextTeam) { this.nextTeam = m + 1 }
         m = 0
+        for (d in this.storm.all<TeamOrganizationDoc>()) { if (d.id >= m) { m = d.id } }
+        if (m >= this.nextTeamOrg) { this.nextTeamOrg = m + 1 }
+        m = 0
+        for (d in this.storm.all<TeamPackageDoc>()) { if (d.id >= m) { m = d.id } }
+        if (m >= this.nextTeamPkg) { this.nextTeamPkg = m + 1 }
+        m = 0
         for (d in this.storm.all<TeamMemberDoc>()) { if (d.id >= m) { m = d.id } }
         if (m >= this.nextMember) { this.nextMember = m + 1 }
         m = 0
@@ -125,19 +192,37 @@ public class AdminDataStore {
         m = 0
         for (d in this.storm.all<PlanDoc>()) { if (d.id >= m) { m = d.id } }
         if (m >= this.nextPlan) { this.nextPlan = m + 1 }
+        m = 0
+        for (d in this.storm.all<PlanItemDoc>()) { if (d.id >= m) { m = d.id } }
+        if (m >= this.nextPlanItem) { this.nextPlanItem = m + 1 }
     }
 
     // ===== 组织 =====
-    public func createOrg(name: String, displayName: String, ownerId: Int64, now: Int64): Int64 {
+    public func createOrg(name: String, displayName: String, ownerId: Int64, now: Int64, description!: String = "", isDefault!: Bool = false): Int64 {
         let d = OrgDoc()
         d.id = this.nextOrg
         this.nextOrg++
         d.name = name
         d.displayName = displayName
+        d.description = description
+        d.isDefault = isDefault
         d.ownerId = ownerId
         d.createdAt = now
         this.storm.save(d)
         return d.id
+    }
+
+    public func updateOrg(id: Int64, displayName: String, description: String, isDefault: Bool, now: Int64): Bool {
+        match (this.storm.get<OrgDoc>(id)) {
+            case Some(d) =>
+                d.displayName = displayName
+                d.description = description
+                d.isDefault = isDefault
+                d.updatedAt = now
+                this.storm.save(d)
+                return true
+            case None => return false
+        }
     }
 
     public func listOrgs(): ArrayList<OrgDoc> {
@@ -165,15 +250,30 @@ public class AdminDataStore {
     }
 
     // ===== 团队 =====
-    public func createTeam(name: String, orgId: Int64, now: Int64): Int64 {
+    public func createTeam(name: String, now: Int64, displayName!: String = "", description!: String = "", permission!: String = "read"): Int64 {
         let d = TeamDoc()
         d.id = this.nextTeam
         this.nextTeam++
         d.name = name
-        d.orgId = orgId
+        d.displayName = displayName
+        d.description = description
+        d.permission = permission
         d.createdAt = now
         this.storm.save(d)
         return d.id
+    }
+
+    public func updateTeam(id: Int64, displayName: String, description: String, permission: String, now: Int64): Bool {
+        match (this.storm.get<TeamDoc>(id)) {
+            case Some(d) =>
+                d.displayName = displayName
+                d.description = description
+                d.permission = permission
+                d.updatedAt = now
+                this.storm.save(d)
+                return true
+            case None => return false
+        }
     }
 
     public func listTeams(): ArrayList<TeamDoc> {
@@ -184,6 +284,102 @@ public class AdminDataStore {
             }
         }
         return r
+    }
+
+    public func getTeam(id: Int64): ?TeamDoc {
+        this.storm.get<TeamDoc>(id)
+    }
+
+    public func deleteTeam(id: Int64, now: Int64): Bool {
+        match (this.storm.get<TeamDoc>(id)) {
+            case Some(d) =>
+                d.deletedAt = now
+                this.storm.save(d)
+                return true
+            case None => return false
+        }
+    }
+
+    // ---- 团队-组织关联（多对多；organizationId 0 = 无组织包）----
+    public func setTeamOrganizations(teamId: Int64, orgIds: Array<Int64>, now: Int64): Unit {
+        for (d in this.storm.all<TeamOrganizationDoc>()) {
+            if (d.teamId == teamId) {
+                this.storm.delete(d)
+            }
+        }
+        for (oid in orgIds) {
+            let d = TeamOrganizationDoc()
+            d.id = this.nextTeamOrg
+            this.nextTeamOrg++
+            d.teamId = teamId
+            d.organizationId = oid
+            d.createdAt = now
+            this.storm.save(d)
+        }
+    }
+
+    public func listTeamOrganizations(teamId: Int64): ArrayList<TeamOrganizationDoc> {
+        let r = ArrayList<TeamOrganizationDoc>()
+        for (d in this.storm.all<TeamOrganizationDoc>()) {
+            if (d.teamId == teamId) {
+                r.add(d)
+            }
+        }
+        return r
+    }
+
+    public func listTeamOrganizationIds(teamId: Int64): ArrayList<Int64> {
+        let r = ArrayList<Int64>()
+        for (d in this.listTeamOrganizations(teamId)) {
+            r.add(d.organizationId)
+        }
+        return r
+    }
+
+    // ---- 团队-包关联（organization 空串 = 无组织包）----
+    public func setTeamPackages(teamId: Int64, pkgs: Array<(String, String)>, now: Int64): Unit {
+        for (d in this.storm.all<TeamPackageDoc>()) {
+            if (d.teamId == teamId) {
+                this.storm.delete(d)
+            }
+        }
+        for ((org, name) in pkgs) {
+            let d = TeamPackageDoc()
+            d.id = this.nextTeamPkg
+            this.nextTeamPkg++
+            d.teamId = teamId
+            d.organization = org
+            d.packageName = name
+            d.createdAt = now
+            this.storm.save(d)
+        }
+    }
+
+    public func listTeamPackages(teamId: Int64): ArrayList<TeamPackageDoc> {
+        let r = ArrayList<TeamPackageDoc>()
+        for (d in this.storm.all<TeamPackageDoc>()) {
+            if (d.teamId == teamId) {
+                r.add(d)
+            }
+        }
+        return r
+    }
+
+    // ---- 团队成员 ----
+    public func setTeamMembers(teamId: Int64, userIds: Array<Int64>): Unit {
+        for (d in this.storm.all<TeamMemberDoc>()) {
+            if (d.teamId == teamId) {
+                this.storm.delete(d)
+            }
+        }
+        for (uid in userIds) {
+            let d = TeamMemberDoc()
+            d.id = this.nextMember
+            this.nextMember++
+            d.teamId = teamId
+            d.userId = uid
+            this.storm.save(d)
+        }
     }
 
     public func addTeamMember(teamId: Int64, userId: Int64): Unit {
@@ -205,8 +401,24 @@ public class AdminDataStore {
         return r
     }
 
+    public func removeTeamMember(teamId: Int64, userId: Int64): Unit {
+        for (d in this.storm.all<TeamMemberDoc>()) {
+            if (d.teamId == teamId && d.userId == userId) {
+                this.storm.delete(d)
+            }
+        }
+    }
+
+    public func listTeamMemberIds(teamId: Int64): ArrayList<Int64> {
+        let r = ArrayList<Int64>()
+        for (d in this.listTeamMembers(teamId)) {
+            r.add(d.userId)
+        }
+        return r
+    }
+
     // ===== 日志 =====
-    public func addLog(kind: LogKind, actorId: Int64, actorName: String, action: String, status: String, now: Int64): Int64 {
+    public func addLog(kind: LogKind, actorId: Int64, actorName: String, action: String, status: String, now: Int64, target!: String = "", error!: String = "", ipAddr!: String = "", userAgent!: String = ""): Int64 {
         let d = LogDoc()
         d.id = this.nextLog
         this.nextLog++
@@ -219,6 +431,10 @@ public class AdminDataStore {
         d.actorName = actorName
         d.action = action
         d.status = status
+        d.target = target
+        d.error = error
+        d.ipAddr = ipAddr
+        d.userAgent = userAgent
         d.createdAt = now
         this.storm.save(d)
         return d.id
@@ -239,14 +455,15 @@ public class AdminDataStore {
     }
 
     // ===== 发布计划 =====
-    public func createPlan(name: String, targetUpstream: String, itemsJson: String, now: Int64): Int64 {
+    public func createPlan(name: String, targetUpstream: Int64, pollInterval: Int64, pollTimeout: Int64, now: Int64): Int64 {
         let d = PlanDoc()
         d.id = this.nextPlan
         this.nextPlan++
         d.name = name
         d.status = "pending"
         d.targetUpstream = targetUpstream
-        d.itemsJson = itemsJson
+        d.pollInterval = pollInterval
+        d.pollTimeout = pollTimeout
         d.createdAt = now
         this.storm.save(d)
         return d.id
@@ -265,11 +482,22 @@ public class AdminDataStore {
         this.storm.get<PlanDoc>(id)
     }
 
-    public func updatePlanStatus(id: Int64, status: String, completed: Int64): Bool {
+    public func updatePlanStatus(id: Int64, status: String, completed: Int64, now: Int64): Bool {
         match (this.storm.get<PlanDoc>(id)) {
             case Some(d) =>
                 d.status = status
                 d.completedCount = completed
+                d.updatedAt = now
+                this.storm.save(d)
+                return true
+            case None => return false
+        }
+    }
+
+    public func setPlanTotal(id: Int64, total: Int64): Bool {
+        match (this.storm.get<PlanDoc>(id)) {
+            case Some(d) =>
+                d.totalCount = total
                 this.storm.save(d)
                 return true
             case None => return false
@@ -280,6 +508,66 @@ public class AdminDataStore {
         match (this.storm.get<PlanDoc>(id)) {
             case Some(d) =>
                 this.storm.delete(d)
+                for (it in this.listPlanItems(id)) {
+                    this.storm.delete(it)
+                }
+                return true
+            case None => return false
+        }
+    }
+
+    // ---- 计划项 ----
+    public func addPlanItem(planId: Int64, packageId: Int64, org: String, name: String, version: String, order: Int64, category: String, selected: Bool): Int64 {
+        let d = PlanItemDoc()
+        d.id = this.nextPlanItem
+        this.nextPlanItem++
+        d.planId = planId
+        d.packageId = packageId
+        d.packageOrg = org
+        d.packageName = name
+        d.packageVersion = version
+        d.order = order
+        d.category = category
+        d.selected = selected
+        d.startedAt = 0
+        d.completedAt = 0
+        this.storm.save(d)
+        return d.id
+    }
+
+    public func listPlanItems(planId: Int64): ArrayList<PlanItemDoc> {
+        let r = ArrayList<PlanItemDoc>()
+        for (d in this.storm.all<PlanItemDoc>()) {
+            if (d.planId == planId) {
+                r.add(d)
+            }
+        }
+        sort(r, lessThan: { a, b => a.order < b.order })
+        return r
+    }
+
+    public func getPlanItem(id: Int64): ?PlanItemDoc {
+        this.storm.get<PlanItemDoc>(id)
+    }
+
+    public func updatePlanItem(id: Int64, status: String, error: String, now: Int64): Bool {
+        match (this.storm.get<PlanItemDoc>(id)) {
+            case Some(d) =>
+                d.status = status
+                d.error = error
+                if (status == "running" && d.startedAt == 0) { d.startedAt = now }
+                if (status == "completed" || status == "failed") { d.completedAt = now }
+                this.storm.save(d)
+                return true
+            case None => return false
+        }
+    }
+
+    public func setPlanItemSelected(id: Int64, selected: Bool): Bool {
+        match (this.storm.get<PlanItemDoc>(id)) {
+            case Some(d) =>
+                d.selected = selected
+                this.storm.save(d)
                 return true
             case None => return false
         }

@@ -34,7 +34,7 @@ class PublishPlansPage <: Component {
                     m["id"] = p.id.toString()
                     m["name"] = p.name
                     m["status"] = p.status
-                    m["target"] = p.targetUpstream
+                    m["target"] = p.targetUpstream.toString()
                     m["progress"] = "${p.completedCount}/${p.totalCount}"
                     data.add(m)
                 }
@@ -77,8 +77,10 @@ class PublishPlansPage <: Component {
             this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
-        if (this.planName.get().isEmpty() || this.targetUrl.get().isEmpty()) {
-            this.msg.set("计划名和目标 URL 必填")
+        let planName = this.planName.get()
+        let targetUrl = this.targetUrl.get()
+        if (planName.isEmpty() || targetUrl.isEmpty()) {
+            this.msg.set("计划名和目标上游必填")
             return PatchResult.ReRender
         }
         // 用 analyze 计算所有本地包拓扑（简化：以全部本地包为根）
@@ -97,25 +99,44 @@ class PublishPlansPage <: Component {
             this.msg.set("依赖存在环")
             return PatchResult.ReRender
         }
-        // 序列化计划项
-        let sb = StringBuilder()
-        sb.append("[")
-        for (i in 0..items.size) {
-            let it = items[i]
-            if (i > 0) { sb.append(",") }
-            sb.append("{\"name\":\"${it.name}\",\"org\":\"${it.org}\",\"version\":\"${it.version}\",\"order\":${it.order},\"status\":\"pending\"}")
+        // 目标上游：URL 反查上游 ID（完整改造将改用上游下拉选择器）
+        var targetId: Int64 = 0
+        for (u in st.upStore.listAll()) {
+            if (u.url == targetUrl) {
+                targetId = u.id
+                break
+            }
         }
-        sb.append("]")
-        let planId = st.adminData.createPlan(this.planName.get(), this.targetUrl.get(), sb.toString(), nowMs())
+        if (targetId == 0) {
+            this.msg.set("未找到匹配的上游（请先在上游管理添加）")
+            return PatchResult.ReRender
+        }
+        let uid = sessionUid(ctx)
+        let uname = sessionUsername(ctx)
+        let planId = st.adminData.createPlan(planName, targetId, 60, 600, nowMs())
+        // 计划项落独立表（PlanItemDoc）
+        var order: Int64 = 0
+        for (it in items) {
+            var pid: Int64 = 0
+            for (d in allPkgs) {
+                if (d.organization == it.org && d.name == it.name && d.version == it.version) {
+                    pid = d.id
+                    break
+                }
+            }
+            st.adminData.addPlanItem(planId, pid, it.org, it.name, it.version, order, "", true)
+            order++
+        }
+        st.adminData.setPlanTotal(planId, items.size)
         this.msg.set("已创建发布计划 #${planId}（${items.size} 个包）")
         // 执行推送
         let executor = PublishExecutor(st.pkgStore, DiskBlobStore("${getDataDir()}/blobs"))
-        let (ok, total, errors) = executor.execute(items, this.targetUrl.get(), "")
+        let (ok, total, errors) = executor.execute(items, targetUrl, "")
         if (ok == total) {
-            st.adminData.updatePlanStatus(planId, "completed", total)
+            st.adminData.updatePlanStatus(planId, "completed", total, nowMs())
             this.msg.set("计划 #${planId} 执行完成：${ok}/${total}")
         } else {
-            st.adminData.updatePlanStatus(planId, "failed", ok)
+            st.adminData.updatePlanStatus(planId, "failed", ok, nowMs())
             this.msg.set("计划 #${planId} 部分失败：${ok}/${total}")
         }
         this.planName.set("")

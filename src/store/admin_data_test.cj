@@ -1,4 +1,4 @@
-// AdminDataStore 单元测试
+// AdminDataStore 单元测试（模型对齐 cjrepo 后：团队多对多关联/计划 items 独立表）
 package ystyle::cjreg.store
 
 import bstorm.*
@@ -15,6 +15,15 @@ func testOrgLifecycle() {
     let id = store.createOrg("test-org", "测试组织", 1, 1000)
     @Expect(id > 0, true)
     @Expect(store.listOrgs().size, 1)
+    // 编辑（displayName/description/isDefault）
+    @Expect(store.updateOrg(id, "新显示名", "描述", true, 1500), true)
+    match (store.getOrg(id)) {
+        case Some(o) =>
+            @Expect(o.displayName, "新显示名")
+            @Expect(o.description, "描述")
+            @Expect(o.isDefault, true)
+        case None => @Fail("expected org")
+    }
     // 软删
     @Expect(store.deleteOrg(id, 2000), true)
     @Expect(store.listOrgs().size, 0)
@@ -23,46 +32,106 @@ func testOrgLifecycle() {
 }
 
 @Test
-func testTeamAndMembers() {
+func testTeamLifecycleAndAssociations() {
     let store = makeAdminStore()
-    let orgId = store.createOrg("org1", "组织1", 1, 1000)
-    let teamId = store.createTeam("dev", orgId, 1000)
+    let orgA = store.createOrg("org-a", "组织A", 1, 1000)
+    let orgB = store.createOrg("org-b", "组织B", 1, 1000)
+    let teamId = store.createTeam("dev", 1000, displayName: "开发团队", description: "核心开发", permission: "write")
     @Expect(store.listTeams().size, 1)
+    match (store.getTeam(teamId)) {
+        case Some(t) =>
+            @Expect(t.displayName, "开发团队")
+            @Expect(t.description, "核心开发")
+            @Expect(t.permission, "write")
+        case None => @Fail("expected team")
+    }
+    // 编辑
+    @Expect(store.updateTeam(teamId, "改名", "", "overwrite", 1500), true)
+    match (store.getTeam(teamId)) {
+        case Some(t) => @Expect(t.permission, "overwrite")
+        case None => ()
+    }
+    // 团队-组织多对多（0 = 无组织包）
+    store.setTeamOrganizations(teamId, [0, orgA, orgB], 1600)
+    @Expect(store.listTeamOrganizationIds(teamId).size, 3)
+    store.setTeamOrganizations(teamId, [orgA], 1700)
+    @Expect(store.listTeamOrganizationIds(teamId).size, 1)
+    @Expect(store.listTeamOrganizationIds(teamId)[0], orgA)
+    // 团队-包关联
+    store.setTeamPackages(teamId, [("", "core-lib"), ("org-b", "web-app")], 1800)
+    @Expect(store.listTeamPackages(teamId).size, 2)
+    store.setTeamPackages(teamId, [("", "core-lib")], 1900)
+    @Expect(store.listTeamPackages(teamId).size, 1)
+    // 成员
     store.addTeamMember(teamId, 1)
     store.addTeamMember(teamId, 2)
     @Expect(store.listTeamMembers(teamId).size, 2)
+    store.removeTeamMember(teamId, 1)
+    @Expect(store.listTeamMembers(teamId).size, 1)
+    store.setTeamMembers(teamId, [3, 4])
+    @Expect(store.listTeamMemberIds(teamId).size, 2)
+    // 软删团队
+    @Expect(store.deleteTeam(teamId, 2000), true)
+    @Expect(store.listTeams().size, 0)
 }
 
 @Test
-func testLogs() {
+func testLogsStructured() {
     let store = makeAdminStore()
-    store.addLog(LogKind.Publish, 1, "admin", "publish demo@1.0.0", "ok", 1000)
+    store.addLog(LogKind.Publish, 1, "admin", "publish demo@1.0.0", "ok", 1000, target: "demo", ipAddr: "127.0.0.1", userAgent: "cjpm/1.1")
     store.addLog(LogKind.Admin, 1, "admin", "create upstream", "ok", 1100)
-    store.addLog(LogKind.Publish, 2, "user2", "publish lib@2.0.0", "failed", 1200)
+    store.addLog(LogKind.Publish, 2, "user2", "publish lib@2.0.0", "failed", 1200, error: "sha256 mismatch")
     let publishLogs = store.listLogs(Some("publish"), 10)
     @Expect(publishLogs.size, 2)
     @Expect(publishLogs[0].action, "publish lib@2.0.0")  // 最新在前
+    @Expect(publishLogs[0].error, "sha256 mismatch")
+    @Expect(publishLogs[1].ipAddr, "127.0.0.1")
     let all = store.listLogs(None, 10)
     @Expect(all.size, 3)
 }
 
 @Test
-func testPlanLifecycle() {
+func testPlanLifecycleWithItems() {
     let store = makeAdminStore()
-    let id = store.createPlan("plan1", "http://localhost:8070", "[{\"name\":\"app\"}]", 1000)
+    let id = store.createPlan("plan1", 3, 60, 600, 1000)
     @Expect(store.listPlans().size, 1)
-    @Expect(store.getPlan(id).isSome(), true)
     match (store.getPlan(id)) {
-        case Some(p) => @Expect(p.status, "pending")
+        case Some(p) =>
+            @Expect(p.status, "pending")
+            @Expect(p.targetUpstream, 3)
+            @Expect(p.pollInterval, 60)
+            @Expect(p.pollTimeout, 600)
+        case None => @Fail("expected plan")
+    }
+    // 计划项独立表
+    let item1 = store.addPlanItem(id, 10, "demo", "app", "1.0.0", 1, "app", true)
+    let item2 = store.addPlanItem(id, 11, "demo", "lib", "2.0.0", 0, "deps", true)
+    let items = store.listPlanItems(id)
+    @Expect(items.size, 2)
+    @Expect(items[0].order, 0)   // 按 order 排序
+    @Expect(items[1].packageName, "app")
+    @Expect(store.updatePlanItem(item2, "running", "", 1100), true)
+    @Expect(store.updatePlanItem(item2, "completed", "", 1200), true)
+    match (store.getPlanItem(item2)) {
+        case Some(it) =>
+            @Expect(it.status, "completed")
+            @Expect(it.completedAt > 0, true)
+        case None => @Fail("expected item")
+    }
+    @Expect(store.setPlanItemSelected(item1, false), true)
+    match (store.getPlanItem(item1)) {
+        case Some(it) => @Expect(it.selected, false)
         case None => ()
     }
-    @Expect(store.updatePlanStatus(id, "running", 3), true)
+    @Expect(store.updatePlanStatus(id, "running", 1, 1300), true)
     match (store.getPlan(id)) {
         case Some(p) =>
             @Expect(p.status, "running")
-            @Expect(p.completedCount, 3)
+            @Expect(p.completedCount, 1)
         case None => ()
     }
+    // 删除计划连带删除 items
     @Expect(store.deletePlan(id), true)
     @Expect(store.listPlans().size, 0)
+    @Expect(store.listPlanItems(id).size, 0)
 }

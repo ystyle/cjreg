@@ -239,7 +239,7 @@ public func httpGet(url: String, token: String): ?Array<Byte> {
 
 public func buildHttpClient(url: String): Client {
     let cb = ClientBuilder()
-    cb.readTimeout(Duration.minute)
+    cb.readTimeout(Duration.second * 15)
     if (url.startsWith("https")) {
         var tls = TlsClientConfig()
         tls.verifyMode = CertificateVerifyMode.TrustAll

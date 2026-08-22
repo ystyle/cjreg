@@ -148,6 +148,9 @@ class PublicPackages <: Component {
 
     func renderList(): IComponent {
         let rows = ArrayList<IComponent>()
+        if (this.rows.get().size == 0) {
+            return emptyState("暂无包数据")
+        }
         rows.add(div([
             div([text("包名")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
             div([text("组织")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),

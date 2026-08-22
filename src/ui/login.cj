@@ -33,7 +33,7 @@ class LoginPage <: Component {
         let passInput = if (this.busy.get()) {
             Input().bind(this.password).placeholder("密码").password().size(ComponentSize.Large).disabled()
         } else {
-            Input().bind(this.password).placeholder("密码").password().size(ComponentSize.Large)
+            Input().bind(this.password).placeholder("密码").password().size(ComponentSize.Large).on("keydown", onEnter)
         }
         let loginBtn = if (this.busy.get()) {
             Button([text("登录中...")]).kind(ButtonKind.Primary).size(ButtonSize.Large).disabled()
@@ -57,6 +57,18 @@ class LoginPage <: Component {
                 ]),
             ], attrs: Some(HashMap<String, String>([("class", cls("login-card"))]))),
         ], attrs: Some(HashMap<String, String>([("class", cls("login-container"))])))
+    }
+
+    // 回车提交（密码框 keydown）
+    func onEnter(ctx: ActionContext): PatchResult {
+        match (ctx.keyEvent) {
+            case Some(ke) =>
+                if (ke.isEnter()) {
+                    return this.doLogin(ctx)
+                }
+            case None => ()
+        }
+        PatchResult.ReRender
     }
 
     func doLogin(ctx: ActionContext): PatchResult {

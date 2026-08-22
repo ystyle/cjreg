@@ -294,6 +294,9 @@ class UpstreamsPage <: Component {
         match (this.state) {
             case Some(st) =>
                 let list = st.upStore.listAll()
+                if (list.size == 0) {
+                    return emptyState("暂无上游，点击「新增上游」添加")
+                }
                 let rows = ArrayList<IComponent>()
                 rows.add(div([
                     div([text("ID")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
@@ -541,6 +544,9 @@ class PackagesPage <: Component {
 
     func renderList(): IComponent {
         let rows = ArrayList<IComponent>()
+        if (this.rows.get().size == 0) {
+            return emptyState("暂无包数据")
+        }
         rows.add(div([
             div([text("ID")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
             div([text("组织")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),

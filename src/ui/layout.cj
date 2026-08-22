@@ -77,3 +77,10 @@ public func adminCard(title: String, children: Array<IComponent>): IComponent {
         div(children),
     ], attrs: Some(HashMap<String, String>([("class", cls("admin-card"))])))
 }
+
+// 空态提示（列表无数据时）
+public func emptyState(text: String): IComponent {
+    div([
+        Empty().description(text),
+    ], attrs: Some(HashMap<String, String>([("class", cls("empty-line"))])))
+}

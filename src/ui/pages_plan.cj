@@ -108,6 +108,9 @@ class PublishPlansPage <: Component {
             case Some(st) => st.adminData.listPlans()
             case None => ArrayList<PlanDoc>()
         }
+        if (plans.size == 0) {
+            return emptyState("暂无发布计划，点击「创建计划」新建")
+        }
         let rows = ArrayList<IComponent>()
         rows.add(div([
             div([text("ID")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
@@ -328,7 +331,6 @@ class PublishPlanDetailPage <: Component {
     var state: Option<CjregState> = None
     var planId: Int64 = 0
     var msg = Signal<String>("")
-    var busy = Signal<Bool>(false)
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
@@ -373,7 +375,7 @@ class PublishPlanDetailPage <: Component {
         }
     }
 
-    // 开始执行：按拓扑序推送全部选中项
+    // 开始执行：异步线程推送，逐项通过 App.pushUpdate 推送进度
     func doStart(ctx: ActionContext): PatchResult {
         let st = match (this.state) {
             case Some(x) => x
@@ -383,45 +385,74 @@ class PublishPlanDetailPage <: Component {
             this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
-        if (this.busy.get()) {
+        if (st.planBusy.get()) {
             return PatchResult.ReRender
         }
-        this.busy.set(true)
+        let sid = ctx.getSessionId()
         match (st.adminData.getPlan(this.planId)) {
             case Some(plan) =>
                 match (st.upStore.getById(plan.targetUpstream)) {
                     case Some(up) =>
                         let docs = st.adminData.listPlanItems(this.planId)
                         let execItems = ArrayList<PlanItem>()
+                        let docIds = ArrayList<Int64>()
                         for (d in docs) {
                             if (!d.selected) { continue }
                             execItems.add(PlanItem(d.packageId, d.packageName, d.packageOrg, d.packageVersion, toPlanCategory(d.category), d.order))
+                            docIds.add(d.id)
                             let _ = st.adminData.updatePlanItem(d.id, "running", "", nowMs())
                         }
-                        st.adminData.updatePlanStatus(this.planId, "running", 0, nowMs())
-                        let executor = PublishExecutor(st.pkgStore, DiskBlobStore("${getDataDir()}/blobs"))
-                        let (ok, total, errors) = executor.execute(execItems, up.url, up.authToken)
-                        // 回写 items 状态
-                        var idx: Int64 = 0
-                        for (d in docs) {
-                            if (!d.selected) { continue }
-                            let itemErr = if (idx < errors.size) { errors[idx] } else { "" }
-                            let itemStatus = if (idx < ok) { "completed" } else { "failed" }
-                            let _ = st.adminData.updatePlanItem(d.id, itemStatus, itemErr, nowMs())
-                            idx++
+                        if (execItems.size == 0) {
+                            this.msg.set("没有可执行的发布项")
+                            return PatchResult.ReRender
                         }
-                        let finalStatus = if (ok == total && total > 0) { "completed" } else { "failed" }
-                        st.adminData.updatePlanStatus(this.planId, finalStatus, ok, nowMs())
-                        st.adminData.addLog(LogKind.Publish, sessionUid(ctx), sessionUsername(ctx), "execute plan ${plan.name}", if (ok == total) { "ok" } else { "failed" }, nowMs())
-                        this.msg.set("执行完成：${ok}/${total}")
+                        st.adminData.updatePlanStatus(this.planId, "running", 0, nowMs())
+                        st.planBusy.set(true)
+                        st.planStatus.set("running")
+                        st.planProgress.set("0/${execItems.size}")
+                        st.adminData.addLog(LogKind.Publish, sessionUid(ctx), sessionUsername(ctx), "start plan ${plan.name}", "ok", nowMs())
+                        // 异步执行（网络操作在线程内，DB 写在 pushUpdate 回调里串行化）
+                        spawn { =>
+                            this.runExecution(st, sid, execItems, docIds, up.url, up.authToken)
+                        }
                     case None =>
                         this.msg.set("目标上游不存在")
                 }
             case None =>
                 this.msg.set("计划不存在")
         }
-        this.busy.set(false)
         PatchResult.ReRender
+    }
+
+    // 异步执行线程：逐项推送，每项完成通过 App.pushUpdate 推进度给前端
+    func runExecution(st: CjregState, sid: String, items: ArrayList<PlanItem>, docIds: ArrayList<Int64>, url: String, token: String): Unit {
+        let app = match (st.app) {
+            case Some(a) => a
+            case None => return
+        }
+        let executor = PublishExecutor(st.pkgStore, DiskBlobStore("${getDataDir()}/blobs"))
+        let total = items.size
+        let done = Box<Int64>(0)
+        let (ok, _, _) = executor.execute(items, url, token, onItem: { it, ok, err =>
+            // 服务端推送回调在 execMutex 内执行：DB 写与 WS handler 串行化
+            let _ = app.pushUpdate(sid, { pctx =>
+                let s = pctx.getState<CjregState>()
+                if (done.value < docIds.size) {
+                    let _ = s.adminData.updatePlanItem(docIds[done.value], if (ok) { "completed" } else { "failed" }, err, nowMs())
+                }
+                done.value++
+                s.planProgress.set("${done.value}/${total}")
+                PatchResult.ReRender
+            })
+        })
+        let finalStatus = if (ok == total && total > 0) { "completed" } else { "failed" }
+        let _ = app.pushUpdate(sid, { pctx =>
+            let s = pctx.getState<CjregState>()
+            let _ = s.adminData.updatePlanStatus(this.planId, finalStatus, ok, nowMs())
+            s.planBusy.set(false)
+            s.planStatus.set(finalStatus)
+            PatchResult.ReRender
+        })
     }
 
     func renderItemRow(d: PlanItemDoc): IComponent {
@@ -459,18 +490,25 @@ class PublishPlanDetailPage <: Component {
             case None => return div([text("加载中...")])
         }
         let backHandler: ActionHandler = { c => this.backToList(c) }
+        let executing = st.planBusy.get()
         match (st.adminData.getPlan(this.planId)) {
             case Some(plan) =>
-                let canStart = plan.status == "pending" || plan.status == "failed"
+                let canStart = !executing && (plan.status == "pending" || plan.status == "failed")
+                let progressLine = if (executing) {
+                    div([text("执行中: ${st.planProgress.get()}")])
+                } else {
+                    div()
+                }
                 adminLayout("/admin/publish-plans", [
                     div([text("发布计划详情")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
                     adminCard("计划信息", [
                         div([
                             div([text("名称: ${plan.name}")]),
-                            div([this.statusTag(plan.status)]),
+                            div([this.statusTag(if (executing) { "running" } else { plan.status })]),
                             div([text("目标上游: ${this.upstreamName(st, plan.targetUpstream)}")]),
                             div([text("进度: ${plan.completedCount}/${plan.totalCount}")]),
                             div([text("轮询: ${plan.pollInterval}s / 超时 ${plan.pollTimeout}s")]),
+                            progressLine,
                         ]),
                         div([
                             Button([text("返回列表")]).onClick(backHandler),

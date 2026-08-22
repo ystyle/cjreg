@@ -131,6 +131,17 @@ func cmdServe(dataDir: String, port: UInt16): Int64 {
     // 同一 Tang 实例：协议路由 + cjxt 管理/公开页面（单进程共享 store）
     let app = buildServer(pkgStore, Some(admin), Some(upSvc), blobStore)
     let adminData = AdminDataStore(userStore.storm)
+    // 重启恢复：执行中的计划复位为待执行（执行线程随进程退出）
+    for (planDoc in adminData.listPlans()) {
+        if (planDoc.status == "running" || planDoc.status == "paused") {
+            let _ = adminData.updatePlanStatus(planDoc.id, "pending", 0, nowMs())
+            for (item in adminData.listPlanItems(planDoc.id)) {
+                if (item.status == "running") {
+                    let _ = adminData.updatePlanItem(item.id, "pending", "", nowMs())
+                }
+            }
+        }
+    }
     // 演示/冒烟数据开关：CJREG_SEED_DEMO=1 注入几个本地包（便于验证发布计划等完整流程）
     match (getVariable("CJREG_SEED_DEMO")) {
         case Some(v) => if (v == "1") {
@@ -138,11 +149,12 @@ func cmdServe(dataDir: String, port: UInt16): Int64 {
         }
         case None => ()
     }
-    App()
+    let cjxtApp = App()
+    cjxtApp
         .configure(AppConfig(cssBundle: "/css/bundle.css?v=2"))
         .serveStatic("/css", "public/css")
         .UseComponent()
-        .state<CjregState>({ => CjregState(pkgStore, userStore, upStore, adminData, authSvc) })
+        .state<CjregState>({ => CjregState(pkgStore, userStore, upStore, adminData, authSvc, app: Some(cjxtApp)) })
         .auth({ t => restoreAdminSession(authSvc, t) })
         .port(port)
         .setTang(app)
@@ -235,11 +247,12 @@ func cmdAdminUI(dataDir: String, port: UInt16): Int64 {
     let (pkgStore, userStore, upStore) = stores.getOrThrow()
     let adminData = AdminDataStore(userStore.storm)
     let authSvc = AuthService(userStore, 86400)
-    App()
+    let cjxtApp = App()
+    cjxtApp
         .configure(AppConfig(cssBundle: "/css/bundle.css?v=2"))
         .serveStatic("/css", "public/css")
         .UseComponent()
-        .state<CjregState>({ => CjregState(pkgStore, userStore, upStore, adminData, authSvc) })
+        .state<CjregState>({ => CjregState(pkgStore, userStore, upStore, adminData, authSvc, app: Some(cjxtApp)) })
         .auth({ t => restoreAdminSession(authSvc, t) })
         .host("0.0.0.0").port(port)
         .serve()

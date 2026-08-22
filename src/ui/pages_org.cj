@@ -204,6 +204,9 @@ class UsersPage <: Component {
 
     func renderList(): IComponent {
         let users = this.refresh()
+        if (users.size == 0) {
+            return emptyState("暂无用户，点击「新增用户」创建")
+        }
         let rows = ArrayList<IComponent>()
         rows.add(div([
             div([text("ID")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
@@ -444,6 +447,9 @@ class OrganizationsPage <: Component {
         let orgs = match (this.state) {
             case Some(st) => st.adminData.listOrgs()
             case None => ArrayList<OrgDoc>()
+        }
+        if (orgs.size == 0) {
+            return emptyState("暂无组织，点击「新增组织」创建")
         }
         let rows = ArrayList<IComponent>()
         rows.add(div([
@@ -811,6 +817,9 @@ class TeamsPage <: Component {
         let teams = match (this.state) {
             case Some(st) => st.adminData.listTeams()
             case None => ArrayList<TeamDoc>()
+        }
+        if (teams.size == 0) {
+            return emptyState("暂无团队，点击「新增团队」创建")
         }
         let rows = ArrayList<IComponent>()
         rows.add(div([

@@ -15,17 +15,25 @@ public class CjregState <: AppState {
     public var upStore: BstormUpstreamStore
     public var adminData: AdminDataStore
     public var auth: AuthService
+    // cjxt App 实例（异步执行时服务端推送进度用）
+    public var app: Option<App>
     // 登录态
     public var currentUser: Signal<Option<User>> = Signal<Option<User>>(Option<User>.None)
     public var sessionToken: Signal<String> = Signal<String>("")
+    // 计划执行进度（异步执行时 pushUpdate 更新，详情页订阅渲染）
+    public var planBusy = Signal<Bool>(false)
+    public var planProgress = Signal<String>("")
+    public var planStatus = Signal<String>("")
 
     public init(pkgStore: PackageStore, userStore: BstormUserStore,
-                upStore: BstormUpstreamStore, adminData: AdminDataStore, auth: AuthService) {
+                upStore: BstormUpstreamStore, adminData: AdminDataStore, auth: AuthService,
+                app!: Option<App> = None) {
         this.pkgStore = pkgStore
         this.userStore = userStore
         this.upStore = upStore
         this.adminData = adminData
         this.auth = auth
+        this.app = app
     }
 
     /// 操作级权限校验：会话上下文标记为管理员，且该用户仍存在、启用、isAdmin

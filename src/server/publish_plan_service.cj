@@ -336,7 +336,7 @@ public class PublishExecutor {
 
     // 执行：对 items（拓扑序）逐个推送；返回 (成功数, 总数, 失败详情)
     // targetUrl 为目标上游 registry base（如 http://localhost:8070）
-    public func execute(items: ArrayList<PlanItem>, targetUrl: String, token: String): (Int64, Int64, ArrayList<String>) {
+    public func execute(items: ArrayList<PlanItem>, targetUrl: String, token: String, onItem!: (PlanItem, Bool, String) -> Unit = { _, _, _ => () }): (Int64, Int64, ArrayList<String>) {
         let total = items.size
         var success: Int64 = 0
         let errors = ArrayList<String>()
@@ -366,7 +366,10 @@ public class PublishExecutor {
                     // 从 indexJson 提取 sha256sum
                     let sha = extractSha256(doc.indexJson)
                     if (sha.isEmpty()) {
+                        it.status = PlanItemStatus.Failed
+                        it.error = "无 sha256sum"
                         errors.add("${doc.name}@${doc.version}: 无 sha256sum")
+                        onItem(it, false, "无 sha256sum")
                         continue
                     }
                     // 从 blob 取制品
@@ -386,14 +389,18 @@ public class PublishExecutor {
                             if (ok) {
                                 success++
                                 it.status = PlanItemStatus.Completed
+                                onItem(it, true, "")
                             } else {
                                 it.status = PlanItemStatus.Failed
                                 it.error = "HTTP ${code}"
                                 errors.add("${doc.name}@${doc.version}: 推送失败 HTTP ${code}")
+                                onItem(it, false, "HTTP ${code}")
                             }
                         case None =>
                             it.status = PlanItemStatus.Failed
+                            it.error = "制品缺失（sha=${sha}）"
                             errors.add("${doc.name}@${doc.version}: 制品缺失（sha=${sha}）")
+                            onItem(it, false, "制品缺失")
                     }
                 case None =>
                     errors.add("pkg#${it.pkgId} 不存在")

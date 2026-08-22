@@ -18,41 +18,64 @@ class LoginPage <: Component {
     var username = Signal<String>("")
     var password = Signal<String>("")
     var errorMsg = Signal<String>("")
+    var busy = Signal<Bool>(false)
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
     }
 
     public func render(): IComponent {
+        let userInput = if (this.busy.get()) {
+            Input().bind(this.username).placeholder("用户名").size(ComponentSize.Large).disabled()
+        } else {
+            Input().bind(this.username).placeholder("用户名").size(ComponentSize.Large)
+        }
+        let passInput = if (this.busy.get()) {
+            Input().bind(this.password).placeholder("密码").password().size(ComponentSize.Large).disabled()
+        } else {
+            Input().bind(this.password).placeholder("密码").password().size(ComponentSize.Large)
+        }
+        let loginBtn = if (this.busy.get()) {
+            Button([text("登录中...")]).kind(ButtonKind.Primary).size(ButtonSize.Large).disabled()
+        } else {
+            Button([text("登 录")]).kind(ButtonKind.Primary).size(ButtonSize.Large).onClick(doLogin)
+        }
         div([
             div([text("cjreg 管理控制台")], attrs: Some(HashMap<String, String>([("class", cls("login-title"))]))),
             div([
                 Form([
                     div([FormItem([text("用户名")])], attrs: Some(HashMap<String, String>([("class", cls("form-item"))]))),
-                    Input().bind(this.username).placeholder("用户名").size(ComponentSize.Large),
+                    userInput,
                     div([FormItem([text("密码")])], attrs: Some(HashMap<String, String>([("class", cls("form-item"))]))),
-                    Input().bind(this.password).placeholder("密码").password().size(ComponentSize.Large),
+                    passInput,
                     if (this.errorMsg.get() != "") {
                         div([text(this.errorMsg.get())], attrs: Some(HashMap<String, String>([("class", cls("login-error"))])))
                     } else {
                         div()
                     },
-                    Button([text("登 录")]).kind(ButtonKind.Primary).size(ButtonSize.Large).onClick(doLogin),
+                    loginBtn,
                 ]),
             ], attrs: Some(HashMap<String, String>([("class", cls("login-card"))]))),
         ], attrs: Some(HashMap<String, String>([("class", cls("login-container"))])))
     }
 
     func doLogin(ctx: ActionContext): PatchResult {
+        if (this.busy.get()) {
+            return PatchResult.ReRender
+        }
+        this.busy.set(true)
         println("[login] doLogin clicked")
         let s = match (this.state) {
             case Some(x) => x
-            case None => return PatchResult.ReRender
+            case None =>
+                this.busy.set(false)
+                return PatchResult.ReRender
         }
         let u = this.username.get()
         let p = this.password.get()
         if (u.isEmpty() || p.isEmpty()) {
             this.errorMsg.set("请输入用户名和密码")
+            this.busy.set(false)
             return PatchResult.ReRender
         }
         match (s.auth.login(u, p)) {
@@ -60,6 +83,7 @@ class LoginPage <: Component {
                 if (!user.isAdmin) {
                     println("[login] denied: user ${user.username} is not admin")
                     this.errorMsg.set("无权限：仅管理员可登录管理后台")
+                    this.busy.set(false)
                     return PatchResult.ReRender
                 }
                 println("[login] success user=${user.username}")
@@ -73,6 +97,7 @@ class LoginPage <: Component {
                 s.sessionToken.set(token.token)
                 s.adminData.addLog(LogKind.Auth, user.id, user.username, "login", "ok", nowMs())
                 this.errorMsg.set("")
+                this.busy.set(false)
                 ctx.route.push("/admin")
             case None =>
                 let u2 = s.userStore.getUserByUsername(u)
@@ -83,6 +108,7 @@ class LoginPage <: Component {
                         println("[login] failed: user not found")
                 }
                 this.errorMsg.set("用户名或密码错误")
+                this.busy.set(false)
         }
         PatchResult.ReRender
     }

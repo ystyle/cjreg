@@ -526,59 +526,61 @@ class OrganizationsPage <: Component {
 @Page["/admin/teams", "团队管理", requireAdmin]
 class TeamsPage <: Component {
     var state: Option<CjregState> = None
-    var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
-    var newName = Signal<String>("")
     var msg = Signal<String>("")
+    // 基础表单 Dialog
+    var dialogVisible = Signal<Bool>(false)
+    var dialogMode = Signal<String>("create")
+    var editingId: Int64 = 0
+    var formName = Signal<String>("")
+    var formDisplay = Signal<String>("")
+    var formDesc = Signal<String>("")
+    var formPermission = Signal<String>("read")
+    // 组织关联 Dialog
+    var orgDialogVisible = Signal<Bool>(false)
+    var orgSelect = Signal<ArrayList<String>>(ArrayList<String>())
+    // 包关联 Dialog
+    var pkgDialogVisible = Signal<Bool>(false)
+    var pkgSearch = Signal<String>("")
+    // 成员关联 Dialog
+    var memberDialogVisible = Signal<Bool>(false)
+    var memberSearch = Signal<String>("")
+    // 删除确认
+    var confirmVisible = Signal<Bool>(false)
+    var pendingDeleteId: Int64 = 0
+    var pendingDeleteName: String = ""
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
-        refresh()
     }
 
-    func refresh(): Unit {
-        match (this.state) {
-            case Some(st) =>
-                let teams = st.adminData.listTeams()
-                let data = ArrayList<HashMap<String, String>>()
-                for (t in teams) {
-                    let m = HashMap<String, String>()
-                    m["id"] = t.id.toString()
-                    m["name"] = t.name
-                    m["display"] = t.displayName
-                    m["permission"] = t.permission
-                    m["memberCount"] = st.adminData.listTeamMembers(t.id).size.toString()
-                    data.add(m)
-                }
-                this.rows.set(data)
-            case None => ()
-        }
+    // ===== 基础表单 =====
+    func openCreate(ctx: ActionContext): PatchResult {
+        this.dialogMode.set("create")
+        this.formName.set("")
+        this.formDisplay.set("")
+        this.formDesc.set("")
+        this.formPermission.set("read")
+        this.dialogVisible.set(true)
+        PatchResult.ReRender
     }
 
-    public func render(): IComponent {
-        let toolbar = div([
-            Input().bind(this.newName).placeholder("团队名"),
-            Button([text("创建团队")]).kind(ButtonKind.Primary).onClick(createTeam),
-            if (this.msg.get() != "") {
-                Tag([text(this.msg.get())]).kind(ComponentKind.Success)
-            } else {
-                div()
-            },
-        ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))])))
-        let table = Table()
-            .data(this.rows)
-            .stripe()
-            .add(TableColumn().label("ID").colProp("id").width(60))
-            .add(TableColumn().label("团队名").colProp("name"))
-            .add(TableColumn().label("显示名").colProp("display"))
-            .add(TableColumn().label("权限").colProp("permission").width(100))
-            .add(TableColumn().label("成员数").colProp("memberCount").width(80))
-        adminLayout("/admin/teams", [
-            div([text("团队管理")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
-            adminCard("团队列表", [toolbar, table]),
-        ])
+    func openEdit(ctx: ActionContext, t: TeamDoc): PatchResult {
+        this.dialogMode.set("edit")
+        this.editingId = t.id
+        this.formName.set(t.name)
+        this.formDisplay.set(t.displayName)
+        this.formDesc.set(t.description)
+        this.formPermission.set(t.permission)
+        this.dialogVisible.set(true)
+        PatchResult.ReRender
     }
 
-    func createTeam(ctx: ActionContext): PatchResult {
+    func closeDialog(ctx: ActionContext): PatchResult {
+        this.dialogVisible.set(false)
+        PatchResult.ReRender
+    }
+
+    func submitForm(ctx: ActionContext): PatchResult {
         let st = match (this.state) {
             case Some(x) => x
             case None => return PatchResult.ReRender
@@ -587,18 +589,421 @@ class TeamsPage <: Component {
             this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
-        let name = this.newName.get()
+        let name = this.formName.get()
+        let display = this.formDisplay.get()
+        let desc = this.formDesc.get()
+        let perm = this.formPermission.get()
         if (name.isEmpty()) {
             this.msg.set("团队名必填")
             return PatchResult.ReRender
         }
         let uid = sessionUid(ctx)
         let uname = sessionUsername(ctx)
-        let id = st.adminData.createTeam(name, nowMs())
-        this.msg.set("已创建团队 #${id}")
-        this.newName.set("")
-        st.adminData.addLog(LogKind.Admin, uid, uname, "create team ${name}", "ok", nowMs())
-        refresh()
+        if (this.dialogMode.get() == "create") {
+            let id = st.adminData.createTeam(name, nowMs(), displayName: display, description: desc, permission: perm)
+            this.msg.set("已创建团队 #${id}")
+            st.adminData.addLog(LogKind.Admin, uid, uname, "create team ${name}", "ok", nowMs())
+        } else {
+            if (st.adminData.updateTeam(this.editingId, display, desc, perm, nowMs())) {
+                this.msg.set("已更新团队 ${name}")
+                st.adminData.addLog(LogKind.Admin, uid, uname, "update team ${name}", "ok", nowMs())
+            } else {
+                this.msg.set("更新失败")
+            }
+        }
+        this.dialogVisible.set(false)
         PatchResult.ReRender
+    }
+
+    // ===== 组织关联 =====
+    func openOrgs(ctx: ActionContext, t: TeamDoc): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        this.editingId = t.id
+        let ids = ArrayList<String>()
+        for (oid in st.adminData.listTeamOrganizationIds(t.id)) {
+            ids.add(oid.toString())
+        }
+        this.orgSelect.set(ids)
+        this.orgDialogVisible.set(true)
+        PatchResult.ReRender
+    }
+
+    func closeOrgs(ctx: ActionContext): PatchResult {
+        this.orgDialogVisible.set(false)
+        PatchResult.ReRender
+    }
+
+    func saveOrgs(ctx: ActionContext): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
+        }
+        let ids = ArrayList<Int64>()
+        for (v in this.orgSelect.get()) {
+            let n = match (Int64.tryParse(v)) {
+                case Some(x) => x
+                case None => 0
+            }
+            ids.add(n)
+        }
+        st.adminData.setTeamOrganizations(this.editingId, ids.toArray(), nowMs())
+        this.msg.set("已更新团队组织关联")
+        st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "update team orgs #${this.editingId}", "ok", nowMs())
+        this.orgDialogVisible.set(false)
+        PatchResult.ReRender
+    }
+
+    // ===== 包关联 =====
+    func openPackages(ctx: ActionContext, t: TeamDoc): PatchResult {
+        this.editingId = t.id
+        this.pkgSearch.set("")
+        this.pkgDialogVisible.set(true)
+        PatchResult.ReRender
+    }
+
+    func closePackages(ctx: ActionContext): PatchResult {
+        this.pkgDialogVisible.set(false)
+        PatchResult.ReRender
+    }
+
+    func togglePkg(ctx: ActionContext, org: String, name: String): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
+        }
+        let cur = st.adminData.listTeamPackages(this.editingId)
+        var found = false
+        let next = ArrayList<(String, String)>()
+        for (p in cur) {
+            if (p.organization == org && p.packageName == name) {
+                found = true
+            } else {
+                next.add((p.organization, p.packageName))
+            }
+        }
+        if (!found) {
+            next.add((org, name))
+        }
+        st.adminData.setTeamPackages(this.editingId, next.toArray(), nowMs())
+        this.msg.set(if (!found) { "已关联 ${name}" } else { "已移除 ${name}" })
+        PatchResult.ReRender
+    }
+
+    // ===== 成员关联 =====
+    func openMembers(ctx: ActionContext, t: TeamDoc): PatchResult {
+        this.editingId = t.id
+        this.memberSearch.set("")
+        this.memberDialogVisible.set(true)
+        PatchResult.ReRender
+    }
+
+    func closeMembers(ctx: ActionContext): PatchResult {
+        this.memberDialogVisible.set(false)
+        PatchResult.ReRender
+    }
+
+    func toggleMember(ctx: ActionContext, userId: Int64): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
+        }
+        let cur = st.adminData.listTeamMemberIds(this.editingId)
+        var found = false
+        let next = ArrayList<Int64>()
+        for (uid in cur) {
+            if (uid == userId) {
+                found = true
+            } else {
+                next.add(uid)
+            }
+        }
+        if (!found) {
+            next.add(userId)
+        }
+        st.adminData.setTeamMembers(this.editingId, next.toArray())
+        this.msg.set(if (!found) { "已添加成员" } else { "已移除成员" })
+        PatchResult.ReRender
+    }
+
+    // ===== 删除 =====
+    func askDelete(ctx: ActionContext, t: TeamDoc): PatchResult {
+        this.pendingDeleteId = t.id
+        this.pendingDeleteName = t.name
+        this.confirmVisible.set(true)
+        PatchResult.ReRender
+    }
+
+    func cancelDelete(ctx: ActionContext): PatchResult {
+        this.confirmVisible.set(false)
+        PatchResult.ReRender
+    }
+
+    func confirmDelete(ctx: ActionContext): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
+        }
+        if (st.adminData.deleteTeam(this.pendingDeleteId, nowMs())) {
+            this.msg.set("已删除团队 ${this.pendingDeleteName}")
+            st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "delete team ${this.pendingDeleteName}", "ok", nowMs())
+        } else {
+            this.msg.set("删除失败")
+        }
+        this.confirmVisible.set(false)
+        this.pendingDeleteId = 0
+        PatchResult.ReRender
+    }
+
+    // ===== 渲染 =====
+    func renderTeamRow(t: TeamDoc): IComponent {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return div()
+        }
+        let editHandler: ActionHandler = { c => this.openEdit(c, t) }
+        let orgHandler: ActionHandler = { c => this.openOrgs(c, t) }
+        let pkgHandler: ActionHandler = { c => this.openPackages(c, t) }
+        let memberHandler: ActionHandler = { c => this.openMembers(c, t) }
+        let deleteHandler: ActionHandler = { c => this.askDelete(c, t) }
+        let permTag = match (t.permission) {
+            case "write" => Tag([text("写入")]).kind(ComponentKind.Warning)
+            case "overwrite" => Tag([text("覆盖")]).kind(ComponentKind.Danger)
+            case _ => Tag([text("读取")]).kind(ComponentKind.Info)
+        }
+        div([
+            div([text(t.id.toString())], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text(t.name)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text(t.displayName)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([permTag], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text(st.adminData.listTeamMembers(t.id).size.toString())], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text(st.adminData.listTeamOrganizations(t.id).size.toString())], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text(st.adminData.listTeamPackages(t.id).size.toString())], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([
+                Button([text("编辑")]).size(ButtonSize.Small).onClick(editHandler),
+                Button([text("组织")]).size(ButtonSize.Small).onClick(orgHandler),
+                Button([text("包")]).size(ButtonSize.Small).onClick(pkgHandler),
+                Button([text("成员")]).size(ButtonSize.Small).onClick(memberHandler),
+                Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteHandler),
+            ], attrs: Some(HashMap<String, String>([("class", cls("admin-td") + " " + cls("admin-actions"))]))),
+        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr"))])))
+    }
+
+    func renderList(): IComponent {
+        let teams = match (this.state) {
+            case Some(st) => st.adminData.listTeams()
+            case None => ArrayList<TeamDoc>()
+        }
+        let rows = ArrayList<IComponent>()
+        rows.add(div([
+            div([text("ID")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("团队名")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("显示名")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("权限")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("成员")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("组织")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("包")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("操作")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr") + " " + cls("admin-th"))]))))
+        for (t in teams) {
+            rows.add(this.renderTeamRow(t))
+        }
+        div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("admin-table"))])))
+    }
+
+    func renderFormDialog(): IComponent {
+        let title = if (this.dialogMode.get() == "create") { "新增团队" } else { "编辑团队" }
+        let isEdit = this.dialogMode.get() == "edit"
+        let nameInput = if (isEdit) {
+            Input().bind(this.formName).disabled()
+        } else {
+            Input().bind(this.formName)
+        }
+        let permSelect = Select([
+            SelectOption([text("读取（可下载）")], "read"),
+            SelectOption([text("写入（可发布）")], "write"),
+            SelectOption([text("覆盖（可覆盖版本）")], "overwrite"),
+        ]).bind(this.formPermission).placeholder("默认权限")
+        let dlg = Dialog([
+            div([
+                div([text("团队名")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                nameInput,
+                div([text("显示名")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                Input().bind(this.formDisplay).placeholder("可选"),
+                div([text("描述")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                Input().bind(this.formDesc).placeholder("可选"),
+                div([text("默认权限")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                permSelect,
+            ], attrs: Some(HashMap<String, String>([("class", cls("dialog-form"))]))),
+        ])
+            .visible(this.dialogVisible)
+            .title(title)
+            .width("440px")
+            .closeOnClickModal(false)
+            .footer([
+                Button([text("取消")]).onClick(closeDialog),
+                Button([text("确定")]).kind(ButtonKind.Primary).onClick(submitForm),
+            ])
+        dlg
+    }
+
+    func renderOrgDialog(): IComponent {
+        let orgOptions = ArrayList<IComponent>()
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return div()
+        }
+        // 无组织包选项（value=0，对齐 cjrepo NULL 语义）
+        orgOptions.add(SelectOption([text("（无组织包）")], "0"))
+        for (o in st.adminData.listOrgs()) {
+            let label = if (o.displayName.isEmpty()) { o.name } else { "${o.displayName}（${o.name}）" }
+            orgOptions.add(SelectOption([text(label)], o.id.toString()))
+        }
+        let dlg = Dialog([
+            div([
+                div([text("选择团队可操作的组织（含「无组织包」；可多选）")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                Select(orgOptions.toArray()).bindMulti(this.orgSelect).multiple().placeholder("选择组织"),
+            ], attrs: Some(HashMap<String, String>([("class", cls("dialog-form"))]))),
+        ])
+            .visible(this.orgDialogVisible)
+            .title("团队组织关联")
+            .width("480px")
+            .closeOnClickModal(false)
+            .footer([
+                Button([text("取消")]).onClick(closeOrgs),
+                Button([text("保存")]).kind(ButtonKind.Primary).onClick(saveOrgs),
+            ])
+        dlg
+    }
+
+    func renderPkgDialog(): IComponent {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return div()
+        }
+        let kw = this.pkgSearch.get()
+        let linked = st.adminData.listTeamPackages(this.editingId)
+        let rows = ArrayList<IComponent>()
+        let all = st.pkgStore.storm.all<PackageDoc>()
+        for (d in all) {
+            if (d.deletedAt != 0) { continue }
+            if (kw != "" && !d.name.contains(kw)) { continue }
+            var isLinked = false
+            for (p in linked) {
+                if (p.organization == d.organization && p.packageName == d.name) {
+                    isLinked = true
+                    break
+                }
+            }
+            let org = if (d.organization.isEmpty()) { "-" } else { d.organization }
+            let toggleHandler: ActionHandler = { c => this.togglePkg(c, d.organization, d.name) }
+            rows.add(div([
+                div([text("${org}/${d.name}@${d.version}")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+                Button([text(if (isLinked) { "移除" } else { "关联" })]).size(ButtonSize.Small).kind(if (isLinked) { ButtonKind.Danger } else { ButtonKind.Primary }).onClick(toggleHandler),
+            ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr"))]))))
+        }
+        let dlg = Dialog([
+            div([
+                div([text("搜索包并关联/移除（权限走团队默认权限）")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                Input().bind(this.pkgSearch).placeholder("搜索包名"),
+                div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("admin-table"))]))),
+            ], attrs: Some(HashMap<String, String>([("class", cls("dialog-form"))]))),
+        ])
+            .visible(this.pkgDialogVisible)
+            .title("团队包关联")
+            .width("560px")
+            .closeOnClickModal(false)
+            .footer([
+                Button([text("关闭")]).onClick(closePackages),
+            ])
+        dlg
+    }
+
+    func renderMemberDialog(): IComponent {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return div()
+        }
+        let kw = this.memberSearch.get()
+        let linked = st.adminData.listTeamMemberIds(this.editingId)
+        let rows = ArrayList<IComponent>()
+        for (u in st.userStore.listAllUsers()) {
+            if (kw != "" && !u.username.contains(kw)) { continue }
+            var isLinked = false
+            for (uid in linked) {
+                if (uid == u.id) {
+                    isLinked = true
+                    break
+                }
+            }
+            let toggleHandler: ActionHandler = { c => this.toggleMember(c, u.id) }
+            rows.add(div([
+                div([text(u.username)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+                Button([text(if (isLinked) { "移除" } else { "添加" })]).size(ButtonSize.Small).kind(if (isLinked) { ButtonKind.Danger } else { ButtonKind.Primary }).onClick(toggleHandler),
+            ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr"))]))))
+        }
+        let dlg = Dialog([
+            div([
+                div([text("搜索用户并添加/移除成员")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                Input().bind(this.memberSearch).placeholder("搜索用户名"),
+                div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("admin-table"))]))),
+            ], attrs: Some(HashMap<String, String>([("class", cls("dialog-form"))]))),
+        ])
+            .visible(this.memberDialogVisible)
+            .title("团队成员管理")
+            .width("480px")
+            .closeOnClickModal(false)
+            .footer([
+                Button([text("关闭")]).onClick(closeMembers),
+            ])
+        dlg
+    }
+
+    func renderConfirmDialog(): IComponent {
+        let dlg = Dialog([
+            div([text("确定要删除团队「${this.pendingDeleteName}」吗？其组织/包/成员关联将一并移除。")]),
+        ])
+            .visible(this.confirmVisible)
+            .title("删除确认")
+            .width("400px")
+            .closeOnClickModal(false)
+            .footer([
+                Button([text("取消")]).onClick(cancelDelete),
+                Button([text("删除")]).kind(ButtonKind.Danger).onClick(confirmDelete),
+            ])
+        dlg
+    }
+
+    public func render(): IComponent {
+        let toolbar = div([
+            Button([text("新增团队")]).kind(ButtonKind.Primary).onClick(openCreate),
+            if (this.msg.get() != "") {
+                Tag([text(this.msg.get())]).kind(ComponentKind.Success)
+            } else {
+                div()
+            },
+        ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))])))
+        adminLayout("/admin/teams", [
+            div([text("团队管理")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
+            adminCard("团队列表", [toolbar, this.renderList(), this.renderFormDialog(), this.renderOrgDialog(), this.renderPkgDialog(), this.renderMemberDialog(), this.renderConfirmDialog()]),
+        ])
     }
 }

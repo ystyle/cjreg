@@ -19,7 +19,7 @@ public func buildServer(
     blobStore: BlobStore,
     port: UInt16
 ): Tang {
-    let app = Tang()
+    let app = Tang().setHost("0.0.0.0")
     let publishSvc = PublishService(store, blobStore)
     let indexSvc = IndexService(store)
     let downloadSvc = DownloadService(store)

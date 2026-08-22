@@ -1,4 +1,4 @@
-// cjxt 管理界面：发布计划 / 日志 页
+// cjxt 管理界面：发布计划（列表 / 创建向导 / 详情）
 package ystyle::cjreg.ui
 
 import cjxt.*
@@ -10,65 +10,60 @@ import ystyle::cjreg.index.*
 import std.collection.*
 import std.convert.*
 
-// ===== 发布计划 =====
+// ===== 发布计划列表 =====
 @Page["/admin/publish-plans", "发布计划", requireAdmin]
 class PublishPlansPage <: Component {
     var state: Option<CjregState> = None
-    var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
-    var planName = Signal<String>("")
-    var targetUrl = Signal<String>("")
     var msg = Signal<String>("")
+    // 删除确认
+    var confirmVisible = Signal<Bool>(false)
+    var pendingDeleteId: Int64 = 0
+    var pendingDeleteName: String = ""
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
-        refresh()
     }
 
-    func refresh(): Unit {
-        match (this.state) {
-            case Some(st) =>
-                let plans = st.adminData.listPlans()
-                let data = ArrayList<HashMap<String, String>>()
-                for (p in plans) {
-                    let m = HashMap<String, String>()
-                    m["id"] = p.id.toString()
-                    m["name"] = p.name
-                    m["status"] = p.status
-                    m["target"] = p.targetUpstream.toString()
-                    m["progress"] = "${p.completedCount}/${p.totalCount}"
-                    data.add(m)
-                }
-                this.rows.set(data)
-            case None => ()
+    func upstreamName(st: CjregState, id: Int64): String {
+        match (st.upStore.getById(id)) {
+            case Some(u) => u.name
+            case None => "#${id}"
         }
     }
 
-    public func render(): IComponent {
-        let toolbar = div([
-            Input().bind(this.planName).placeholder("计划名"),
-            Input().bind(this.targetUrl).placeholder("目标上游 URL"),
-            Button([text("分析并创建")]).kind(ButtonKind.Primary).onClick(createPlan),
-            if (this.msg.get() != "") {
-                Tag([text(this.msg.get())]).kind(ComponentKind.Success)
-            } else {
-                div()
-            },
-        ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))])))
-        let table = Table()
-            .data(this.rows)
-            .stripe()
-            .add(TableColumn().label("ID").colProp("id").width(60))
-            .add(TableColumn().label("计划名").colProp("name"))
-            .add(TableColumn().label("状态").colProp("status").width(100))
-            .add(TableColumn().label("目标").colProp("target"))
-            .add(TableColumn().label("进度").colProp("progress").width(100))
-        adminLayout("/admin/publish-plans", [
-            div([text("发布计划")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
-            adminCard("发布计划列表", [toolbar, table]),
-        ])
+    func statusTag(s: String): IComponent {
+        match (s) {
+            case "running" => Tag([text("执行中")]).kind(ComponentKind.Warning)
+            case "completed" => Tag([text("已完成")]).kind(ComponentKind.Success)
+            case "failed" => Tag([text("失败")]).kind(ComponentKind.Danger)
+            case "paused" => Tag([text("已暂停")]).kind(ComponentKind.Info)
+            case _ => Tag([text("待执行")]).kind(ComponentKind.Primary)
+        }
     }
 
-    func createPlan(ctx: ActionContext): PatchResult {
+    func gotoCreate(ctx: ActionContext): PatchResult {
+        ctx.route.push("/admin/publish-plans/create")
+        PatchResult.ReRender
+    }
+
+    func gotoDetail(ctx: ActionContext, id: Int64): PatchResult {
+        ctx.route.push("/admin/publish-plans/${id}")
+        PatchResult.ReRender
+    }
+
+    func askDelete(ctx: ActionContext, p: PlanDoc): PatchResult {
+        this.pendingDeleteId = p.id
+        this.pendingDeleteName = p.name
+        this.confirmVisible.set(true)
+        PatchResult.ReRender
+    }
+
+    func cancelDelete(ctx: ActionContext): PatchResult {
+        this.confirmVisible.set(false)
+        PatchResult.ReRender
+    }
+
+    func confirmDelete(ctx: ActionContext): PatchResult {
         let st = match (this.state) {
             case Some(x) => x
             case None => return PatchResult.ReRender
@@ -77,21 +72,167 @@ class PublishPlansPage <: Component {
             this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
-        let planName = this.planName.get()
-        let targetUrl = this.targetUrl.get()
-        if (planName.isEmpty() || targetUrl.isEmpty()) {
-            this.msg.set("计划名和目标上游必填")
+        if (st.adminData.deletePlan(this.pendingDeleteId)) {
+            this.msg.set("已删除计划 ${this.pendingDeleteName}")
+            st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "delete plan ${this.pendingDeleteName}", "ok", nowMs())
+        } else {
+            this.msg.set("删除失败")
+        }
+        this.confirmVisible.set(false)
+        this.pendingDeleteId = 0
+        PatchResult.ReRender
+    }
+
+    func renderPlanRow(p: PlanDoc): IComponent {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return div()
+        }
+        let detailHandler: ActionHandler = { c => this.gotoDetail(c, p.id) }
+        let deleteHandler: ActionHandler = { c => this.askDelete(c, p) }
+        div([
+            div([text(p.id.toString())], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text(p.name)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([this.statusTag(p.status)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text(this.upstreamName(st, p.targetUpstream))], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("${p.completedCount}/${p.totalCount}")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([
+                Button([text("详情")]).size(ButtonSize.Small).onClick(detailHandler),
+                Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteHandler),
+            ], attrs: Some(HashMap<String, String>([("class", cls("admin-td") + " " + cls("admin-actions"))]))),
+        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr"))])))
+    }
+
+    func renderList(): IComponent {
+        let plans = match (this.state) {
+            case Some(st) => st.adminData.listPlans()
+            case None => ArrayList<PlanDoc>()
+        }
+        let rows = ArrayList<IComponent>()
+        rows.add(div([
+            div([text("ID")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("计划名")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("状态")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("目标上游")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("进度")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("操作")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr") + " " + cls("admin-th"))]))))
+        for (p in plans) {
+            rows.add(this.renderPlanRow(p))
+        }
+        div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("admin-table"))])))
+    }
+
+    func renderConfirmDialog(): IComponent {
+        let dlg = Dialog([
+            div([text("确定要删除计划「${this.pendingDeleteName}」吗？")]),
+        ])
+            .visible(this.confirmVisible)
+            .title("删除确认")
+            .width("400px")
+            .closeOnClickModal(false)
+            .footer([
+                Button([text("取消")]).onClick(cancelDelete),
+                Button([text("删除")]).kind(ButtonKind.Danger).onClick(confirmDelete),
+            ])
+        dlg
+    }
+
+    public func render(): IComponent {
+        let toolbar = div([
+            Button([text("创建计划")]).kind(ButtonKind.Primary).onClick(gotoCreate),
+            if (this.msg.get() != "") {
+                Tag([text(this.msg.get())]).kind(ComponentKind.Success)
+            } else {
+                div()
+            },
+        ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))])))
+        adminLayout("/admin/publish-plans", [
+            div([text("发布计划")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
+            adminCard("发布计划列表", [toolbar, this.renderList(), this.renderConfirmDialog()]),
+        ])
+    }
+}
+
+// ===== 创建向导 =====
+@Page["/admin/publish-plans/create", "创建发布计划", requireAdmin]
+class PublishPlanCreatePage <: Component {
+    var state: Option<CjregState> = None
+    var msg = Signal<String>("")
+    var planName = Signal<String>("")
+    var targetUpstream = Signal<String>("")
+    var pollInterval = Signal<Int64>(60)
+    var pollTimeout = Signal<Int64>(600)
+    var pkgSearch = Signal<String>("")
+    var selectedPkgs = Signal<ArrayList<Int64>>(ArrayList<Int64>())
+
+    public func onMount(ctx: LifecycleContext): Unit {
+        this.state = Some(ctx.getState<CjregState>())
+    }
+
+    func backToList(ctx: ActionContext): PatchResult {
+        ctx.route.push("/admin/publish-plans")
+        PatchResult.ReRender
+    }
+
+    func togglePkg(ctx: ActionContext, pkgId: Int64): PatchResult {
+        let cur = this.selectedPkgs.get()
+        var found = false
+        let next = ArrayList<Int64>()
+        for (id in cur) {
+            if (id == pkgId) {
+                found = true
+            } else {
+                next.add(id)
+            }
+        }
+        if (!found) {
+            next.add(pkgId)
+        }
+        this.selectedPkgs.set(next)
+        PatchResult.ReRender
+    }
+
+    func submitCreate(ctx: ActionContext): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
-        // 用 analyze 计算所有本地包拓扑（简化：以全部本地包为根）
-        let allPkgs = st.pkgStore.storm.all<PackageDoc>()
-        if (allPkgs.size == 0) {
-            this.msg.set("无本地包可发布")
+        let name = this.planName.get()
+        let targetId = match (Int64.tryParse(this.targetUpstream.get())) {
+            case Some(n) => n
+            case None => 0
+        }
+        let selected = this.selectedPkgs.get()
+        if (name.isEmpty()) {
+            this.msg.set("计划名必填")
             return PatchResult.ReRender
         }
+        if (targetId == 0) {
+            this.msg.set("请选择目标上游")
+            return PatchResult.ReRender
+        }
+        if (selected.size == 0) {
+            this.msg.set("请至少选择一个包")
+            return PatchResult.ReRender
+        }
+        // 依赖分析（以选中包为根，计算拓扑序）
         let roots = ArrayList<(String, String, String)>()
-        for (d in allPkgs) {
-            roots.add((d.organization, d.name, d.version))
+        for (d in st.pkgStore.storm.all<PackageDoc>()) {
+            var isSel = false
+            for (id in selected) {
+                if (d.id == id) {
+                    isSel = true
+                    break
+                }
+            }
+            if (isSel) {
+                roots.add((d.organization, d.name, d.version))
+            }
         }
         let planSvc = PublishPlanService(st.pkgStore)
         let (items, hasCycle) = planSvc.analyze(roots)
@@ -99,50 +240,281 @@ class PublishPlansPage <: Component {
             this.msg.set("依赖存在环")
             return PatchResult.ReRender
         }
-        // 目标上游：URL 反查上游 ID（完整改造将改用上游下拉选择器）
-        var targetId: Int64 = 0
-        for (u in st.upStore.listAll()) {
-            if (u.url == targetUrl) {
-                targetId = u.id
-                break
-            }
-        }
-        if (targetId == 0) {
-            this.msg.set("未找到匹配的上游（请先在上游管理添加）")
-            return PatchResult.ReRender
-        }
         let uid = sessionUid(ctx)
         let uname = sessionUsername(ctx)
-        let planId = st.adminData.createPlan(planName, targetId, 60, 600, nowMs())
-        // 计划项落独立表（PlanItemDoc）
+        let planId = st.adminData.createPlan(name, targetId, this.pollInterval.get(), this.pollTimeout.get(), nowMs())
         var order: Int64 = 0
         for (it in items) {
-            var pid: Int64 = 0
-            for (d in allPkgs) {
-                if (d.organization == it.org && d.name == it.name && d.version == it.version) {
-                    pid = d.id
-                    break
-                }
-            }
-            st.adminData.addPlanItem(planId, pid, it.org, it.name, it.version, order, "", true)
+            st.adminData.addPlanItem(planId, it.pkgId, it.org, it.name, it.version, order, categoryOf(it.category), true)
             order++
         }
         st.adminData.setPlanTotal(planId, items.size)
-        this.msg.set("已创建发布计划 #${planId}（${items.size} 个包）")
-        // 执行推送
-        let executor = PublishExecutor(st.pkgStore, DiskBlobStore("${getDataDir()}/blobs"))
-        let (ok, total, errors) = executor.execute(items, targetUrl, "")
-        if (ok == total) {
-            st.adminData.updatePlanStatus(planId, "completed", total, nowMs())
-            this.msg.set("计划 #${planId} 执行完成：${ok}/${total}")
-        } else {
-            st.adminData.updatePlanStatus(planId, "failed", ok, nowMs())
-            this.msg.set("计划 #${planId} 部分失败：${ok}/${total}")
-        }
-        this.planName.set("")
-        this.targetUrl.set("")
-        refresh()
+        st.adminData.addLog(LogKind.Admin, uid, uname, "create plan ${name}", "ok", nowMs())
+        ctx.route.push("/admin/publish-plans/${planId}")
         PatchResult.ReRender
+    }
+
+    func renderPkgPicker(): IComponent {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return div()
+        }
+        let kw = this.pkgSearch.get()
+        let selected = this.selectedPkgs.get()
+        let rows = ArrayList<IComponent>()
+        for (d in st.pkgStore.storm.all<PackageDoc>()) {
+            if (d.deletedAt != 0) { continue }
+            if (kw != "" && !d.name.contains(kw)) { continue }
+            var isSel = false
+            for (id in selected) {
+                if (d.id == id) {
+                    isSel = true
+                    break
+                }
+            }
+            let org = if (d.organization.isEmpty()) { "-" } else { d.organization }
+            let toggleHandler: ActionHandler = { c => this.togglePkg(c, d.id) }
+            rows.add(div([
+                div([text("${org}/${d.name}@${d.version}")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+                Button([text(if (isSel) { "取消选择" } else { "选择" })]).size(ButtonSize.Small).kind(if (isSel) { ButtonKind.Danger } else { ButtonKind.Primary }).onClick(toggleHandler),
+            ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr"))]))))
+        }
+        div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("admin-table"))])))
+    }
+
+    public func render(): IComponent {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return div([text("加载中...")])
+        }
+        let upstreamOptions = ArrayList<IComponent>()
+        for (u in st.upStore.listAll()) {
+            upstreamOptions.add(SelectOption([text("${u.name}（${u.url}）")], u.id.toString()))
+        }
+        let backHandler: ActionHandler = { c => this.backToList(c) }
+        adminLayout("/admin/publish-plans", [
+            div([text("创建发布计划")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
+            adminCard("向导", [
+                div([
+                    div([text("计划名")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                    Input().bind(this.planName).placeholder("计划名称"),
+                    div([text("目标上游")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                    Select(upstreamOptions.toArray()).bind(this.targetUpstream).placeholder("选择上游"),
+                    div([text("轮询间隔（秒）")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                    InputNumber().bind(this.pollInterval).min(1),
+                    div([text("轮询超时（秒）")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                    InputNumber().bind(this.pollTimeout).min(1),
+                    div([text("选择要发布的包（依赖将自动纳入拓扑排序）")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                    Input().bind(this.pkgSearch).placeholder("搜索包名"),
+                    this.renderPkgPicker(),
+                    if (this.msg.get() != "") {
+                        Tag([text(this.msg.get())]).kind(ComponentKind.Success)
+                    } else {
+                        div()
+                    },
+                    div([
+                        Button([text("返回列表")]).onClick(backHandler),
+                        Button([text("分析并创建")]).kind(ButtonKind.Primary).onClick(submitCreate),
+                    ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))]))),
+                ], attrs: Some(HashMap<String, String>([("class", cls("dialog-form"))]))),
+            ]),
+        ])
+    }
+}
+
+// ===== 计划详情 =====
+@Page["/admin/publish-plans/[id]", "发布计划详情", requireAdmin]
+class PublishPlanDetailPage <: Component {
+    var state: Option<CjregState> = None
+    var planId: Int64 = 0
+    var msg = Signal<String>("")
+    var busy = Signal<Bool>(false)
+
+    public func onMount(ctx: LifecycleContext): Unit {
+        this.state = Some(ctx.getState<CjregState>())
+        match (ctx.route.params.get("id")) {
+            case Some(v) =>
+                match (Int64.tryParse(v)) {
+                    case Some(n) => this.planId = n
+                    case None => ()
+                }
+            case None => ()
+        }
+    }
+
+    func backToList(ctx: ActionContext): PatchResult {
+        ctx.route.push("/admin/publish-plans")
+        PatchResult.ReRender
+    }
+
+    func upstreamName(st: CjregState, id: Int64): String {
+        match (st.upStore.getById(id)) {
+            case Some(u) => u.name
+            case None => "#${id}"
+        }
+    }
+
+    func statusTag(s: String): IComponent {
+        match (s) {
+            case "running" => Tag([text("执行中")]).kind(ComponentKind.Warning)
+            case "completed" => Tag([text("已完成")]).kind(ComponentKind.Success)
+            case "failed" => Tag([text("失败")]).kind(ComponentKind.Danger)
+            case "paused" => Tag([text("已暂停")]).kind(ComponentKind.Info)
+            case _ => Tag([text("待执行")]).kind(ComponentKind.Primary)
+        }
+    }
+
+    func itemStatusTag(s: String): IComponent {
+        match (s) {
+            case "completed" => Tag([text("成功")]).kind(ComponentKind.Success)
+            case "failed" => Tag([text("失败")]).kind(ComponentKind.Danger)
+            case "running" => Tag([text("推送中")]).kind(ComponentKind.Warning)
+            case _ => Tag([text("待发布")]).kind(ComponentKind.Info)
+        }
+    }
+
+    // 开始执行：按拓扑序推送全部选中项
+    func doStart(ctx: ActionContext): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
+        }
+        if (this.busy.get()) {
+            return PatchResult.ReRender
+        }
+        this.busy.set(true)
+        match (st.adminData.getPlan(this.planId)) {
+            case Some(plan) =>
+                match (st.upStore.getById(plan.targetUpstream)) {
+                    case Some(up) =>
+                        let docs = st.adminData.listPlanItems(this.planId)
+                        let execItems = ArrayList<PlanItem>()
+                        for (d in docs) {
+                            if (!d.selected) { continue }
+                            execItems.add(PlanItem(d.packageId, d.packageName, d.packageOrg, d.packageVersion, toPlanCategory(d.category), d.order))
+                            let _ = st.adminData.updatePlanItem(d.id, "running", "", nowMs())
+                        }
+                        st.adminData.updatePlanStatus(this.planId, "running", 0, nowMs())
+                        let executor = PublishExecutor(st.pkgStore, DiskBlobStore("${getDataDir()}/blobs"))
+                        let (ok, total, errors) = executor.execute(execItems, up.url, up.authToken)
+                        // 回写 items 状态
+                        var idx: Int64 = 0
+                        for (d in docs) {
+                            if (!d.selected) { continue }
+                            let itemErr = if (idx < errors.size) { errors[idx] } else { "" }
+                            let itemStatus = if (idx < ok) { "completed" } else { "failed" }
+                            let _ = st.adminData.updatePlanItem(d.id, itemStatus, itemErr, nowMs())
+                            idx++
+                        }
+                        let finalStatus = if (ok == total && total > 0) { "completed" } else { "failed" }
+                        st.adminData.updatePlanStatus(this.planId, finalStatus, ok, nowMs())
+                        st.adminData.addLog(LogKind.Publish, sessionUid(ctx), sessionUsername(ctx), "execute plan ${plan.name}", if (ok == total) { "ok" } else { "failed" }, nowMs())
+                        this.msg.set("执行完成：${ok}/${total}")
+                    case None =>
+                        this.msg.set("目标上游不存在")
+                }
+            case None =>
+                this.msg.set("计划不存在")
+        }
+        this.busy.set(false)
+        PatchResult.ReRender
+    }
+
+    func renderItemRow(d: PlanItemDoc): IComponent {
+        div([
+            div([text(d.order.toString())], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("${d.packageOrg}/${d.packageName}@${d.packageVersion}")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text(d.category)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([this.itemStatusTag(d.status)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text(d.error)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr"))])))
+    }
+
+    func renderItems(): IComponent {
+        let items = match (this.state) {
+            case Some(st) => st.adminData.listPlanItems(this.planId)
+            case None => ArrayList<PlanItemDoc>()
+        }
+        let rows = ArrayList<IComponent>()
+        rows.add(div([
+            div([text("序")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("包")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("分类")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("状态")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("错误")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr") + " " + cls("admin-th"))]))))
+        for (d in items) {
+            rows.add(this.renderItemRow(d))
+        }
+        div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("admin-table"))])))
+    }
+
+    public func render(): IComponent {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return div([text("加载中...")])
+        }
+        let backHandler: ActionHandler = { c => this.backToList(c) }
+        match (st.adminData.getPlan(this.planId)) {
+            case Some(plan) =>
+                let canStart = plan.status == "pending" || plan.status == "failed"
+                adminLayout("/admin/publish-plans", [
+                    div([text("发布计划详情")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
+                    adminCard("计划信息", [
+                        div([
+                            div([text("名称: ${plan.name}")]),
+                            div([this.statusTag(plan.status)]),
+                            div([text("目标上游: ${this.upstreamName(st, plan.targetUpstream)}")]),
+                            div([text("进度: ${plan.completedCount}/${plan.totalCount}")]),
+                            div([text("轮询: ${plan.pollInterval}s / 超时 ${plan.pollTimeout}s")]),
+                        ]),
+                        div([
+                            Button([text("返回列表")]).onClick(backHandler),
+                            if (canStart) {
+                                Button([text("开始执行")]).kind(ButtonKind.Primary).onClick(doStart)
+                            } else {
+                                div()
+                            },
+                            if (this.msg.get() != "") {
+                                Tag([text(this.msg.get())]).kind(ComponentKind.Success)
+                            } else {
+                                div()
+                            },
+                        ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))]))),
+                    ]),
+                    adminCard("发布项", [this.renderItems()]),
+                ])
+            case None =>
+                adminLayout("/admin/publish-plans", [
+                    div([text("发布计划详情")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
+                    div([text("计划不存在或已删除")]),
+                    Button([text("返回列表")]).onClick(backHandler),
+                ])
+        }
+    }
+}
+
+// PlanItemDoc.category 字符串 → PlanCategory 枚举
+func toPlanCategory(s: String): PlanCategory {
+    match (s) {
+        case "version_optional" => PlanCategory.VersionOptional
+        case "already_exists" => PlanCategory.AlreadyExists
+        case "conflict" => PlanCategory.Conflict
+        case _ => PlanCategory.NeedPublish
+    }
+}
+
+// 分类字符串（analyze 结果 → 存储）
+func categoryOf(c: PlanCategory): String {
+    match (c) {
+        case PlanCategory.NeedPublish => "need_publish"
+        case PlanCategory.VersionOptional => "version_optional"
+        case PlanCategory.AlreadyExists => "already_exists"
+        case PlanCategory.Conflict => "conflict"
     }
 }
 

@@ -131,6 +131,13 @@ func cmdServe(dataDir: String, port: UInt16): Int64 {
     // 同一 Tang 实例：协议路由 + cjxt 管理/公开页面（单进程共享 store）
     let app = buildServer(pkgStore, Some(admin), Some(upSvc), blobStore)
     let adminData = AdminDataStore(userStore.storm)
+    // 演示/冒烟数据开关：CJREG_SEED_DEMO=1 注入几个本地包（便于验证发布计划等完整流程）
+    match (getVariable("CJREG_SEED_DEMO")) {
+        case Some(v) => if (v == "1") {
+            seedDemoPackages(pkgStore)
+        }
+        case None => ()
+    }
     App()
         .configure(AppConfig(cssBundle: "/css/bundle.css?v=2"))
         .serveStatic("/css", "public/css")
@@ -143,9 +150,28 @@ func cmdServe(dataDir: String, port: UInt16): Int64 {
     return 0
 }
 
+// 演示数据注入（CJREG_SEED_DEMO=1）：造几个本地包，便于验证发布计划/包管理等完整流程
+func seedDemoPackages(pkgStore: PackageStore): Unit {
+    let demos = [
+        ("demo", "demo-app", "1.0.0"),
+        ("demo", "demo-lib", "2.1.0"),
+        ("demo", "demo-util", "0.9.0"),
+    ]
+    for ((org, name, version) in demos) {
+        let d = PackageDoc()
+        d.organization = org
+        d.name = name
+        d.version = version
+        d.cjcVersion = "1.1.0"
+        d.description = "演示包 ${name}"
+        d.indexJson = "{\"name\":\"${name}\",\"organization\":\"${org}\",\"version\":\"${version}\",\"sha256sum\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}"
+        pkgStore.save(d)
+    }
+    println("cjreg: 已注入 ${demos.size} 个演示包")
+}
+
 // init：空数据目录创建首个管理员 + 默认官方上游
-func cmdInit(dataDir: String, username: String, password: String): Int64 {
-    var storm: Storm
+func cmdInit(dataDir: String, username: String, password: String): Int64 {    var storm: Storm
     try {
         storm = Storm.open(dataDir + "/cjreg.db", syncWrites: true)
     } catch (e: Exception) {

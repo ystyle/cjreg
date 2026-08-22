@@ -1,0 +1,65 @@
+An exception has occurred:
+SocketException: Failed to bind 98: Address already in use.
+	 at std.net::SocketCommon<...>::bind::lambda.0()(std/net/socket_impl_common.cj:420)
+	 at std.net::TcpServerSocket::bind()(std/net/tcp_server.cj:194)
+	 at stdx.net.http::Server::serve()(stdx/net/http/server.cj:591)
+	 at tang::Tang::listen()(/home/ystyle/Projects/Cangjie/tang/src/tang.cj:95)
+	 at cjxt::App::serve()(/home/ystyle/Projects/Cangjie/cjxt/src/app.cj:112)
+	 at ystyle::cjreg::cmdServe(std.core::String, UInt16)(/home/ystyle/Projects/Cangjie/cjreg/src/main.cj:134)
+	 at ystyle::cjreg::main(std.core::Array<...>)(/home/ystyle/Projects/Cangjie/cjreg/src/main.cj:90)
+
+[96m[1m _____  _    _   _  ____
+[96m[1m|_   _|/ \  | \ | |/ ___|
+[96m[1m  | | / _ \ |  \| | |  _
+[96m[1m  | |/ ___ \| |\  | |_| |
+[96m[1m  |_/_/   \_\_| \_|\____|[0m
+
+[96m[1m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[1m  Tang Web Framework[0m      [92m[1mv0.1.0[0m
+[2m  High-performance Web Framework for Cangjie[0m
+[96m[1m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+
+[1m▶[0m [94mServer:[0m    [92m[1mhttp://localhost:8080[0m
+[1m▶[0m [94mMode:[0m      [92m[1mproduction[0m
+[1m▶[0m [94mReady:[0m    [96m[1mAccepting connections[0m [92m✓[0m
+
+[96m[1m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[1m  Registered Routes (31)[0m
+[96m[1m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+
+[1m  Method    Pattern[0m
+  ──────    ───────
+  [94m[1mGET     [0m    /api/health
+  [94m[1mGET     [0m    /pkg/
+  [94m[1mGET     [0m    /index/
+  [94m[1mGET     [0m    /api/admin/me
+  [94m[1mGET     [0m    /api/admin/users
+  [94m[1mGET     [0m    /api/admin/upstreams
+  [94m[1mGET     [0m    /api/admin/resolve
+  [94m[1mGET     [0m    /
+  [94m[1mGET     [0m    /packages
+  [94m[1mGET     [0m    /admin/publish-plans
+  [94m[1mGET     [0m    /admin/logs
+  [94m[1mGET     [0m    /admin/users
+  [94m[1mGET     [0m    /admin/organizations
+  [94m[1mGET     [0m    /admin/teams
+  [94m[1mGET     [0m    /admin
+  [94m[1mGET     [0m    /admin/upstreams
+  [94m[1mGET     [0m    /admin/packages
+  [94m[1mGET     [0m    /admin/login
+  [94m[1mGET     [0m    /ws
+  [94m[1mGET     [0m    /packages/*
+  [94m[1mGET     [0m    /css/*
+  [94m[1mGET     [0m    /_cjxt/css/*
+  [94m[1mGET     [0m    /_cjxt/js/*
+  [92m[1mPOST    [0m    /pkg/
+  [92m[1mPOST    [0m    /api/admin/login
+  [92m[1mPOST    [0m    /api/admin/logout
+  [92m[1mPOST    [0m    /api/admin/users
+  [92m[1mPOST    [0m    /api/admin/upstreams
+  [92m[1mPOST    [0m    /api/admin/publish-plans/analyze
+  [92m[1mPOST    [0m    /api/admin/publish-plans/execute
+  [91m[1mDELETE  [0m    /api/admin/upstreams/
+
+[92m[1m✓ All routes registered successfully[0m
+

@@ -16,8 +16,7 @@ public func buildServer(
     store: PackageStore,
     admin: ?AdminService,
     upstreamSvc: ?UpstreamService,
-    blobStore: BlobStore,
-    port: UInt16
+    blobStore: BlobStore
 ): Tang {
     let app = Tang().setHost("0.0.0.0")
     let publishSvc = PublishService(store, blobStore)
@@ -118,16 +117,15 @@ public func buildServer(
         case None => ()
     }
 
-    app.setPort(port)
     return app
 }
 
 // 兼容：无管理 API / 无上游的构建
-public func buildServer(store: PackageStore, port: UInt16): Tang {
-    buildServer(store, None, None, MemoryBlobStore(), port)
+public func buildServer(store: PackageStore): Tang {
+    buildServer(store, None, None, MemoryBlobStore())
 }
 
 // 兼容：有管理 API 无上游
-public func buildServer(store: PackageStore, admin: AdminService, port: UInt16): Tang {
-    buildServer(store, Some(admin), None, MemoryBlobStore(), port)
+public func buildServer(store: PackageStore, admin: AdminService): Tang {
+    buildServer(store, Some(admin), None, MemoryBlobStore())
 }

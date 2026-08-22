@@ -129,14 +129,16 @@ func cmdServe(dataDir: String, port: UInt16): Int64 {
         PublishExecutor(pkgStore, blobStore))
 
     // 同一 Tang 实例：协议路由 + cjxt 管理/公开页面（单进程共享 store）
-    let app = buildServer(pkgStore, Some(admin), Some(upSvc), blobStore, port)
+    let app = buildServer(pkgStore, Some(admin), Some(upSvc), blobStore)
     let adminData = AdminDataStore(userStore.storm)
     App()
+        .configure(AppConfig(cssBundle: "/css/bundle.css?v=2"))
+        .serveStatic("/css", "public/css")
         .UseComponent()
         .state<CjregState>({ => CjregState(pkgStore, userStore, upStore, adminData, authSvc) })
-        .mount(app)
-    println("cjreg: serving on port ${port} (data=${dataDir}) (UI: / /admin /packages)")
-    app.listen(port)
+        .port(port)
+        .setTang(app)
+        .serve()
     return 0
 }
 
@@ -199,6 +201,8 @@ func cmdAdminUI(dataDir: String, port: UInt16): Int64 {
     let adminData = AdminDataStore(userStore.storm)
     let authSvc = AuthService(userStore, 86400)
     App()
+        .configure(AppConfig(cssBundle: "/css/bundle.css?v=2"))
+        .serveStatic("/css", "public/css")
         .UseComponent()
         .state<CjregState>({ => CjregState(pkgStore, userStore, upStore, adminData, authSvc) })
         .host("0.0.0.0").port(port)

@@ -157,7 +157,11 @@ func seedDemoPackages(pkgStore: PackageStore): Unit {
         ("demo", "demo-lib", "2.1.0"),
         ("demo", "demo-util", "0.9.0"),
     ]
+    var injected: Int64 = 0
     for ((org, name, version) in demos) {
+        if (pkgStore.listVersions(org, name).size > 0) {
+            continue
+        }
         let d = PackageDoc()
         d.organization = org
         d.name = name
@@ -166,12 +170,16 @@ func seedDemoPackages(pkgStore: PackageStore): Unit {
         d.description = "演示包 ${name}"
         d.indexJson = "{\"name\":\"${name}\",\"organization\":\"${org}\",\"version\":\"${version}\",\"sha256sum\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}"
         pkgStore.save(d)
+        injected++
     }
-    println("cjreg: 已注入 ${demos.size} 个演示包")
+    if (injected > 0) {
+        println("cjreg: 已注入 ${injected} 个演示包")
+    }
 }
 
 // init：空数据目录创建首个管理员 + 默认官方上游
-func cmdInit(dataDir: String, username: String, password: String): Int64 {    var storm: Storm
+func cmdInit(dataDir: String, username: String, password: String): Int64 {
+    var storm: Storm
     try {
         storm = Storm.open(dataDir + "/cjreg.db", syncWrites: true)
     } catch (e: Exception) {

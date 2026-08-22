@@ -389,6 +389,20 @@ class PackagesPage <: Component {
     var state: Option<CjregState> = None
     var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
     var search = Signal<String>("")
+    var orgFilter = Signal<String>("all")
+    var msg = Signal<String>("")
+    // 分页
+    var currentPage = Signal<Int64>(1)
+    var pageSize = Signal<Int64>(20)
+    var total = Signal<Int64>(0)
+    // 版本对话框
+    var verDialogVisible = Signal<Bool>(false)
+    var verRows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    var verTitle = Signal<String>("")
+    // 删除确认
+    var confirmVisible = Signal<Bool>(false)
+    var pendingDeleteId: Int64 = 0
+    var pendingDeleteName: String = ""
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
@@ -399,11 +413,22 @@ class PackagesPage <: Component {
         match (this.state) {
             case Some(st) =>
                 let all = st.pkgStore.storm.all<PackageDoc>()
-                let data = ArrayList<HashMap<String, String>>()
+                let filtered = ArrayList<PackageDoc>()
                 for (d in all) {
+                    if (this.orgFilter.get() != "all" && d.organization != this.orgFilter.get()) {
+                        continue
+                    }
                     if (this.search.get() != "" && !d.name.contains(this.search.get())) {
                         continue
                     }
+                    filtered.add(d)
+                }
+                this.total.set(filtered.size)
+                let start = (this.currentPage.get() - 1) * this.pageSize.get()
+                let data = ArrayList<HashMap<String, String>>()
+                var i = start
+                while (i < filtered.size && data.size < this.pageSize.get()) {
+                    let d = filtered[i]
                     let m = HashMap<String, String>()
                     m["id"] = d.id.toString()
                     m["org"] = d.organization
@@ -412,6 +437,7 @@ class PackagesPage <: Component {
                     m["downloads"] = d.downloadCount.toString()
                     m["deleted"] = if (d.deletedAt != 0) { "已删" } else { "正常" }
                     data.add(m)
+                    i++
                 }
                 this.rows.set(data)
             case None => ()
@@ -423,26 +449,193 @@ class PackagesPage <: Component {
         PatchResult.ReRender
     }
 
+    func onPageChange(ctx: ActionContext): PatchResult {
+        this.refresh()
+        PatchResult.ReRender
+    }
+
+    // ===== 版本对话框 =====
+    func showVersions(ctx: ActionContext, org: String, name: String): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        let versions = st.pkgStore.listVersions(org, name)
+        let data = ArrayList<HashMap<String, String>>()
+        for (d in versions) {
+            let m = HashMap<String, String>()
+            m["id"] = d.id.toString()
+            m["version"] = d.version
+            m["downloads"] = d.downloadCount.toString()
+            m["deleted"] = if (d.deletedAt != 0) { "已删" } else { "正常" }
+            data.add(m)
+        }
+        this.verTitle.set("${name} 版本列表（${data.size}）")
+        this.verRows.set(data)
+        this.verDialogVisible.set(true)
+        PatchResult.ReRender
+    }
+
+    func closeVersions(ctx: ActionContext): PatchResult {
+        this.verDialogVisible.set(false)
+        PatchResult.ReRender
+    }
+
+    // ===== 删除 =====
+    func askDelete(ctx: ActionContext, id: Int64, name: String, version: String): PatchResult {
+        this.pendingDeleteId = id
+        this.pendingDeleteName = "${name}@${version}"
+        this.confirmVisible.set(true)
+        PatchResult.ReRender
+    }
+
+    func cancelDelete(ctx: ActionContext): PatchResult {
+        this.confirmVisible.set(false)
+        PatchResult.ReRender
+    }
+
+    func confirmDelete(ctx: ActionContext): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
+        }
+        match (st.pkgStore.getById(this.pendingDeleteId)) {
+            case Some(doc) =>
+                st.pkgStore.softDelete(doc, nowMs())
+                this.msg.set("已删除 ${this.pendingDeleteName}")
+                st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "delete package ${this.pendingDeleteName}", "ok", nowMs())
+            case None => ()
+        }
+        this.confirmVisible.set(false)
+        this.pendingDeleteId = 0
+        refresh()
+        PatchResult.ReRender
+    }
+
+    // ===== 渲染 =====
+    func renderPkgRow(d: HashMap<String, String>): IComponent {
+        let versionsHandler: ActionHandler = { c => this.showVersions(c, d["org"], d["name"]) }
+        let deleteHandler: ActionHandler = { c => this.askDelete(c, Int64.parse(d["id"]), d["name"], d["version"]) }
+        let statusTag = if (d["deleted"] == "已删") {
+            Tag([text("已删")]).kind(ComponentKind.Danger)
+        } else {
+            Tag([text("正常")]).kind(ComponentKind.Success)
+        }
+        div([
+            div([text(d["id"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text(d["org"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text(d["name"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text(d["version"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text(d["downloads"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([statusTag], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([
+                Button([text("版本")]).size(ButtonSize.Small).onClick(versionsHandler),
+                Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteHandler),
+            ], attrs: Some(HashMap<String, String>([("class", cls("admin-td") + " " + cls("admin-actions"))]))),
+        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr"))])))
+    }
+
+    func renderList(): IComponent {
+        let rows = ArrayList<IComponent>()
+        rows.add(div([
+            div([text("ID")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("组织")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("包名")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("版本")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("下载")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("状态")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+            div([text("操作")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
+        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr") + " " + cls("admin-th"))]))))
+        for (m in this.rows.get()) {
+            rows.add(this.renderPkgRow(m))
+        }
+        div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("admin-table"))])))
+    }
+
+    func renderVersionDialog(): IComponent {
+        let table = Table()
+            .data(this.verRows)
+            .stripe()
+            .add(TableColumn().label("ID").colProp("id").width(60))
+            .add(TableColumn().label("版本").colProp("version"))
+            .add(TableColumn().label("下载").colProp("downloads").width(80))
+            .add(TableColumn().label("状态").colProp("deleted").width(80))
+        let dlg = Dialog([
+            table,
+        ])
+            .visible(this.verDialogVisible)
+            .title(this.verTitle.get())
+            .width("520px")
+            .closeOnClickModal(false)
+            .footer([
+                Button([text("关闭")]).onClick(closeVersions),
+            ])
+        dlg
+    }
+
+    func renderConfirmDialog(): IComponent {
+        let dlg = Dialog([
+            div([text("确定要删除包「${this.pendingDeleteName}」吗？此操作不可恢复。")]),
+        ])
+            .visible(this.confirmVisible)
+            .title("删除确认")
+            .width("400px")
+            .closeOnClickModal(false)
+            .footer([
+                Button([text("取消")]).onClick(cancelDelete),
+                Button([text("删除")]).kind(ButtonKind.Danger).onClick(confirmDelete),
+            ])
+        dlg
+    }
+
     public func render(): IComponent {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return div()
+        }
+        let orgOptions = ArrayList<IComponent>()
+        orgOptions.add(SelectOption([text("全部组织")], "all"))
+        let seen = ArrayList<String>()
+        for (d in st.pkgStore.storm.all<PackageDoc>()) {
+            var dup = false
+            for (s in seen) {
+                if (s == d.organization) {
+                    dup = true
+                    break
+                }
+            }
+            if (!dup && d.organization != "") {
+                orgOptions.add(SelectOption([text(d.organization)], d.organization))
+                seen.add(d.organization)
+            }
+        }
         let toolbar = div([
             Input().bind(this.search).placeholder("搜索包名").on("input", { _ =>
+                this.currentPage.set(1)
                 this.refresh()
                 PatchResult.ReRender
             }),
+            Select(orgOptions.toArray()).bind(this.orgFilter).placeholder("组织"),
             Button([text("刷新")]).onClick(doRefresh),
+            if (this.msg.get() != "") {
+                Tag([text(this.msg.get())]).kind(ComponentKind.Success)
+            } else {
+                div()
+            },
         ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))])))
-        let table = Table()
-            .data(this.rows)
-            .stripe()
-            .add(TableColumn().label("ID").colProp("id").width(60))
-            .add(TableColumn().label("组织").colProp("org").width(100))
-            .add(TableColumn().label("包名").colProp("name"))
-            .add(TableColumn().label("版本").colProp("version").width(120))
-            .add(TableColumn().label("下载").colProp("downloads").width(80))
-            .add(TableColumn().label("状态").colProp("deleted").width(80))
+        let pager = Pagination()
+            .currentPage(this.currentPage)
+            .pageSize(this.pageSize)
+            .total(this.total.get())
+            .layout("total, prev, pager, next, sizes")
+            .onChange(onPageChange)
         adminLayout("/admin/packages", [
             div([text("包管理")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
-            adminCard("已发布包", [toolbar, table]),
+            adminCard("已发布包", [toolbar, this.renderList(), pager, this.renderVersionDialog(), this.renderConfirmDialog()]),
         ])
     }
 }

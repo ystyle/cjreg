@@ -85,3 +85,51 @@ func testPublishTokenCheck() {
     @Expect(svc.validatePublishToken(admin.publishToken).isSome(), true)
     @Expect(svc.validatePublishToken("publish-fake").isNone(), true)
 }
+
+@Test
+func testMutationsPersistToStore() {
+    // 回归：修改类操作（禁用/改密/重置 token）必须 saveUser 持久化。
+    // MemoryUserStore 因引用共享恰好生效，Bstorm 的 getUser 返回副本，
+    // 不 saveUser 时重新查询仍是旧值。
+    PasswordHash.ITERATIONS = 1000  // 测试提速
+    let storm = Storm.inMemory()
+    let store = BstormUserStore(storm)
+    let svc = AuthService(store, 3600)
+    let _ = svc.initAdmin("admin", "AdminPass1")
+    let alice = svc.createUser("alice", "AlicePass1", false).getOrThrow()
+
+    // 禁用后重新查询（新副本）应为禁用；再启用回来
+    @Expect(svc.setUserActive(alice.id, false), true)
+    let re1 = store.getUser(alice.id).getOrThrow()
+    @Expect(re1.isActive, false)
+    @Expect(svc.setUserActive(alice.id, true), true)
+
+    // 重置 token 后重新查询应为新 token
+    let oldToken = alice.publishToken
+    let newToken = svc.resetPublishToken(alice.id).getOrThrow()
+    @Expect(newToken != oldToken, true)
+    let re2 = store.getUser(alice.id).getOrThrow()
+    @Expect(re2.publishToken, newToken)
+
+    // 改密后重新查询 hash 变化且新密码可登录
+    @Expect(svc.changePassword(alice.id, "NewPass99"), true)
+    @Expect(svc.login("alice", "NewPass99").isSome(), true)
+    @Expect(svc.login("alice", "AlicePass1").isNone(), true)
+}
+
+@Test
+func testChangePasswordBstormVerify() {
+    PasswordHash.ITERATIONS = 1000  // 测试提速
+    let storm = Storm.inMemory()
+    let store = BstormUserStore(storm)
+    let svc = AuthService(store, 3600)
+    let _ = svc.initAdmin("admin", "AdminPass1")
+    let alice = svc.createUser("alice", "AlicePass1", false).getOrThrow()
+    let oldHash = alice.passwordHash
+
+    @Expect(svc.changePassword(alice.id, "NewPass99"), true)
+    let re = store.getUser(alice.id).getOrThrow()
+    @Expect(re.passwordHash != oldHash, true)
+    @Expect(re.passwordHash.contains(":"), true)
+    @Expect(PasswordHash.verify("NewPass99", re.passwordHash), true)
+}

@@ -14,6 +14,7 @@ public class UserDoc {
     @Id public var id: Int64 = 0
     public var username: String = ""
     public var passwordHash: String = ""
+    public var email: String = ""
     public var isAdmin: Bool = false
     public var isActive: Bool = true
     public var publishToken: String = ""
@@ -67,6 +68,7 @@ public class BstormUserStore <: UserStore {
         }
         doc.username = user.username
         doc.passwordHash = user.passwordHash
+        doc.email = user.email
         doc.isAdmin = user.isAdmin
         doc.isActive = user.isActive
         doc.publishToken = user.publishToken
@@ -88,6 +90,15 @@ public class BstormUserStore <: UserStore {
             return None
         }
         return Some(toUser(doc.getOrThrow()))
+    }
+
+    public func removeUser(id: Int64): Bool {
+        match (this.storm.get<UserDoc>(id)) {
+            case Some(doc) =>
+                this.storm.delete(doc)
+                return true
+            case None => return false
+        }
     }
 
     // ===== token =====
@@ -136,6 +147,6 @@ public class BstormUserStore <: UserStore {
     }
 
     private func toUser(d: UserDoc): User {
-        User(d.id, d.username, d.passwordHash, d.isAdmin, d.isActive, d.publishToken)
+        User(d.id, d.username, d.passwordHash, d.isAdmin, d.isActive, d.publishToken, email: d.email)
     }
 }

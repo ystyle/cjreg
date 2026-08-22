@@ -9,15 +9,17 @@ public class User {
     public var id: Int64
     public var username: String
     public var passwordHash: String
+    public var email: String
     public var isAdmin: Bool
     public var isActive: Bool
     public var publishToken: String
 
     public init(id: Int64, username: String, passwordHash: String,
-                isAdmin: Bool, isActive: Bool, publishToken: String) {
+                isAdmin: Bool, isActive: Bool, publishToken: String, email!: String = "") {
         this.id = id
         this.username = username
         this.passwordHash = passwordHash
+        this.email = email
         this.isAdmin = isAdmin
         this.isActive = isActive
         this.publishToken = publishToken
@@ -48,6 +50,7 @@ public interface UserStore {
     func saveUser(user: User): Unit
     func getUserByUsername(username: String): ?User
     func getUser(id: Int64): ?User
+    func removeUser(id: Int64): Bool
     func getToken(token: String): ?UserToken
     func saveToken(t: UserToken): Unit
     func removeToken(token: String): Unit
@@ -69,6 +72,15 @@ public class MemoryUserStore <: UserStore {
     }
 
     public func saveUser(user: User): Unit {
+        // upsert 语义：同 id 替换，避免重复添加
+        var i: Int64 = 0
+        while (i < this.users.size) {
+            if (this.users[i].id == user.id) {
+                this.users[i] = user
+                return
+            }
+            i++
+        }
         this.users.add(user)
     }
 
@@ -88,6 +100,18 @@ public class MemoryUserStore <: UserStore {
             }
         }
         return None
+    }
+
+    public func removeUser(id: Int64): Bool {
+        var i: Int64 = 0
+        while (i < this.users.size) {
+            if (this.users[i].id == id) {
+                this.users.remove(i..i + 1)
+                return true
+            }
+            i++
+        }
+        return false
     }
 
     public func getToken(token: String): ?UserToken {

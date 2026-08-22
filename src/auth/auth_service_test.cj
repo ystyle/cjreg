@@ -169,3 +169,55 @@ func testUserLifecycle() {
         case None => @Fail("resetPublishToken should succeed")
     }
 }
+
+@Test
+func testCreateUserWithEmailAndAdmin() {
+    PasswordHash.ITERATIONS = 1000  // 测试提速
+    let svc = makeService()
+    let _ = svc.initAdmin("admin", "AdminPass1")
+    // 带邮箱创建普通用户
+    let u = svc.createUser("alice", "AlicePass1", false, email: "alice@example.com")
+    match (u) {
+        case Some(x) =>
+            @Expect(x.username, "alice")
+            @Expect(x.email, "alice@example.com")
+            @Expect(x.isAdmin, false)
+            @Expect(x.isActive, true)
+            @Expect(x.publishToken.startsWith("publish-"), true)
+        case None => @Fail("createUser should succeed")
+    }
+    // 创建管理员
+    let admin = svc.createUser("bob", "BobPass1", true)
+    match (admin) {
+        case Some(x) => @Expect(x.isAdmin, true)
+        case None => @Fail("createUser admin should succeed")
+    }
+}
+
+@Test
+func testSetUserActiveAndDelete() {
+    PasswordHash.ITERATIONS = 1000  // 测试提速
+    let svc = makeService()
+    let _ = svc.initAdmin("admin", "AdminPass1")
+    let alice = svc.createUser("alice", "AlicePass1", false).getOrThrow()
+    let aliceId = alice.id
+
+    // 禁用 → 登录失败
+    @Expect(svc.setUserActive(aliceId, false), true)
+    @Expect(svc.login("alice", "AlicePass1").isNone(), true)
+    @Expect(svc.setUserActive(aliceId, true), true)
+    @Expect(svc.login("alice", "AlicePass1").isSome(), true)
+
+    // 删除普通用户
+    @Expect(svc.deleteUser(aliceId), true)
+    @Expect(svc.store.getUserByUsername("alice").isNone(), true)
+
+    // 管理员受保护（不可删除）
+    let admin = svc.store.getUserByUsername("admin").getOrThrow()
+    @Expect(svc.deleteUser(admin.id), false)
+
+    // 不存在的用户
+    @Expect(svc.deleteUser(999), false)
+    @Expect(svc.setUserActive(999, false), false)
+}
+

@@ -106,7 +106,7 @@ public class AuthService {
     }
 
     // 创建用户（管理员调用）
-    public func createUser(username: String, password: String, isAdmin: Bool): ?User {
+    public func createUser(username: String, password: String, isAdmin: Bool, email!: String = ""): ?User {
         if (this.store.getUserByUsername(username).isSome()) {
             return None
         }
@@ -116,10 +116,34 @@ public class AuthService {
             PasswordHash.hash(password),
             isAdmin,
             true,
-            TokenGenerator.generatePublishToken()
+            TokenGenerator.generatePublishToken(),
+            email: email
         )
         this.store.saveUser(user)
         return Some(user)
+    }
+
+    // 启用/禁用用户
+    public func setUserActive(userId: Int64, active: Bool): Bool {
+        match (this.store.getUser(userId)) {
+            case Some(user) =>
+                user.isActive = active
+                this.store.saveUser(user)
+                return true
+            case None => return false
+        }
+    }
+
+    // 删除用户（管理员受保护；其遗留 token 因查不到用户而自然失效）
+    public func deleteUser(userId: Int64): Bool {
+        match (this.store.getUser(userId)) {
+            case Some(user) =>
+                if (user.isAdmin) {
+                    return false
+                }
+                return this.store.removeUser(userId)
+            case None => return false
+        }
     }
 
     // 修改密码
@@ -127,6 +151,7 @@ public class AuthService {
         match (this.store.getUser(userId)) {
             case Some(user) =>
                 user.passwordHash = PasswordHash.hash(newPassword)
+                this.store.saveUser(user)
                 return true
             case None => return false
         }
@@ -137,6 +162,7 @@ public class AuthService {
         match (this.store.getUser(userId)) {
             case Some(user) =>
                 user.publishToken = TokenGenerator.generatePublishToken()
+                this.store.saveUser(user)
                 return Some(user.publishToken)
             case None => return None
         }

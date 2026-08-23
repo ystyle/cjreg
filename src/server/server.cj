@@ -10,6 +10,7 @@ import ystyle::cjreg.config.*
 import std.collection.*
 import stdx.encoding.json.stream.*
 import std.io.*
+import std.env.*
 
 // 组装 HTTP 服务：官方协议三端点 + 健康检查 + 管理 API
 public func buildServer(
@@ -24,7 +25,12 @@ public func buildServer(
         case Some(adm) => Some(adm.auth)
         case None => None
     }
-    let publishSvc = PublishService(store, blobStore, auth: publishAuth, adminData: Some(AdminDataStore(store.storm)))
+    // 权限模式：CJREG_PERMISSION_MODE=team 启用团队严格校验；默认 open（内部先用着，有效 token 即发布）
+    let permMode = match (getVariable("CJREG_PERMISSION_MODE")) {
+        case Some(v) => if (v == "team") { "team" } else { "open" }
+        case None => "open"
+    }
+    let publishSvc = PublishService(store, blobStore, auth: publishAuth, adminData: Some(AdminDataStore(store.storm)), permissionMode: permMode)
     let indexSvc = IndexService(store)
     let downloadSvc = DownloadService(store)
     // 代理回源服务（传入上游服务时启用；不可变，供 handler lambda 捕获）

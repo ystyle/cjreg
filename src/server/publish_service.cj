@@ -90,12 +90,15 @@ public class PublishService {
     public var auth: ?AuthService
     // 发布权限数据（团队/组织/包关联；None = 无权限模型，跳过 403 检查）
     public var adminData: ?AdminDataStore
+    // 权限模式：open（默认，内部先用着：有效 token 即可发布）/ team（严格：团队/组织/包关联 + write）
+    public var permissionMode: String
 
-    public init(store: PackageStore, blobStore: BlobStore, auth!: ?AuthService = None, adminData!: ?AdminDataStore = None) {
+    public init(store: PackageStore, blobStore: BlobStore, auth!: ?AuthService = None, adminData!: ?AdminDataStore = None, permissionMode!: String = "open") {
         this.store = store
         this.blobStore = blobStore
         this.auth = auth
         this.adminData = adminData
+        this.permissionMode = permissionMode
     }
 
     // 发布；urlOrg 为 URL 里的 organization 参数（可空）
@@ -122,12 +125,17 @@ public class PublishService {
             case None => ()
         }
 
-        // 0.5 发布权限（规格 403：团队/组织/包关联 + write 权限；平台管理员豁免）
+        // 0.5 发布权限（模式 team：团队/组织/包关联 + write；open（默认，内部先用着）仅需有效 token；
+        //     后续需要转团队管理时配置 CJREG_PERMISSION_MODE=team 切换，无需改代码）
         let authorized = match (publisher) {
             case Some(u) =>
-                match (this.adminData) {
-                    case Some(ad) => checkPublishPermission(ad, u, urlOrg, urlName)
-                    case None => true
+                if (this.permissionMode == "team") {
+                    match (this.adminData) {
+                        case Some(ad) => checkPublishPermission(ad, u, urlOrg, urlName)
+                        case None => true
+                    }
+                } else {
+                    true
                 }
             case None => true
         }

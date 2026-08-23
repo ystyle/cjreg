@@ -289,7 +289,7 @@ func makePublishServicePerm(): (PublishService, AuthService, AdminDataStore, Str
     let admin = authSvc.initAdmin("admin", "AdminPass1").getOrThrow()
     let adminData = AdminDataStore(storm)
     let svc = PublishService(makeStore(), MemoryBlobStore(),
-        auth: Some(authSvc), adminData: Some(adminData))
+        auth: Some(authSvc), adminData: Some(adminData), permissionMode: "team")
     (svc, authSvc, adminData, admin.publishToken)
 }
 
@@ -346,4 +346,23 @@ func testPublishAllowedByTeamPackageLink() {
     let body = makePublishBodyConsistent("test", "demo", "1.0.0")
     let r = svc.publish("test", "demo", body, u.publishToken)
     @Expect(r.outcome == PublishOutcome.Ok, true)
+}
+
+@Test
+func testPublishOpenModeAllowsNonTeamUser() {
+    // 默认 open 模式：小企业内部先用着——有效 token 即可发布（无需团队授权）
+    PasswordHash.ITERATIONS = 1000
+    let storm = Storm.inMemory()
+    let userStore = BstormUserStore(storm)
+    let authSvc = AuthService(userStore, 3600)
+    let u = authSvc.createUser("eve", "eve12345", false).getOrThrow()
+    let adminData = AdminDataStore(storm)
+    let svc = PublishService(makeStore(), MemoryBlobStore(),
+        auth: Some(authSvc), adminData: Some(adminData))  // 默认 permissionMode=open
+    let body = makePublishBodyConsistent("test", "demo", "1.0.0")
+    let r = svc.publish("test", "demo", body, u.publishToken)
+    @Expect(r.outcome == PublishOutcome.Ok, true)
+    // 发布者仍记录
+    let versions = svc.store.listVersions("test", "demo")
+    @Expect(versions[0].publisherId, u.id)
 }

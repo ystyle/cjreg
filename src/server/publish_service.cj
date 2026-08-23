@@ -5,6 +5,8 @@ package ystyle::cjreg.server
 import ystyle::cjreg.protocol.*
 import ystyle::cjreg.index.*
 import ystyle::cjreg.store.*
+import ystyle::cjreg.auth.*
+import ystyle::cjreg.auth.model.*
 import stdx.crypto.digest.SHA256
 import stdx.encoding.hex.toHexString
 import stdx.encoding.json.stream.*
@@ -20,6 +22,7 @@ public enum PublishOutcome {
     | ShaMismatch    // 制品 sha256 与 meta 不一致
     | Conflict       // 同版本已存在且 sha 不同（需 overwrite）
     | BadRequest     // 参数错误
+    | Unauthorized   // 发布 token 缺失/无效（规格 401）
 
     public operator func ==(other: PublishOutcome): Bool {
         match (this) {
@@ -45,6 +48,10 @@ public enum PublishOutcome {
             }
             case PublishOutcome.BadRequest => match (other) {
                 case PublishOutcome.BadRequest => true
+                case _ => false
+            }
+            case PublishOutcome.Unauthorized => match (other) {
+                case PublishOutcome.Unauthorized => true
                 case _ => false
             }
         }
@@ -74,17 +81,39 @@ public func sha256Hex(data: Array<Byte>): String {
 public class PublishService {
     public var store: PackageStore
     public var blobStore: BlobStore
+    // 发布认证（规格：Authorization header 携带用户 publish token；None = 离线模式不校验）
+    public var auth: ?AuthService
 
-    public init(store: PackageStore, blobStore: BlobStore) {
+    public init(store: PackageStore, blobStore: BlobStore, auth!: ?AuthService = None) {
         this.store = store
         this.blobStore = blobStore
+        this.auth = auth
     }
 
     // 发布；urlOrg 为 URL 里的 organization 参数（可空）
+    // 无认证重载（离线模式/测试兼容）
     public func publish(urlOrg: String, urlName: String, body: Array<Byte>): PublishResult {
+        this.publish(urlOrg, urlName, body, "")
+    }
+
+    public func publish(urlOrg: String, urlName: String, body: Array<Byte>, token: String): PublishResult {
         if (urlName.isEmpty()) {
             return PublishResult(PublishOutcome.BadRequest, 0, "package name required")
         }
+        // 0. 发布认证（规格：Authorization: ${publishToken}；缺失/无效 → 401）
+        var publisher: ?User = None
+        match (this.auth) {
+            case Some(authSvc) =>
+                if (token.isEmpty()) {
+                    return PublishResult(PublishOutcome.Unauthorized, 0, "missing publish token")
+                }
+                match (authSvc.validatePublishToken(token)) {
+                    case Some(u) => publisher = Some(u)
+                    case None => return PublishResult(PublishOutcome.Unauthorized, 0, "invalid publish token")
+                }
+            case None => ()
+        }
+
         // 1. 解析官方二进制
         let data = parsePublishData(body)
         if (data.isNone()) {
@@ -148,6 +177,10 @@ public class PublishService {
         doc.indexJson = String.fromUtf8(pd.metaData)
         doc.sha256 = actualSha
         doc.tarballSize = pd.tarball.size
+        match (publisher) {
+            case Some(u) => doc.publisherId = u.id
+            case None => ()
+        }
         this.store.save(doc)
         return PublishResult(PublishOutcome.Ok, doc.id, "published")
     }

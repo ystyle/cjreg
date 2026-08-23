@@ -19,7 +19,12 @@ public func buildServer(
     blobStore: BlobStore
 ): Tang {
     let app = Tang().setHost("0.0.0.0")
-    let publishSvc = PublishService(store, blobStore)
+    // 发布认证：管理服务存在时使用其 AuthService（规格 Authorization: publishToken）
+    let publishAuth: ?AuthService = match (admin) {
+        case Some(adm) => Some(adm.auth)
+        case None => None
+    }
+    let publishSvc = PublishService(store, blobStore, auth: publishAuth)
     let indexSvc = IndexService(store)
     let downloadSvc = DownloadService(store)
     // 代理回源服务（传入上游服务时启用；不可变，供 handler lambda 捕获）
@@ -38,7 +43,12 @@ public func buildServer(
         let name = ctx.param("name")
         let org = ctx.query("organization") ?? ""
         let body = ctx.bodyRaw()
-        let result = publishSvc.publish(org, name, body)
+        // 规格：Authorization: ${publishToken}（发布用户 token）
+        let token = match (ctx.getHeader("Authorization")) {
+            case Some(v) => v
+            case None => ""
+        }
+        let result = publishSvc.publish(org, name, body, token)
         match (result.outcome) {
             case PublishOutcome.Ok =>
                 ctx.status(200u16).writeStringWithCode(200u16, "{\"status\":\"ok\",\"id\":${result.pkgId}}")
@@ -52,6 +62,8 @@ public func buildServer(
                 ctx.status(409u16).writeStringWithCode(409u16, "{\"error\":\"conflict\",\"detail\":\"${result.message}\"}")
             case PublishOutcome.BadRequest =>
                 ctx.status(400u16).writeStringWithCode(400u16, "{\"error\":\"${result.message}\"}")
+            case PublishOutcome.Unauthorized =>
+                ctx.status(401u16).writeStringWithCode(401u16, "{\"error\":\"${result.message}\"}")
         }
     })
 
@@ -82,6 +94,10 @@ public func buildServer(
     app.get("/index/:mo/:du/:name", { ctx =>
         let name = ctx.param("name")
         let org = ctx.query("organization") ?? ""
+        if (name.size < 3) {
+            ctx.status(400u16).writeStringWithCode(400u16, "{\"error\":\"invalid package name\"}")
+            return
+        }
         let local = indexSvc.generate(org, name, false)
         if (!local.isEmpty()) {
             ctx.contentType("application/x-ndjson").writeString(local)

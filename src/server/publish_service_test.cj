@@ -5,6 +5,9 @@ import ystyle::cjreg.protocol.*
 import ystyle::cjreg.index.*
 import ystyle::cjreg.store.*
 import bstorm.*
+import ystyle::cjreg.auth.*
+import ystyle::cjreg.auth.model.*
+import ystyle::cjreg.auth.util.*
 import std.unittest.testmacro.*
 import std.collection.*
 
@@ -234,4 +237,45 @@ func testIndexAndDownload() {
     @Expect(after.downloadCount, 2)
     // 不存在版本 → None
     @Expect(dlSvc.find("test", "demo", "9.9.9").isNone(), true)
+}
+
+// 带认证的发布服务（规格：Authorization 携带 publish token）
+func makePublishServiceAuth(): (PublishService, String, AuthService) {
+    PasswordHash.ITERATIONS = 1000  // 测试提速
+    let store = MemoryUserStore()
+    let authSvc = AuthService(store, 3600)
+    let admin = authSvc.initAdmin("admin", "AdminPass1").getOrThrow()
+    let svc = PublishService(makeStore(), MemoryBlobStore(), auth: Some(authSvc))
+    (svc, admin.publishToken, authSvc)
+}
+
+@Test
+func testPublishUnauthorized() {
+    let (svc, _, _) = makePublishServiceAuth()
+    let body = makePublishBodyConsistent("test", "demo", "1.0.0")
+    // 缺失 token → 401
+    let r1 = svc.publish("test", "demo", body, "")
+    @Expect(r1.outcome == PublishOutcome.Unauthorized, true)
+    // 无效 token → 401
+    let r2 = svc.publish("test", "demo", body, "publish-fake")
+    @Expect(r2.outcome == PublishOutcome.Unauthorized, true)
+    // session token 不能发布
+    let (_, _, authSvc) = makePublishServiceAuth()
+    let (_, sess) = authSvc.login("admin", "AdminPass1").getOrThrow()
+    let r3 = svc.publish("test", "demo", body, sess.token)
+    @Expect(r3.outcome == PublishOutcome.Unauthorized, true)
+}
+
+@Test
+func testPublishAuthorizedStoresPublisher() {
+    let (svc, token, _) = makePublishServiceAuth()
+    let body = makePublishBodyFull("test", "demo", "3.0.0")
+    let r = svc.publish("test", "demo", body, token)
+    @Expect(r.outcome == PublishOutcome.Ok, true)
+    let versions = svc.store.listVersions("test", "demo")
+    @Expect(versions.size, 1)
+    // 发布者已记录（对齐 cjrepo PublisherID）
+    @Expect(versions[0].publisherId > 0, true)
+    // 全字段仍入库
+    @Expect(versions[0].description, "demo package")
 }

@@ -15,6 +15,11 @@ import std.convert.*
 class PublishPlansPage <: Component {
     var state: Option<CjregState> = None
     var msg = Signal<String>("")
+    // 行数据 + 分页
+    var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    var currentPage = Signal<Int64>(1)
+    var pageSize = Signal<Int64>(20)
+    var total = Signal<Int64>(0)
     // 删除确认
     var confirmVisible = Signal<Bool>(false)
     var pendingDeleteId: Int64 = 0
@@ -22,6 +27,37 @@ class PublishPlansPage <: Component {
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
+        refresh()
+    }
+
+    // 分页切片 + 行数据组装
+    func refresh(): Unit {
+        match (this.state) {
+            case Some(st) =>
+                let plans = st.adminData.listPlans()
+                this.total.set(plans.size)
+                let (start, end) = pageWindow(plans.size, this.currentPage.get(), this.pageSize.get())
+                let data = ArrayList<HashMap<String, String>>()
+                var i = start
+                while (i < end) {
+                    let p = plans[i]
+                    let m = HashMap<String, String>()
+                    m["id"] = p.id.toString()
+                    m["name"] = p.name
+                    m["status"] = p.status
+                    m["upstream"] = this.upstreamName(st, p.targetUpstream)
+                    m["progress"] = "${p.completedCount}/${p.totalCount}"
+                    data.add(m)
+                    i++
+                }
+                this.rows.set(data)
+            case None => ()
+        }
+    }
+
+    func onPageChange(ctx: ActionContext): PatchResult {
+        this.refresh()
+        PatchResult.ReRender
     }
 
     func upstreamName(st: CjregState, id: Int64): String {
@@ -51,10 +87,18 @@ class PublishPlansPage <: Component {
         PatchResult.ReRender
     }
 
-    func askDelete(ctx: ActionContext, p: PlanDoc): PatchResult {
-        this.pendingDeleteId = p.id
-        this.pendingDeleteName = p.name
-        this.confirmVisible.set(true)
+    func askDelete(ctx: ActionContext, id: Int64): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        match (st.adminData.getPlan(id)) {
+            case Some(p) =>
+                this.pendingDeleteId = p.id
+                this.pendingDeleteName = p.name
+                this.confirmVisible.set(true)
+            case None => ()
+        }
         PatchResult.ReRender
     }
 
@@ -83,47 +127,29 @@ class PublishPlansPage <: Component {
         PatchResult.ReRender
     }
 
-    func renderPlanRow(p: PlanDoc): IComponent {
-        let st = match (this.state) {
-            case Some(x) => x
-            case None => return div()
-        }
-        let detailHandler: ActionHandler = { c => this.gotoDetail(c, p.id) }
-        let deleteHandler: ActionHandler = { c => this.askDelete(c, p) }
-        div([
-            div([text(p.id.toString())], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(p.name)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([this.statusTag(p.status)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(this.upstreamName(st, p.targetUpstream))], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("${p.completedCount}/${p.totalCount}")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([
-                Button([text("详情")]).size(ButtonSize.Small).onClick(detailHandler),
-                Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteHandler),
-            ], attrs: Some(HashMap<String, String>([("class", cls("admin-td") + " " + cls("admin-actions"))]))),
-        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr"))])))
-    }
-
     func renderList(): IComponent {
-        let plans = match (this.state) {
-            case Some(st) => st.adminData.listPlans()
-            case None => ArrayList<PlanDoc>()
-        }
-        if (plans.size == 0) {
+        if (this.rows.get().size == 0) {
             return emptyState("暂无发布计划，点击「创建计划」新建")
         }
-        let rows = ArrayList<IComponent>()
-        rows.add(div([
-            div([text("ID")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("计划名")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("状态")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("目标上游")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("进度")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("操作")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr") + " " + cls("admin-th"))]))))
-        for (p in plans) {
-            rows.add(this.renderPlanRow(p))
-        }
-        div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("admin-table"))])))
+        Table()
+            .data(this.rows)
+            .stripe()
+            .add(TableColumn().label("ID").colProp("id").width(50))
+            .add(TableColumn().label("计划名").colProp("name").minWidth(140))
+            .add(TableColumn().label("状态").colProp("status").width(90).render({ r, i =>
+                this.statusTag(rowStr(r, "status"))
+            }))
+            .add(TableColumn().label("目标上游").colProp("upstream").minWidth(140))
+            .add(TableColumn().label("进度").colProp("progress").width(90))
+            .add(TableColumn().label("操作").colProp("id").minWidth(150).render({ r, i =>
+                let id = Int64.parse(r["id"], radix: 10)
+                let detailH: ActionHandler = { c => this.gotoDetail(c, id) }
+                let deleteH: ActionHandler = { c => this.askDelete(c, id) }
+                div([
+                    Button([text("详情")]).size(ButtonSize.Small).onClick(detailH),
+                    Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteH),
+                ])
+            }))
     }
 
     func renderConfirmDialog(): IComponent {
@@ -150,9 +176,15 @@ class PublishPlansPage <: Component {
                 div()
             },
         ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))])))
+        let pager = Pagination()
+            .currentPage(this.currentPage)
+            .pageSize(this.pageSize)
+            .total(this.total.get())
+            .layout("total, prev, pager, next, sizes")
+            .onChange(onPageChange)
         adminLayout("/admin/publish-plans", [
             div([text("发布计划")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
-            adminCard("发布计划列表", [toolbar, this.renderList(), this.renderConfirmDialog()]),
+            adminCard("发布计划列表", [toolbar, this.renderList(), pager, this.renderConfirmDialog()]),
         ])
     }
 }

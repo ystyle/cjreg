@@ -24,7 +24,7 @@ public func buildServer(
         case Some(adm) => Some(adm.auth)
         case None => None
     }
-    let publishSvc = PublishService(store, blobStore, auth: publishAuth)
+    let publishSvc = PublishService(store, blobStore, auth: publishAuth, adminData: Some(AdminDataStore(store.storm)))
     let indexSvc = IndexService(store)
     let downloadSvc = DownloadService(store)
     // 代理回源服务（传入上游服务时启用；不可变，供 handler lambda 捕获）
@@ -64,6 +64,8 @@ public func buildServer(
                 ctx.status(400u16).writeStringWithCode(400u16, "{\"error\":\"${result.message}\"}")
             case PublishOutcome.Unauthorized =>
                 ctx.status(401u16).writeStringWithCode(401u16, "{\"error\":\"${result.message}\"}")
+            case PublishOutcome.Forbidden =>
+                ctx.status(403u16).writeStringWithCode(403u16, "{\"error\":\"${result.message}\"}")
         }
     })
 

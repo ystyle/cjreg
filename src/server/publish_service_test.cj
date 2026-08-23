@@ -279,3 +279,71 @@ func testPublishAuthorizedStoresPublisher() {
     // 全字段仍入库
     @Expect(versions[0].description, "demo package")
 }
+
+// 带权限模型的发布服务（共享 storm：用户表 + 团队/组织数据）
+func makePublishServicePerm(): (PublishService, AuthService, AdminDataStore, String) {
+    PasswordHash.ITERATIONS = 1000  // 测试提速
+    let storm = Storm.inMemory()
+    let userStore = BstormUserStore(storm)
+    let authSvc = AuthService(userStore, 3600)
+    let admin = authSvc.initAdmin("admin", "AdminPass1").getOrThrow()
+    let adminData = AdminDataStore(storm)
+    let svc = PublishService(makeStore(), MemoryBlobStore(),
+        auth: Some(authSvc), adminData: Some(adminData))
+    (svc, authSvc, adminData, admin.publishToken)
+}
+
+@Test
+func testPublishForbiddenNoTeam() {
+    let (svc, authSvc, _, _) = makePublishServicePerm()
+    // 普通用户（非管理员、无任何团队）
+    let u = authSvc.createUser("alice", "alice123", false).getOrThrow()
+    let body = makePublishBodyConsistent("test", "demo", "1.0.0")
+    let r = svc.publish("test", "demo", body, u.publishToken)
+    @Expect(r.outcome == PublishOutcome.Forbidden, true)
+}
+
+@Test
+func testPublishForbiddenReadTeam() {
+    let (svc, authSvc, adminData, _) = makePublishServicePerm()
+    let u = authSvc.createUser("bob", "bob12345", false).getOrThrow()
+    // 团队关联「无组织(0)」但权限只有 read
+    let teamId = adminData.createTeam("readers", 0, permission: "read")
+    adminData.setTeamOrganizations(teamId, [0], 0)
+    adminData.setTeamMembers(teamId, [u.id])
+    let body = makePublishBodyConsistent("test", "demo", "1.0.0")
+    let r = svc.publish("test", "demo", body, u.publishToken)
+    @Expect(r.outcome == PublishOutcome.Forbidden, true)
+}
+
+@Test
+func testPublishAllowedWriteTeam() {
+    let (svc, authSvc, adminData, _) = makePublishServicePerm()
+    let u = authSvc.createUser("carol", "carol123", false).getOrThrow()
+    // 团队关联「无组织(0)」且权限 write → 允许
+    let teamId = adminData.createTeam("writers", 0, permission: "write")
+    adminData.setTeamOrganizations(teamId, [0], 0)
+    adminData.setTeamMembers(teamId, [u.id])
+    let body = makePublishBodyConsistent("test", "demo", "1.0.0")
+    let r = svc.publish("test", "demo", body, u.publishToken)
+    @Expect(r.outcome == PublishOutcome.Ok, true)
+    // 发布者已记录
+    let versions = svc.store.listVersions("test", "demo")
+    @Expect(versions[0].publisherId, u.id)
+}
+
+@Test
+func testPublishAllowedByTeamPackageLink() {
+    let (svc, authSvc, adminData, _) = makePublishServicePerm()
+    let u = authSvc.createUser("dave", "dave1234", false).getOrThrow()
+    // 团队只关联该包（不关联组织）且权限 write → 允许
+    let teamId = adminData.createTeam("pkg-owners", 0, permission: "write")
+    // 包关联：teamId + org + name（经 setTeamPackages）
+    let pairs = ArrayList<(String, String)>()
+    pairs.add(("test", "demo"))
+    adminData.setTeamPackages(teamId, pairs.toArray(), 0)
+    adminData.setTeamMembers(teamId, [u.id])
+    let body = makePublishBodyConsistent("test", "demo", "1.0.0")
+    let r = svc.publish("test", "demo", body, u.publishToken)
+    @Expect(r.outcome == PublishOutcome.Ok, true)
+}

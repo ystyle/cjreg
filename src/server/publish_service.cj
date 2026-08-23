@@ -23,6 +23,7 @@ public enum PublishOutcome {
     | Conflict       // 同版本已存在且 sha 不同（需 overwrite）
     | BadRequest     // 参数错误
     | Unauthorized   // 发布 token 缺失/无效（规格 401）
+    | Forbidden      // 对组织/包无发布权限（规格 403）
 
     public operator func ==(other: PublishOutcome): Bool {
         match (this) {
@@ -54,6 +55,10 @@ public enum PublishOutcome {
                 case PublishOutcome.Unauthorized => true
                 case _ => false
             }
+            case PublishOutcome.Forbidden => match (other) {
+                case PublishOutcome.Forbidden => true
+                case _ => false
+            }
         }
     }
 }
@@ -83,11 +88,14 @@ public class PublishService {
     public var blobStore: BlobStore
     // 发布认证（规格：Authorization header 携带用户 publish token；None = 离线模式不校验）
     public var auth: ?AuthService
+    // 发布权限数据（团队/组织/包关联；None = 无权限模型，跳过 403 检查）
+    public var adminData: ?AdminDataStore
 
-    public init(store: PackageStore, blobStore: BlobStore, auth!: ?AuthService = None) {
+    public init(store: PackageStore, blobStore: BlobStore, auth!: ?AuthService = None, adminData!: ?AdminDataStore = None) {
         this.store = store
         this.blobStore = blobStore
         this.auth = auth
+        this.adminData = adminData
     }
 
     // 发布；urlOrg 为 URL 里的 organization 参数（可空）
@@ -112,6 +120,19 @@ public class PublishService {
                     case None => return PublishResult(PublishOutcome.Unauthorized, 0, "invalid publish token")
                 }
             case None => ()
+        }
+
+        // 0.5 发布权限（规格 403：团队/组织/包关联 + write 权限；平台管理员豁免）
+        let authorized = match (publisher) {
+            case Some(u) =>
+                match (this.adminData) {
+                    case Some(ad) => checkPublishPermission(ad, u, urlOrg, urlName)
+                    case None => true
+                }
+            case None => true
+        }
+        if (!authorized) {
+            return PublishResult(PublishOutcome.Forbidden, 0, "no permission to publish")
         }
 
         // 1. 解析官方二进制
@@ -317,4 +338,64 @@ public func parseMetaJson(metaBytes: Array<Byte>): ?MetaInfo {
     } catch (e: Exception) {
         return None
     }
+}
+
+// ===== 发布权限检查（对齐 cjrepo：团队路径；平台管理员豁免） =====
+
+// 权限级别：read=1 / write=2 / overwrite=3
+func permLevel(p: String): Int64 {
+    match (p) {
+        case "write" => 2
+        case "overwrite" => 3
+        case _ => 1
+    }
+}
+
+// 用户对 (org, name) 是否具备发布权限（write 及以上）
+public func checkPublishPermission(adminData: AdminDataStore, user: User, org: String, name: String): Bool {
+    // 平台管理员豁免（平台所有者）
+    if (user.isAdmin) {
+        return true
+    }
+    // 团队路径：用户是团队成员 && （团队关联该包 || 团队关联该组织）&& 团队权限 >= write
+    let teams = adminData.listTeams()
+    for (t in teams) {
+        let memberIds = adminData.listTeamMemberIds(t.id)
+        var isMember = false
+        for (uid in memberIds) {
+            if (uid == user.id) {
+                isMember = true
+                break
+            }
+        }
+        if (!isMember) {
+            continue
+        }
+        // 团队-包关联（organization 为空串表示无组织包）
+        let pkgs = adminData.listTeamPackages(t.id)
+        for (p in pkgs) {
+            if (p.organization == org && p.packageName == name && permLevel(t.permission) >= 2) {
+                return true
+            }
+        }
+        // 团队-组织关联（organizationId=0 表示无组织）
+        let targetOrgId: Int64 = if (org.isEmpty()) { 0 } else { orgIdByName(adminData, org) }
+        let orgs = adminData.listTeamOrganizations(t.id)
+        for (o in orgs) {
+            if (o.organizationId == targetOrgId && permLevel(t.permission) >= 2) {
+                return true
+            }
+        }
+    }
+    false
+}
+
+// 组织名 → id（不存在返回 0，与「无组织」的 0 语义一致）
+func orgIdByName(adminData: AdminDataStore, org: String): Int64 {
+    for (o in adminData.listOrgs()) {
+        if (o.name == org) {
+            return o.id
+        }
+    }
+    0
 }

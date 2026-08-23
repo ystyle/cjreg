@@ -56,14 +56,3 @@ public class PageWindowTest {
         @Expect(end, 2)
     }
 }
-
-@Test
-public class RowStrTest {
-    @TestCase
-    public func testExistingAndMissingKey(): Unit {
-        let row = HashMap<String, String>()
-        row["a"] = "1"
-        @Expect(rowStr(row, "a"), "1")
-        @Expect(rowStr(row, "missing"), "")
-    }
-}

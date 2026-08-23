@@ -74,7 +74,8 @@ class PublicHome <: Component {
 @Page["/packages"]
 class PublicPackages <: Component {
     var state: Option<CjregState> = None
-    var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    // 行数据 + 分页（泛型 Table<PackageDoc>）
+    var rows = Signal<ArrayList<PackageDoc>>(ArrayList<PackageDoc>())
     var search = Signal<String>("")
     var orgFilter = Signal<String>("all")
     var currentPage = Signal<Int64>(1)
@@ -102,19 +103,11 @@ class PublicPackages <: Component {
                     filtered.add(d)
                 }
                 this.total.set(filtered.size)
-                let start = (this.currentPage.get() - 1) * this.pageSize.get()
-                let data = ArrayList<HashMap<String, String>>()
+                let (start, end) = pageWindow(filtered.size, this.currentPage.get(), this.pageSize.get())
+                let data = ArrayList<PackageDoc>()
                 var i = start
-                while (i < filtered.size && data.size < this.pageSize.get()) {
-                    let d = filtered[i]
-                    let m = HashMap<String, String>()
-                    m["id"] = d.id.toString()
-                    m["name"] = d.name
-                    m["org"] = if (d.organization.isEmpty()) { "-" } else { d.organization }
-                    m["version"] = d.version
-                    m["desc"] = d.description
-                    m["downloads"] = d.downloadCount.toString()
-                    data.add(m)
+                while (i < end) {
+                    data.add(filtered[i])
                     i++
                 }
                 this.rows.set(data)
@@ -136,18 +129,17 @@ class PublicPackages <: Component {
         if (this.rows.get().size == 0) {
             return emptyState("暂无包数据")
         }
-        Table()
+        Table<PackageDoc>()
             .data(this.rows)
             .stripe()
-            .onRowClick({ r, i, ctx => this.gotoDetail(ctx, rowStr(r, "name")) })
-            .add(TableColumn().label("包名").colProp("name").minWidth(140))
-            .add(TableColumn().label("组织").colProp("org").width(100))
-            .add(TableColumn().label("版本").colProp("version").width(120))
-            .add(TableColumn().label("描述").colProp("desc").minWidth(260).showOverflowTooltip())
-            .add(TableColumn().label("下载").colProp("downloads").width(90))
-            .add(TableColumn().label("操作").colProp("name").width(90).render({ r, i =>
-                let name = rowStr(r, "name")
-                let detailH: ActionHandler = { c => this.gotoDetail(c, name) }
+            .onRowClick({ d, i, ctx => this.gotoDetail(ctx, d.name) })
+            .add(TableColumn<PackageDoc>().label("包名").accessor({ d => d.name }).minWidth(140))
+            .add(TableColumn<PackageDoc>().label("组织").accessor({ d => if (d.organization.isEmpty()) { "-" } else { d.organization } }).width(100))
+            .add(TableColumn<PackageDoc>().label("版本").accessor({ d => d.version }).width(120))
+            .add(TableColumn<PackageDoc>().label("描述").accessor({ d => d.description }).minWidth(260).showOverflowTooltip())
+            .add(TableColumn<PackageDoc>().label("下载").accessor({ d => d.downloadCount.toString() }).width(90))
+            .add(TableColumn<PackageDoc>().label("操作").width(90).render({ d, i =>
+                let detailH: ActionHandler = { c => this.gotoDetail(c, d.name) }
                 Button([text("详情")]).size(ButtonSize.Small).onClick(detailH)
             }))
     }
@@ -221,7 +213,7 @@ class PublicPackageDetail <: Component {
     var pkgType: String = ""
     var pkgReadme: String = ""
     var depsJson: String = ""
-    var versionRows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    var versionRows = Signal<ArrayList<PackageDoc>>(ArrayList<PackageDoc>())
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
@@ -237,7 +229,7 @@ class PublicPackageDetail <: Component {
         match (this.state) {
             case Some(st) =>
                 let all = st.pkgStore.storm.all<PackageDoc>()
-                let versions = ArrayList<HashMap<String, String>>()
+                let versions = ArrayList<PackageDoc>()
                 for (d in all) {
                     if (d.name == this.pkgName && d.deletedAt == 0) {
                         this.pkgOrg = d.organization
@@ -264,27 +256,21 @@ class PublicPackageDetail <: Component {
                             this.depsJson = sb.toString()
                         }
                         // 版本列表
-                        let vm = HashMap<String, String>()
-                        vm["version"] = d.version
-                        vm["downloads"] = d.downloadCount.toString()
-                        versions.add(vm)
+                        versions.add(d)
                     }
                 }
                 // 全量版本（含软删？只显示正常）
                 for (d in st.pkgStore.listVersions(this.pkgOrg, this.pkgName)) {
                     if (d.deletedAt == 0) {
-                        let vm = HashMap<String, String>()
-                        vm["version"] = d.version
-                        vm["downloads"] = d.downloadCount.toString()
                         var dup = false
                         for (existing in versions) {
-                            if (existing["version"] == vm["version"]) {
+                            if (existing.version == d.version) {
                                 dup = true
                                 break
                             }
                         }
                         if (!dup) {
-                            versions.add(vm)
+                            versions.add(d)
                         }
                     }
                 }
@@ -299,11 +285,11 @@ class PublicPackageDetail <: Component {
         } else {
             "'${this.pkgOrg}::${this.pkgName}' = { version = '${this.pkgVersion}' }"
         }
-        let versionTable = Table()
+        let versionTable = Table<PackageDoc>()
             .data(this.versionRows)
             .stripe()
-            .add(TableColumn().label("版本").colProp("version"))
-            .add(TableColumn().label("下载").colProp("downloads").width(100))
+            .add(TableColumn<PackageDoc>().label("版本").accessor({ d => d.version }))
+            .add(TableColumn<PackageDoc>().label("下载").accessor({ d => d.downloadCount.toString() }).width(100))
         div([
             publicNav("/packages"),
             div([

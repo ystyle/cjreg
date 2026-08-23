@@ -73,10 +73,7 @@ func quickLink(path: String, label: String): IComponent {
 }
 
 func statCard(value: String, label: String): IComponent {
-    div([
-        div([text(value)], attrs: Some(HashMap<String, String>([("class", cls("stat-value"))]))),
-        div([text(label)], attrs: Some(HashMap<String, String>([("class", cls("stat-label"))]))),
-    ], attrs: Some(HashMap<String, String>([("class", cls("stat-card"))])))
+    Statistic().title(label).value(value)
 }
 
 // ===== 上游管理 =====
@@ -84,6 +81,9 @@ func statCard(value: String, label: String): IComponent {
 class UpstreamsPage <: Component {
     var state: Option<CjregState> = None
     var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    var currentPage = Signal<Int64>(1)
+    var pageSize = Signal<Int64>(20)
+    var total = Signal<Int64>(0)
     var msg = Signal<String>("")
     // 新增/编辑 Dialog
     var dialogVisible = Signal<Bool>(false)
@@ -94,6 +94,9 @@ class UpstreamsPage <: Component {
     var formPriority = Signal<Int64>(0)
     var formCacheTtl = Signal<Int64>(86400)
     var formToken = Signal<String>("")
+    var nameError = Signal<String>("")
+    var urlError = Signal<String>("")
+    var upForm = Form([])
     // 删除确认 Dialog
     var confirmVisible = Signal<Bool>(false)
     var pendingDeleteId: Int64 = 0
@@ -104,26 +107,37 @@ class UpstreamsPage <: Component {
         refresh()
     }
 
+    // 分页切片 + 行数据组装
     func refresh(): Unit {
         match (this.state) {
             case Some(st) =>
                 let list = st.upStore.listAll()
+                this.total.set(list.size)
+                let (start, end) = pageWindow(list.size, this.currentPage.get(), this.pageSize.get())
                 let data = ArrayList<HashMap<String, String>>()
-                for (u in list) {
+                var i = start
+                while (i < end) {
+                    let u = list[i]
                     let m = HashMap<String, String>()
                     m["id"] = u.id.toString()
                     m["name"] = u.name
                     m["url"] = u.url
-                    m["enabled"] = if (u.enabled) { "是" } else { "否" }
-                    m["official"] = if (u.isOfficial) { "官方" } else { "镜像" }
+                    m["enabled"] = if (u.enabled) { "1" } else { "0" }
+                    m["official"] = if (u.isOfficial) { "1" } else { "0" }
                     m["priority"] = u.priority.toString()
                     m["cacheTtl"] = "${u.cacheTtl}s"
                     m["lastSync"] = if (u.lastSyncAt > 0) { u.lastSyncAt.toString() } else { "-" }
                     data.add(m)
+                    i++
                 }
                 this.rows.set(data)
             case None => ()
         }
+    }
+
+    func onPageChange(ctx: ActionContext): PatchResult {
+        this.refresh()
+        PatchResult.ReRender
     }
 
     // ===== 表单 Dialog =====
@@ -134,6 +148,8 @@ class UpstreamsPage <: Component {
         this.formPriority.set(0)
         this.formCacheTtl.set(86400)
         this.formToken.set("")
+        this.nameError.set("")
+        this.urlError.set("")
         this.dialogVisible.set(true)
         PatchResult.ReRender
     }
@@ -152,6 +168,8 @@ class UpstreamsPage <: Component {
                 this.formPriority.set(u.priority)
                 this.formCacheTtl.set(u.cacheTtl)
                 this.formToken.set(u.authToken)
+                this.nameError.set("")
+                this.urlError.set("")
                 this.dialogVisible.set(true)
             case None => ()
         }
@@ -172,12 +190,11 @@ class UpstreamsPage <: Component {
             this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
-        let name = this.formName.get()
-        let url = this.formUrl.get()
-        if (name.isEmpty() || url.isEmpty()) {
-            this.msg.set("名称和 URL 必填")
+        if (!this.upForm.validate()) {
             return PatchResult.ReRender
         }
+        let name = this.formName.get()
+        let url = this.formUrl.get()
         let upSvc = UpstreamService(st.upStore)
         if (this.dialogMode.get() == "create") {
             match (upSvc.add(name, url, this.formPriority.get(), this.formToken.get(), this.formCacheTtl.get())) {
@@ -201,7 +218,7 @@ class UpstreamsPage <: Component {
     }
 
     // ===== 启用/禁用 =====
-    func toggleEnabled(ctx: ActionContext, u: Upstream): PatchResult {
+    func toggleEnabled(ctx: ActionContext, id: Int64): PatchResult {
         let st = match (this.state) {
             case Some(x) => x
             case None => return PatchResult.ReRender
@@ -210,20 +227,32 @@ class UpstreamsPage <: Component {
             this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
-        let upSvc = UpstreamService(st.upStore)
-        if (upSvc.update(u.id, Some(!u.enabled), Option<Int64>.None, Option<Int64>.None, Option<String>.None)) {
-            this.msg.set(if (!u.enabled) { "已启用 ${u.name}" } else { "已禁用 ${u.name}" })
-            st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "toggle upstream ${u.name}", "ok", nowMs())
+        match (st.upStore.getById(id)) {
+            case Some(u) =>
+                let upSvc = UpstreamService(st.upStore)
+                if (upSvc.update(u.id, Some(!u.enabled), Option<Int64>.None, Option<Int64>.None, Option<String>.None)) {
+                    this.msg.set(if (!u.enabled) { "已启用 ${u.name}" } else { "已禁用 ${u.name}" })
+                    st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "toggle upstream ${u.name}", "ok", nowMs())
+                }
+            case None => ()
         }
         refresh()
         PatchResult.ReRender
     }
 
     // ===== 删除（确认） =====
-    func askDelete(ctx: ActionContext, u: Upstream): PatchResult {
-        this.pendingDeleteId = u.id
-        this.pendingDeleteName = u.name
-        this.confirmVisible.set(true)
+    func askDelete(ctx: ActionContext, id: Int64): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        match (st.upStore.getById(id)) {
+            case Some(u) =>
+                this.pendingDeleteId = u.id
+                this.pendingDeleteName = u.name
+                this.confirmVisible.set(true)
+            case None => ()
+        }
         PatchResult.ReRender
     }
 
@@ -255,66 +284,49 @@ class UpstreamsPage <: Component {
     }
 
     // ===== 渲染 =====
-    func renderUpRow(u: Upstream): IComponent {
-        let editHandler: ActionHandler = { c => this.openEdit(c, u.id) }
-        let toggleHandler: ActionHandler = { c => this.toggleEnabled(c, u) }
-        let deleteHandler: ActionHandler = { c => this.askDelete(c, u) }
-        let statusTag = if (u.enabled) {
-            Tag([text("启用")]).kind(ComponentKind.Success)
-        } else {
-            Tag([text("禁用")]).kind(ComponentKind.Info)
-        }
-        let typeTag = if (u.isOfficial) {
-            Tag([text("官方")]).kind(ComponentKind.Primary)
-        } else {
-            Tag([text("镜像")]).kind(ComponentKind.Warning)
-        }
-        div([
-            div([text(u.id.toString())], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(u.name)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(u.url)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([typeTag], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([statusTag], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(u.priority.toString())], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("${u.cacheTtl}s")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(if (u.lastSyncAt > 0) { u.lastSyncAt.toString() } else { "-" })], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([
-                Button([text("编辑")]).size(ButtonSize.Small).onClick(editHandler),
-                Button([text(if (u.enabled) { "禁用" } else { "启用" })]).size(ButtonSize.Small).onClick(toggleHandler),
-                if (u.isOfficial) {
-                    div()
-                } else {
-                    Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteHandler)
-                },
-            ], attrs: Some(HashMap<String, String>([("class", cls("admin-td") + " " + cls("admin-actions"))]))),
-        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr"))])))
-    }
-
     func renderList(): IComponent {
-        match (this.state) {
-            case Some(st) =>
-                let list = st.upStore.listAll()
-                if (list.size == 0) {
-                    return emptyState("暂无上游，点击「新增上游」添加")
-                }
-                let rows = ArrayList<IComponent>()
-                rows.add(div([
-                    div([text("ID")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-                    div([text("名称")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-                    div([text("URL")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-                    div([text("类型")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-                    div([text("状态")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-                    div([text("优先级")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-                    div([text("缓存")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-                    div([text("最后同步")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-                    div([text("操作")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-                ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr") + " " + cls("admin-th"))]))))
-                for (u in list) {
-                    rows.add(this.renderUpRow(u))
-                }
-                div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("admin-table"))])))
-            case None => div()
+        if (this.rows.get().size == 0) {
+            return emptyState("暂无上游，点击「新增上游」添加")
         }
+        Table()
+            .data(this.rows)
+            .stripe()
+            .add(TableColumn().label("ID").colProp("id").width(50))
+            .add(TableColumn().label("名称").colProp("name").minWidth(130))
+            .add(TableColumn().label("URL").colProp("url").minWidth(220))
+            .add(TableColumn().label("类型").colProp("official").width(80).render({ r, i =>
+                if (rowStr(r, "official") == "1") {
+                    Tag([text("官方")]).kind(ComponentKind.Primary)
+                } else {
+                    Tag([text("镜像")]).kind(ComponentKind.Warning)
+                }
+            }))
+            .add(TableColumn().label("状态").colProp("enabled").width(80).render({ r, i =>
+                if (rowStr(r, "enabled") == "1") {
+                    Tag([text("启用")]).kind(ComponentKind.Success)
+                } else {
+                    Tag([text("禁用")]).kind(ComponentKind.Info)
+                }
+            }))
+            .add(TableColumn().label("优先级").colProp("priority").width(80))
+            .add(TableColumn().label("缓存").colProp("cacheTtl").width(90))
+            .add(TableColumn().label("最后同步").colProp("lastSync").minWidth(110))
+            .add(TableColumn().label("操作").colProp("id").minWidth(210).render({ r, i =>
+                let id = Int64.parse(r["id"], radix: 10)
+                let official = rowStr(r, "official") == "1"
+                let editH: ActionHandler = { c => this.openEdit(c, id) }
+                let toggleH: ActionHandler = { c => this.toggleEnabled(c, id) }
+                let deleteH: ActionHandler = { c => this.askDelete(c, id) }
+                div([
+                    Button([text("编辑")]).size(ButtonSize.Small).onClick(editH),
+                    Button([text(if (rowStr(r, "enabled") == "1") { "禁用" } else { "启用" })]).size(ButtonSize.Small).onClick(toggleH),
+                    if (official) {
+                        div()
+                    } else {
+                        Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteH)
+                    },
+                ])
+            }))
     }
 
     func renderFormDialog(): IComponent {
@@ -330,20 +342,24 @@ class UpstreamsPage <: Component {
         } else {
             Input().bind(this.formUrl)
         }
-        let dlg = Dialog([
-            div([
-                div([text("名称")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
-                nameInput,
-                div([text("URL")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
-                urlInput,
-                div([text("优先级（小者优先）")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
-                InputNumber().bind(this.formPriority).min(0),
-                div([text("缓存时间（秒）")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
-                InputNumber().bind(this.formCacheTtl).min(0),
-                div([text("认证 Token（可选）")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
-                Input().bind(this.formToken).placeholder("私有仓访问令牌").password(),
-            ], attrs: Some(HashMap<String, String>([("class", cls("dialog-form"))]))),
-        ])
+        let form = Form([
+            FormItem([nameInput]).label("名称")
+                .bindValue({ => this.formName.get() })
+                .rule(FormRule(required: true, message: "名称必填"))
+                .errorSignal(this.nameError),
+            FormItem([urlInput]).label("URL")
+                .bindValue({ => this.formUrl.get() })
+                .rule(FormRule(required: true, message: "URL 必填"))
+                .errorSignal(this.urlError),
+            FormItem([InputNumber().bind(this.formPriority).min(0)]).label("优先级（小者优先）")
+                .bindValue({ => this.formPriority.get().toString() }),
+            FormItem([InputNumber().bind(this.formCacheTtl).min(0)]).label("缓存时间（秒）")
+                .bindValue({ => this.formCacheTtl.get().toString() }),
+            FormItem([Input().bind(this.formToken).placeholder("私有仓访问令牌").password()]).label("认证 Token（可选）")
+                .bindValue({ => this.formToken.get() }),
+        ]).labelTop()
+        this.upForm = form
+        let dlg = Dialog([form])
             .visible(this.dialogVisible)
             .title(title)
             .width("460px")
@@ -379,9 +395,15 @@ class UpstreamsPage <: Component {
                 div()
             },
         ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))])))
+        let pager = Pagination()
+            .currentPage(this.currentPage)
+            .pageSize(this.pageSize)
+            .total(this.total.get())
+            .layout("total, prev, pager, next, sizes")
+            .onChange(onPageChange)
         adminLayout("/admin/upstreams", [
             div([text("上游管理")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
-            adminCard("多仓上游配置", [toolbar, this.renderList(), this.renderFormDialog(), this.renderConfirmDialog()]),
+            adminCard("多仓上游配置", [toolbar, this.renderList(), pager, this.renderFormDialog(), this.renderConfirmDialog()]),
         ])
     }
 }
@@ -438,7 +460,7 @@ class PackagesPage <: Component {
                     m["name"] = d.name
                     m["version"] = d.version
                     m["downloads"] = d.downloadCount.toString()
-                    m["deleted"] = if (d.deletedAt != 0) { "已删" } else { "正常" }
+                    m["deleted"] = if (d.deletedAt != 0) { "1" } else { "0" }
                     data.add(m)
                     i++
                 }
@@ -520,46 +542,37 @@ class PackagesPage <: Component {
     }
 
     // ===== 渲染 =====
-    func renderPkgRow(d: HashMap<String, String>): IComponent {
-        let versionsHandler: ActionHandler = { c => this.showVersions(c, d["org"], d["name"]) }
-        let deleteHandler: ActionHandler = { c => this.askDelete(c, Int64.parse(d["id"]), d["name"], d["version"]) }
-        let statusTag = if (d["deleted"] == "已删") {
-            Tag([text("已删")]).kind(ComponentKind.Danger)
-        } else {
-            Tag([text("正常")]).kind(ComponentKind.Success)
-        }
-        div([
-            div([text(d["id"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(d["org"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(d["name"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(d["version"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(d["downloads"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([statusTag], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([
-                Button([text("版本")]).size(ButtonSize.Small).onClick(versionsHandler),
-                Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteHandler),
-            ], attrs: Some(HashMap<String, String>([("class", cls("admin-td") + " " + cls("admin-actions"))]))),
-        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr"))])))
-    }
-
     func renderList(): IComponent {
-        let rows = ArrayList<IComponent>()
         if (this.rows.get().size == 0) {
             return emptyState("暂无包数据")
         }
-        rows.add(div([
-            div([text("ID")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("组织")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("包名")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("版本")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("下载")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("状态")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("操作")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr") + " " + cls("admin-th"))]))))
-        for (m in this.rows.get()) {
-            rows.add(this.renderPkgRow(m))
-        }
-        div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("admin-table"))])))
+        Table()
+            .data(this.rows)
+            .stripe()
+            .add(TableColumn().label("ID").colProp("id").width(60))
+            .add(TableColumn().label("组织").colProp("org").width(110))
+            .add(TableColumn().label("包名").colProp("name").minWidth(140))
+            .add(TableColumn().label("版本").colProp("version").width(110))
+            .add(TableColumn().label("下载").colProp("downloads").width(80))
+            .add(TableColumn().label("状态").colProp("deleted").width(80).render({ r, i =>
+                if (rowStr(r, "deleted") == "1") {
+                    Tag([text("已删")]).kind(ComponentKind.Danger)
+                } else {
+                    Tag([text("正常")]).kind(ComponentKind.Success)
+                }
+            }))
+            .add(TableColumn().label("操作").colProp("id").minWidth(150).render({ r, i =>
+                let org = rowStr(r, "org")
+                let name = rowStr(r, "name")
+                let version = rowStr(r, "version")
+                let id = Int64.parse(rowStr(r, "id"), radix: 10)
+                let versionsH: ActionHandler = { c => this.showVersions(c, org, name) }
+                let deleteH: ActionHandler = { c => this.askDelete(c, id, name, version) }
+                div([
+                    Button([text("版本")]).size(ButtonSize.Small).onClick(versionsH),
+                    Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteH),
+                ])
+            }))
     }
 
     func renderVersionDialog(): IComponent {

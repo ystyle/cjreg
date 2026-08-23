@@ -19,32 +19,40 @@ public func navLink(path: String, label: String, active: Bool): IComponent {
     })
 }
 
-// 侧边导航（activePath 高亮）
+// 侧边导航（activePath 高亮）— Menu/MenuItem 组件
 public func adminSidebar(activePath: String): IComponent {
-    let items = HashMap<String, String>([
-        ("/admin", "仪表盘"),
-        ("/admin/packages", "包管理"),
-        ("/admin/upstreams", "上游管理"),
-        ("/admin/publish-plans", "发布计划"),
-        ("/admin/organizations", "组织管理"),
-        ("/admin/teams", "团队管理"),
-        ("/admin/users", "用户管理"),
-        ("/admin/logs", "日志"),
-    ])
-    let children = ArrayList<IComponent>()
-    children.add(div([text("cjreg 管理")], attrs: Some(HashMap<String, String>([("class", cls("admin-brand"))]))))
-    for ((path, label) in items) {
-        let active = path == activePath
-        children.add(navLink(path, label, active))
+    let entries = ArrayList<(String, String)>()
+    entries.add(("/admin", "仪表盘"))
+    entries.add(("/admin/packages", "包管理"))
+    entries.add(("/admin/upstreams", "上游管理"))
+    entries.add(("/admin/publish-plans", "发布计划"))
+    entries.add(("/admin/organizations", "组织管理"))
+    entries.add(("/admin/teams", "团队管理"))
+    entries.add(("/admin/users", "用户管理"))
+    entries.add(("/admin/logs", "日志"))
+    let menu = Menu()
+    for ((path, label) in entries) {
+        let go: ActionHandler = { c =>
+            c.route.push(path)
+            PatchResult.ReRender
+        }
+        menu.add(
+            MenuItem(path, [text(label)])
+                .active(path == activePath)
+                .onClick(go)
+        )
     }
-    children.add(logoutNav())
-    div(children.toArray(), attrs: Some(HashMap<String, String>([("class", cls("admin-sidebar"))])))
+    div([
+        div([text("cjreg 管理")], attrs: Some(HashMap<String, String>([("class", cls("admin-brand"))]))),
+        menu,
+        logoutMenuItem(),
+    ], attrs: Some(HashMap<String, String>([("class", cls("admin-sidebar"))])))
 }
 
 // 退出登录：清除会话鉴权上下文 + 登录态信号，回到登录页
-func logoutNav(): IComponent {
-    let item = div([text("退出登录")], attrs: Some(HashMap<String, String>([("class", cls("nav-item"))])))
-    item.onClick({ c =>
+func logoutMenuItem(): IComponent {
+    let item = MenuItem("logout", [text("退出登录")])
+    let go: ActionHandler = { c =>
         c.setContext("uid", "")
         c.setContext("username", "")
         c.setContext("isAdmin", "")
@@ -54,7 +62,8 @@ func logoutNav(): IComponent {
         } catch (e: Exception) { () }
         c.route.push("/admin/login")
         PatchResult.ReRender
-    })
+    }
+    item.onClick(go)
 }
 
 // 页面主区容器
@@ -70,12 +79,9 @@ public func adminLayout(activePath: String, children: Array<IComponent>): ICompo
     ], attrs: Some(HashMap<String, String>([("class", cls("admin-layout"))])))
 }
 
-// 卡片容器
+// 卡片容器 — Card 组件
 public func adminCard(title: String, children: Array<IComponent>): IComponent {
-    div([
-        div([text(title)], attrs: Some(HashMap<String, String>([("class", cls("admin-card-title"))]))),
-        div(children),
-    ], attrs: Some(HashMap<String, String>([("class", cls("admin-card"))])))
+    Card(children).header(title)
 }
 
 // 空态提示（列表无数据时）

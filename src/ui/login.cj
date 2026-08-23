@@ -19,6 +19,9 @@ class LoginPage <: Component {
     var password = Signal<String>("")
     var errorMsg = Signal<String>("")
     var busy = Signal<Bool>(false)
+    var userError = Signal<String>("")
+    var passError = Signal<String>("")
+    var loginForm = Form([])
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
@@ -40,21 +43,29 @@ class LoginPage <: Component {
         } else {
             Button([text("登 录")]).kind(ButtonKind.Primary).size(ButtonSize.Large).onClick(doLogin)
         }
+        let form = Form([
+            FormItem([userInput]).label("用户名")
+                .bindValue({ => this.username.get() })
+                .rule(FormRule(required: true, message: "请输入用户名"))
+                .errorSignal(this.userError),
+            FormItem([passInput]).label("密码")
+                .bindValue({ => this.password.get() })
+                .rule(FormRule(required: true, message: "请输入密码"))
+                .errorSignal(this.passError),
+        ]).labelTop()
+        this.loginForm = form
         div([
             div([text("cjreg 管理控制台")], attrs: Some(HashMap<String, String>([("class", cls("login-title"))]))),
             div([
-                Form([
-                    div([FormItem([text("用户名")])], attrs: Some(HashMap<String, String>([("class", cls("form-item"))]))),
-                    userInput,
-                    div([FormItem([text("密码")])], attrs: Some(HashMap<String, String>([("class", cls("form-item"))]))),
-                    passInput,
-                    if (this.errorMsg.get() != "") {
-                        div([text(this.errorMsg.get())], attrs: Some(HashMap<String, String>([("class", cls("login-error"))])))
-                    } else {
-                        div()
-                    },
+                form,
+                if (this.errorMsg.get() != "") {
+                    div([text(this.errorMsg.get())], attrs: Some(HashMap<String, String>([("class", cls("login-error"))])))
+                } else {
+                    div()
+                },
+                div([
                     loginBtn,
-                ]),
+                ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))]))),
             ], attrs: Some(HashMap<String, String>([("class", cls("login-card"))]))),
         ], attrs: Some(HashMap<String, String>([("class", cls("login-container"))])))
     }
@@ -85,8 +96,8 @@ class LoginPage <: Component {
         }
         let u = this.username.get()
         let p = this.password.get()
-        if (u.isEmpty() || p.isEmpty()) {
-            this.errorMsg.set("请输入用户名和密码")
+        // 表单校验（FormRule required）
+        if (!this.loginForm.validate()) {
             this.busy.set(false)
             return PatchResult.ReRender
         }

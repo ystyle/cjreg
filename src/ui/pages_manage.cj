@@ -73,10 +73,7 @@ func quickLink(path: String, label: String): IComponent {
 }
 
 func statCard(value: String, label: String): IComponent {
-    div([
-        div([text(value)], attrs: Some(HashMap<String, String>([("class", cls("stat-value"))]))),
-        div([text(label)], attrs: Some(HashMap<String, String>([("class", cls("stat-label"))]))),
-    ], attrs: Some(HashMap<String, String>([("class", cls("stat-card"))])))
+    Statistic().title(label).value(value)
 }
 
 // ===== 上游管理 =====

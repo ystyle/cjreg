@@ -463,7 +463,7 @@ class PackagesPage <: Component {
                     m["name"] = d.name
                     m["version"] = d.version
                     m["downloads"] = d.downloadCount.toString()
-                    m["deleted"] = if (d.deletedAt != 0) { "已删" } else { "正常" }
+                    m["deleted"] = if (d.deletedAt != 0) { "1" } else { "0" }
                     data.add(m)
                     i++
                 }
@@ -545,46 +545,37 @@ class PackagesPage <: Component {
     }
 
     // ===== 渲染 =====
-    func renderPkgRow(d: HashMap<String, String>): IComponent {
-        let versionsHandler: ActionHandler = { c => this.showVersions(c, d["org"], d["name"]) }
-        let deleteHandler: ActionHandler = { c => this.askDelete(c, Int64.parse(d["id"]), d["name"], d["version"]) }
-        let statusTag = if (d["deleted"] == "已删") {
-            Tag([text("已删")]).kind(ComponentKind.Danger)
-        } else {
-            Tag([text("正常")]).kind(ComponentKind.Success)
-        }
-        div([
-            div([text(d["id"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(d["org"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(d["name"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(d["version"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(d["downloads"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([statusTag], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([
-                Button([text("版本")]).size(ButtonSize.Small).onClick(versionsHandler),
-                Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteHandler),
-            ], attrs: Some(HashMap<String, String>([("class", cls("admin-td") + " " + cls("admin-actions"))]))),
-        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr"))])))
-    }
-
     func renderList(): IComponent {
-        let rows = ArrayList<IComponent>()
         if (this.rows.get().size == 0) {
             return emptyState("暂无包数据")
         }
-        rows.add(div([
-            div([text("ID")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("组织")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("包名")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("版本")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("下载")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("状态")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("操作")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr") + " " + cls("admin-th"))]))))
-        for (m in this.rows.get()) {
-            rows.add(this.renderPkgRow(m))
-        }
-        div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("admin-table"))])))
+        Table()
+            .data(this.rows)
+            .stripe()
+            .add(TableColumn().label("ID").colProp("id").width(60))
+            .add(TableColumn().label("组织").colProp("org").width(110))
+            .add(TableColumn().label("包名").colProp("name").minWidth(140))
+            .add(TableColumn().label("版本").colProp("version").width(110))
+            .add(TableColumn().label("下载").colProp("downloads").width(80))
+            .add(TableColumn().label("状态").colProp("deleted").width(80).render({ r, i =>
+                if (rowStr(r, "deleted") == "1") {
+                    Tag([text("已删")]).kind(ComponentKind.Danger)
+                } else {
+                    Tag([text("正常")]).kind(ComponentKind.Success)
+                }
+            }))
+            .add(TableColumn().label("操作").colProp("id").minWidth(150).render({ r, i =>
+                let org = rowStr(r, "org")
+                let name = rowStr(r, "name")
+                let version = rowStr(r, "version")
+                let id = Int64.parse(rowStr(r, "id"), radix: 10)
+                let versionsH: ActionHandler = { c => this.showVersions(c, org, name) }
+                let deleteH: ActionHandler = { c => this.askDelete(c, id, name, version) }
+                div([
+                    Button([text("版本")]).size(ButtonSize.Small).onClick(versionsH),
+                    Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteH),
+                ])
+            }))
     }
 
     func renderVersionDialog(): IComponent {

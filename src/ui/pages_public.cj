@@ -132,37 +132,24 @@ class PublicPackages <: Component {
         PatchResult.ReRender
     }
 
-    func renderPkgRow(d: HashMap<String, String>): IComponent {
-        let detailHandler: ActionHandler = { c => this.gotoDetail(c, d["name"]) }
-        div([
-            div([text(d["name"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(d["org"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(d["version"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(d["desc"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(d["downloads"])], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([
-                Button([text("详情")]).size(ButtonSize.Small).onClick(detailHandler),
-            ], attrs: Some(HashMap<String, String>([("class", cls("admin-td") + " " + cls("admin-actions"))]))),
-        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr"))])))
-    }
-
     func renderList(): IComponent {
-        let rows = ArrayList<IComponent>()
         if (this.rows.get().size == 0) {
             return emptyState("暂无包数据")
         }
-        rows.add(div([
-            div([text("包名")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("组织")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("版本")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("描述")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("下载")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("操作")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr") + " " + cls("admin-th"))]))))
-        for (m in this.rows.get()) {
-            rows.add(this.renderPkgRow(m))
-        }
-        div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("admin-table"))])))
+        Table()
+            .data(this.rows)
+            .stripe()
+            .onRowClick({ r, i, ctx => this.gotoDetail(ctx, rowStr(r, "name")) })
+            .add(TableColumn().label("包名").colProp("name").minWidth(140))
+            .add(TableColumn().label("组织").colProp("org").width(100))
+            .add(TableColumn().label("版本").colProp("version").width(120))
+            .add(TableColumn().label("描述").colProp("desc").minWidth(260).showOverflowTooltip())
+            .add(TableColumn().label("下载").colProp("downloads").width(90))
+            .add(TableColumn().label("操作").colProp("name").width(90).render({ r, i =>
+                let name = rowStr(r, "name")
+                let detailH: ActionHandler = { c => this.gotoDetail(c, name) }
+                Button([text("详情")]).size(ButtonSize.Small).onClick(detailH)
+            }))
     }
 
     func doSearch(ctx: ActionContext): PatchResult {
@@ -322,18 +309,20 @@ class PublicPackageDetail <: Component {
             div([
                 div([text("${this.pkgName}@${this.pkgVersion}")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
                 adminCard("包信息", [
-                    div([
-                        div([text("名称: ${this.pkgName}")]),
-                        div([text("组织: ${if (this.pkgOrg.isEmpty()) { "-" } else { this.pkgOrg }}")]),
-                        div([text("版本: ${this.pkgVersion}")]),
-                        div([text("描述: ${this.pkgDesc}")]),
-                        div([text("类型: ${this.pkgType}")]),
-                        div([text("作者: ${this.pkgAuthors}")]),
-                        div([text("仓库: ${this.pkgRepo}")]),
-                        div([text("主页: ${this.pkgHomepage}")]),
-                        div([text("文档: ${this.pkgDocs}")]),
-                        div([text("许可证: ${this.pkgLicense}")]),
-                    ]),
+                    Descriptions()
+                        .border()
+                        .column(2)
+                        .labelWidth("100px")
+                        .add(DescriptionsItem().label("名称").children([text(this.pkgName)]))
+                        .add(DescriptionsItem().label("组织").children([text(if (this.pkgOrg.isEmpty()) { "-" } else { this.pkgOrg })]))
+                        .add(DescriptionsItem().label("版本").children([text(this.pkgVersion)]))
+                        .add(DescriptionsItem().label("描述").children([text(this.pkgDesc)]))
+                        .add(DescriptionsItem().label("类型").children([text(this.pkgType)]))
+                        .add(DescriptionsItem().label("作者").children([text(this.pkgAuthors)]))
+                        .add(DescriptionsItem().label("仓库").children([text(this.pkgRepo)]))
+                        .add(DescriptionsItem().label("主页").children([text(this.pkgHomepage)]))
+                        .add(DescriptionsItem().label("文档").children([text(this.pkgDocs)]))
+                        .add(DescriptionsItem().label("许可证").children([text(this.pkgLicense)])),
                 ]),
                 adminCard("依赖", [
                     if (this.depsJson == "[]") {
@@ -347,7 +336,7 @@ class PublicPackageDetail <: Component {
                     if (this.pkgReadme.isEmpty()) {
                         div([text("无 README")])
                     } else {
-                        div([text(this.pkgReadme)], attrs: Some(HashMap<String, String>([("class", cls("code-block"))])))
+                        Markdown().content(this.pkgReadme)
                     },
                 ]),
                 adminCard("安装", [

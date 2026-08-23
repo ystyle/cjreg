@@ -302,7 +302,7 @@ class UpstreamsPage <: Component {
             .add(TableColumn<Upstream>().label("优先级").accessor({ u => u.priority.toString() }).width(80))
             .add(TableColumn<Upstream>().label("缓存").accessor({ u => "${u.cacheTtl}s" }).width(90))
             .add(TableColumn<Upstream>().label("最后同步").accessor({ u => if (u.lastSyncAt > 0) { u.lastSyncAt.toString() } else { "-" } }).minWidth(110))
-            .add(TableColumn<Upstream>().label("操作").minWidth(210).render({ u, i =>
+            .add(TableColumn<Upstream>().label("操作").minWidth(280).render({ u, i =>
                 let id = u.id
                 let editH: ActionHandler = { c => this.openEdit(c, id) }
                 let toggleH: ActionHandler = { c => this.toggleEnabled(c, id) }
@@ -539,7 +539,7 @@ class PackagesPage <: Component {
                     Tag([text("正常")]).kind(ComponentKind.Success)
                 }
             }))
-            .add(TableColumn<PackageDoc>().label("操作").minWidth(150).render({ d, i =>
+            .add(TableColumn<PackageDoc>().label("操作").minWidth(180).render({ d, i =>
                 let org = d.organization
                 let name = d.name
                 let version = d.version

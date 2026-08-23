@@ -281,7 +281,7 @@ class UsersPage <: Component {
                     Tag([text("禁用")]).kind(ComponentKind.Danger)
                 }
             }))
-            .add(TableColumn<User>().label("操作").minWidth(230).render({ u, i =>
+            .add(TableColumn<User>().label("操作").minWidth(260).render({ u, i =>
                 let tokenH: ActionHandler = { c => this.showToken(c, u.id) }
                 let toggleH: ActionHandler = { c => this.toggleActive(c, u.id) }
                 let deleteH: ActionHandler = { c => this.askDelete(c, u.id) }
@@ -570,7 +570,7 @@ class OrganizationsPage <: Component {
                     Tag([text("普通")]).kind(ComponentKind.Info)
                 }
             }))
-            .add(TableColumn<OrgDoc>().label("操作").minWidth(160).render({ o, i =>
+            .add(TableColumn<OrgDoc>().label("操作").minWidth(180).render({ o, i =>
                 let editH: ActionHandler = { c => this.openEdit(c, o.id) }
                 let deleteH: ActionHandler = { c => this.askDelete(c, o.id) }
                 div([
@@ -1032,7 +1032,7 @@ class TeamsPage <: Component {
             .add(TableColumn<TeamRow>().label("成员").accessor({ r => r.members.toString() }).width(70))
             .add(TableColumn<TeamRow>().label("组织").accessor({ r => r.orgs.toString() }).width(70))
             .add(TableColumn<TeamRow>().label("包").accessor({ r => r.pkgs.toString() }).width(70))
-            .add(TableColumn<TeamRow>().label("操作").minWidth(260).render({ r, i =>
+            .add(TableColumn<TeamRow>().label("操作").minWidth(380).render({ r, i =>
                 let id = r.doc.id
                 let editH: ActionHandler = { c => this.openEdit(c, id) }
                 let orgH: ActionHandler = { c => this.openOrgs(c, id) }

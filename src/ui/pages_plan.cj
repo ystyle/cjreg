@@ -159,7 +159,7 @@ class PublishPlansPage <: Component {
             }))
             .add(TableColumn<PlanRow>().label("目标上游").accessor({ r => r.upstream }).minWidth(140))
             .add(TableColumn<PlanRow>().label("进度").accessor({ r => "${r.doc.completedCount}/${r.doc.totalCount}" }).width(90))
-            .add(TableColumn<PlanRow>().label("操作").minWidth(150).render({ r, i =>
+            .add(TableColumn<PlanRow>().label("操作").minWidth(180).render({ r, i =>
                 let id = r.doc.id
                 let detailH: ActionHandler = { c => this.gotoDetail(c, id) }
                 let deleteH: ActionHandler = { c => this.askDelete(c, id) }
@@ -734,13 +734,13 @@ class LogsPage <: Component {
         let table = Table<LogDoc>()
             .data(this.rows)
             .stripe()
-            .add(TableColumn<LogDoc>().label("ID").accessor({ l => l.id.toString() }).width(60))
+            .add(TableColumn<LogDoc>().label("ID").accessor({ l => l.id.toString() }).width(50))
             .add(TableColumn<LogDoc>().label("类型").width(80).render({ l, i =>
                 text(this.kindLabel(l.kind))
             }))
             .add(TableColumn<LogDoc>().label("操作者").accessor({ l => l.actorName }).width(100))
-            .add(TableColumn<LogDoc>().label("操作").accessor({ l => l.action }))
-            .add(TableColumn<LogDoc>().label("对象").accessor({ l => l.target }).width(120))
+            .add(TableColumn<LogDoc>().label("操作").accessor({ l => l.action }).minWidth(220).showOverflowTooltip())
+            .add(TableColumn<LogDoc>().label("对象").accessor({ l => l.target }).minWidth(140))
             .add(TableColumn<LogDoc>().label("结果").accessor({ l => l.status }).width(80))
         let confirmDlg = Dialog([
             div([text("确定要清空全部日志吗？此操作不可恢复。")]),

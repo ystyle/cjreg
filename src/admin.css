@@ -4,12 +4,6 @@
 .admin-main { flex: 1; padding: 24px; background: #f5f7fa; }
 .page-title { font-size: 20px; font-weight: 600; margin-bottom: 16px; color: #303133; }
 
-/* 侧边导航（Menu 组件深色适配） */
-.admin-sidebar .el-menu { background: transparent; border-right: none; }
-.admin-sidebar .el-menu-item { color: #c0c4cc; height: 44px; line-height: 44px; }
-.admin-sidebar .el-menu-item:hover { background: rgba(255,255,255,.08); color: #fff; }
-.admin-sidebar .el-menu-item.is-active { background: #409eff; color: #fff; }
-
 .login-container { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: #1d2b3a; flex-direction: column; }
 .login-title { font-size: 22px; font-weight: 600; color: #fff; margin-bottom: 24px; }
 .login-card { background: #fff; border-radius: 8px; padding: 32px; width: 380px; box-shadow: 0 4px 16px rgba(0,0,0,.2); }
@@ -22,7 +16,7 @@
 .brand { font-size: 18px; font-weight: 700; color: #fff; margin-right: 24px; }
 .public-nav .nav-item { color: #c0c4cc; padding: 8px 12px; }
 .public-nav .nav-active { color: #fff; background: transparent; }
-.public-main { max-width: 1080px; margin: 0 auto; padding: 24px; }
+.public-main { max-width: 1280px; margin: 0 auto; padding: 24px; }
 .hero { text-align: center; padding: 48px 0 32px; }
 .hero-title { font-size: 32px; font-weight: 700; color: #303133; margin-bottom: 8px; }
 .hero-sub { font-size: 16px; color: #909399; margin-bottom: 24px; }

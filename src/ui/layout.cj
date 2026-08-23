@@ -31,6 +31,7 @@ public func adminSidebar(activePath: String): IComponent {
     entries.add(("/admin/users", "用户管理"))
     entries.add(("/admin/logs", "日志"))
     let menu = Menu()
+        .dark()
     for ((path, label) in entries) {
         let go: ActionHandler = { c =>
             c.route.push(path)

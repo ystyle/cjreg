@@ -5,11 +5,11 @@
 
 ---
 
-## 阶段 0 — cjxt 能力补齐（前置）
+## 阶段 0 — cjxt 能力补齐（前置）✅ 已完成
 
 **目标**：扫清 cjreg 无法使用 Table/Form 的三个能力缺口。全部为**新增 API，不修改现有签名**。
 
-### 0.1 TableColumn.render（自定义单元格渲染）
+### 0.1 TableColumn.render（自定义单元格渲染）✅
 
 - 位置：`cjxt/src/components/Table.cj`
 - 新增字段：`var _render: Option<(HashMap<String, String>, Int64) -> IComponent> = None`
@@ -17,74 +17,56 @@
 - 行为：`buildDefaultCell` 中当 `_render` 为 Some 时，调用 `fn(row, index)` 得到 IComponent 并作为该列 cell 的内容（替代纯文本/formatter 路径）；返回的组件节点（如 Tag/Button/div）由 `expandTree` 正常展开，handler id 走既有路径派生稳定化机制。
 - 与 `formatter` 并存：render 优先于 formatter。
 
-### 0.2 Table.onRowClick（行点击回调）
+### 0.2 Table.onRowClick（行点击回调）✅
 
 - 位置：`Table.cj`
 - 新增字段：`var _onRowClick: Option<(HashMap<String, String>, Int64) -> PatchResult> = None`
 - 新增方法：`public func onRowClick(fn: (HashMap<String, String>, Int64) -> PatchResult): Table`
 - 行为：`renderRow` 中当设置时给 `<tr>` 绑定 click handler（`{ ctx => fn(row, index) }`）；与 `highlight()`（仅设置 currentRow）并存，互不影响。
 
-### 0.3 FormItem.bindValue（通用取值 getter）
+### 0.3 FormItem.bindValue（通用取值 getter）✅
 
 - 位置：`cjxt/src/components/Form.cj`
 - 新增方法：`public func bindValue(getter: () -> String): FormItem`（写入既有 `_getValue` 字段）
 - 目的：`Signal<Int64>`/`Signal<Bool>` 等非 String 信号也能接入 `FormRule`/`validate()`，调用方用 `{ => signal.get().toString() }` 包装。
 
-### 0.4 测试（TDD，先写失败用例）
+### 0.4 测试（TDD，先写失败用例）✅
 
-- 新增 `cjxt/src/table_test.cj`：
-  - `testColumnRenderInsertsComponent`：Table + render 回调返回 Tag/文本组件，`RenderContext.expandTree` 后断言自定义内容出现在对应单元格。
-  - `testColumnRenderPriorityOverFormatter`：render 与 formatter 同时设置时 render 生效。
-  - `testOnRowClickBindsRowAction`：设置 onRowClick 后展开树中 `<tr>` 带 `data-action-click` 且 handler 可达；未设置时无该属性。
-- 新增 `cjxt/src/form_test.cj`：
-  - `testFormItemBindValueRequired`：bindValue 返回空 → `validate()` false + errorSet；返回非空 → true。
-  - `testFormItemBindValuePattern`：pattern 校验经 bindValue 生效。
-- 运行：`cjpm test`（全量）通过；`cjpm build` 通过。
+- 新增 `cjxt/tests/src/table_test.cj`（独立测试包 `cjxt/tests`，主包无法测 components 子包——cjpm 循环依赖）：
+  - `testColumnRenderInsertsComponent` / `testColumnRenderPriorityOverFormatter` / `testOnRowClickBindsRowAction` / `testNoOnRowClickKeepsRowUntouched`（serializeSubtree JSON 断言）
+- 新增 `cjxt/tests/src/form_test.cj`：
+  - `testFormItemBindValueRequired` / `testFormItemBindValuePattern` / `testFormItemBindValueWithIntGetter`
+- 运行：cjxt 主包 205 个测试 + tests 包 7 个测试全部通过。
 
-### 0.5 提交（cjxt）
+### 0.5 提交（cjxt）✅
 
-- 分支：`feat/table-cell-render`（含 0.1/0.2），`feat/form-bind-value`（含 0.3），各自 squash merge 回 master（或按功能合并为一个分支两次提交，提交信息注明）。
-- 注意：`cjpm` path 依赖会缓存编译产物，cjreg 侧改动前清理 `cjreg/target/release/cjxt/` 缓存。
+- `c79f6e2` feat: Table 自定义单元格渲染 render + 行点击 onRowClick
+- `7d641c6` feat: FormItem.bindValue 通用取值 getter — 非 String 信号接入校验
+- 注：`cjpm` path 依赖会缓存编译产物，cjreg 侧改动前清理 `cjreg/target/release/cjxt/` 缓存。
 
 ---
 
-## 阶段 1 — cjreg 管理列表迁移（用户/组织/团队/上游/发布计划）
+## 阶段 1 — cjreg 管理列表迁移（用户/组织/团队/上游/发布计划）✅ 已完成
 
 **目标**：5 个管理列表页从手写 div 表格迁移到 `Table` + `TableColumn.render` + `Pagination`；对应 Dialog 表单迁移到 `Form` + `FormItem`。
 
-### 1.1 UsersPage（`pages_org.cj`）
+共性模式（每个页面一致）：
+- 新增 `rows/currentPage/pageSize/total` 信号 + `refresh()`（`pageWindow` 切片 + HashMap 行组装）
+- 动作函数改 id 版（`showToken(id)`/`toggleActive(id)`/`askDelete(id)`/`toggleEnabled(id)` 等，经 store `getXxx(id)` 取实体）
+- `renderList()` → `Table().data(rows).stripe().add(TableColumn()...render(...))`；空态 `emptyState`
+- 表单 Dialog → `Form([FormItem([控件])...])` + `bindValue` + `rule(FormRule(...))` + `errorSignal`（表单实例存字段供 `submit` 时 `validate()`）
+- `Pagination`（`layout("total, prev, pager, next, sizes")` + `onChange`）
+- 新增 `src/ui/table_logic.cj`：`pageWindow`（分页窗口切片，page/size 钳制）+ `rowStr`，`table_logic_test.cj` 8 个单测
 
-- 列表：`Table`，列 = ID/用户名/邮箱/角色/状态/操作；角色、状态用 `render` 返回 `Tag`；操作列 `render` 返回按钮组（Token/禁用|启用/删除），数据仍走 `HashMap<String, String>`（id 等字段 `Int64.parse` 转换）。
-- 分页：接入 `Pagination`（外置 `currentPage`/`pageSize`/`total` Signal），过滤条件（无）直接分页。
-- 表单：新增用户 Dialog → `Form` + `FormItem.label(...)` + `rule(FormRule(required: true, ...))`；`submitCreate` 先 `form.validate()` 再提交（保留 `msg` 反馈）。
-- Token/删除确认 Dialog 保持 Dialog + Form（简单内容）。
+### 1.1 UsersPage ✅ / 1.2 OrganizationsPage ✅ / 1.3 TeamsPage ✅ / 1.4 UpstreamsPage ✅ / 1.5 PublishPlansPage ✅
 
-### 1.2 OrganizationsPage
+- TeamsPage 额外：包/成员关联 Dialog 的搜索列表 → 微型 Table（`pkgRows`/`memberRows` 信号，toggle 后原地刷新）
+- agent-browser 冒烟（独立命名会话）：每页表格/分页/Tag/操作按钮渲染、表单必填校验错误显示、创建/启停交互全链路通过
 
-- 同上：列表 Table + render（默认/普通 Tag、编辑/删除按钮）+ Pagination；新增/编辑 Dialog → Form + 校验（组织名 required）；删除确认保留。
+### 1.7 提交（cjreg）✅
 
-### 1.3 TeamsPage
-
-- 列表 Table + render（权限 Tag、成员/组织/包计数、编辑/组织/包/成员/删除按钮组）+ Pagination。
-- 基础表单 Dialog → Form；组织关联 Dialog 的多选 Select、包/成员关联的搜索列表继续使用（包/成员关联列表可保留简易表格或微型 Table）。
-
-### 1.4 UpstreamsPage
-
-- 列表 Table + render（官方/镜像、启用/禁用 Tag、编辑/禁用|启用/删除按钮）+ Pagination。
-- 新增/编辑 Dialog → Form + 校验（名称/URL required；优先级/缓存 InputNumber；Token password）。
-
-### 1.5 PublishPlansPage
-
-- 列表 Table + render（状态 Tag、详情/删除按钮）+ Pagination。
-
-### 1.6 测试与验证
-
-- 抽分页/过滤/行数据组装的纯逻辑为顶层函数并加仓颉单测（`src/ui/` 下可测试性：与 cjxt 示例一致，页面类可直接实例化 + `RenderContext.expandTree` 验证结构；简单场景断言渲染输出）。
-- `cjpm test` 全量通过；`agent-browser` 冒烟（登录 → 各页面 CRUD 操作各一次）。
-
-### 1.7 提交（cjreg）
-
-- 分支：`feat/ui-table-form-migrate`；每页迁移一个提交，最后合并回 master。
+- `b00a84c` 用户管理 / `f321ea9` 组织管理 / `9ed3b04` 团队管理 / `20ffb46` 上游管理 / `79b9535` 发布计划列表
+- 96 个测试全过（88 原有 + 8 新增）
 
 ---
 

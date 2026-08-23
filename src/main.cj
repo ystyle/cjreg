@@ -14,6 +14,7 @@ import ystyle::cjreg.config.*
 import ystyle::cjreg.ui.*
 import cjxt.*
 import cjxt.components.*
+import std.collection.*
 
 func printUsage(): Unit {
     println("cjreg - 仓颉私有中心仓与多仓工具")
@@ -179,7 +180,19 @@ func seedDemoPackages(pkgStore: PackageStore): Unit {
         d.name = name
         d.version = version
         d.cjcVersion = "1.1.0"
-        d.description = "演示包 ${name}"
+        d.description = "演示包 ${name}（CJREG_SEED_DEMO 注入）"
+        d.artifactType = "src"
+        d.executable = true
+        d.authors = ArrayList<String>(["ystyle"])
+        d.repository = "https://atomgit.com/ystyle/${name}"
+        d.homepage = "https://ystyle.top/${name}"
+        d.documentation = "https://ystyle.top/${name}/docs"
+        d.tag = ArrayList<String>(["demo", "cangjie"])
+        d.category = ArrayList<String>(["Utility"])
+        d.license = ArrayList<String>(["MIT"])
+        d.metaVersion = 1
+        d.sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        d.tarballSize = 1024
         d.indexJson = "{\"name\":\"${name}\",\"organization\":\"${org}\",\"version\":\"${version}\",\"sha256sum\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}"
         pkgStore.save(d)
         injected++

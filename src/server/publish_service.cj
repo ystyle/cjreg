@@ -10,6 +10,7 @@ import stdx.encoding.hex.toHexString
 import stdx.encoding.json.stream.*
 import std.io.*
 import std.collection.*
+import std.convert.*
 
 // 发布结果
 public enum PublishOutcome {
@@ -127,12 +128,26 @@ public class PublishService {
         // 6. 制品字节存 blob（sha256 寻址，供发布计划执行推送到目标上游）
         this.blobStore.put(actualSha, pd.tarball)
 
-        // 7. 入库
+        // 7. 入库（全量元数据字段，对齐官方 meta-data 规格）
         let doc = PackageDoc()
         doc.organization = metaInfo.org
         doc.name = metaInfo.name
         doc.version = metaInfo.version
+        doc.cjcVersion = metaInfo.cjcVersion
+        doc.description = metaInfo.description
+        doc.artifactType = metaInfo.artifactType
+        doc.executable = metaInfo.executable
+        doc.authors = metaInfo.authors
+        doc.repository = metaInfo.repository
+        doc.homepage = metaInfo.homepage
+        doc.documentation = metaInfo.documentation
+        doc.tag = metaInfo.tag
+        doc.category = metaInfo.category
+        doc.license = metaInfo.license
+        doc.metaVersion = metaInfo.metaVersion
         doc.indexJson = String.fromUtf8(pd.metaData)
+        doc.sha256 = actualSha
+        doc.tarballSize = pd.tarball.size
         this.store.save(doc)
         return PublishResult(PublishOutcome.Ok, doc.id, "published")
     }
@@ -144,6 +159,19 @@ public class MetaInfo {
     public var name: String
     public var version: String
     public var sha256sum: String
+    // meta-data.json 展示字段（官方规格）
+    public var cjcVersion: String = ""
+    public var description: String = ""
+    public var artifactType: String = "src"
+    public var executable: Bool = false
+    public var authors: ArrayList<String> = ArrayList<String>()
+    public var repository: String = ""
+    public var homepage: String = ""
+    public var documentation: String = ""
+    public var tag: ArrayList<String> = ArrayList<String>()
+    public var category: ArrayList<String> = ArrayList<String>()
+    public var license: ArrayList<String> = ArrayList<String>()
+    public var metaVersion: Int64 = 1
 
     public init(org: String, name: String, version: String, sha256sum: String) {
         this.org = org
@@ -153,8 +181,22 @@ public class MetaInfo {
     }
 }
 
-// 从 meta-data.json 解析 name/org/version 与 index.sha256sum
-// meta 顶层含 organization/name/version；sha256sum 在嵌套 index 对象内
+// 字符串数组读取（meta 的 authors/tag/category/license）
+func readStringArray(r: JsonReader, out: ArrayList<String>): Unit {
+    let token = r.peek()
+    match (token) {
+        case Some(JsonToken.BeginArray) =>
+            r.startArray()
+            while (r.peek() != EndArray) {
+                out.add(r.readValue<String>())
+            }
+            r.endArray()
+        case _ => r.skip()
+    }
+}
+
+// 从 meta-data.json 解析全部元数据字段（官方规格对齐）
+// meta 顶层含 organization/name/version/cjc-version/description/...；sha256sum 在嵌套 index 对象内
 public func parseMetaJson(metaBytes: Array<Byte>): ?MetaInfo {
     let body = String.fromUtf8(metaBytes)
     let bb = ByteBuffer()
@@ -164,6 +206,18 @@ public func parseMetaJson(metaBytes: Array<Byte>): ?MetaInfo {
     var name = ""
     var version = ""
     var sha = ""
+    var cjcVersion = ""
+    var description = ""
+    var artifactType = "src"
+    var executable = false
+    let authors = ArrayList<String>()
+    var repository = ""
+    var homepage = ""
+    var documentation = ""
+    let tag = ArrayList<String>()
+    let category = ArrayList<String>()
+    let license = ArrayList<String>()
+    var metaVersion: Int64 = 1
     try {
         while (let Some(v) <- r.peek()) {
             match (v) {
@@ -175,6 +229,24 @@ public func parseMetaJson(metaBytes: Array<Byte>): ?MetaInfo {
                             case "organization" => org = r.readValue<String>()
                             case "name" => name = r.readValue<String>()
                             case "version" => version = r.readValue<String>()
+                            case "cjc-version" => cjcVersion = r.readValue<String>()
+                            case "description" => description = r.readValue<String>()
+                            case "artifact-type" => artifactType = r.readValue<String>()
+                            case "executable" => executable = r.readValue<Bool>()
+                            case "authors" => readStringArray(r, authors)
+                            case "repository" => repository = r.readValue<String>()
+                            case "homepage" => homepage = r.readValue<String>()
+                            case "documentation" => documentation = r.readValue<String>()
+                            case "tag" => readStringArray(r, tag)
+                            case "category" => readStringArray(r, category)
+                            case "license" => readStringArray(r, license)
+                            case "meta-version" =>
+                                let mv = r.peek()
+                                match (mv) {
+                                    case Some(JsonToken.JsonString) => metaVersion = Int64.parse(r.readValue<String>())
+                                    case Some(JsonToken.JsonNumber) => metaVersion = r.readValue<Int64>()
+                                    case _ => r.skip()
+                                }
                             case "index" =>
                                 // 进入嵌套 index 对象取 sha256sum
                                 r.startObject()
@@ -191,7 +263,20 @@ public func parseMetaJson(metaBytes: Array<Byte>): ?MetaInfo {
                         }
                     }
                     r.endObject()
-                    return Some(MetaInfo(org, name, version, sha))
+                    let info = MetaInfo(org, name, version, sha)
+                    info.cjcVersion = cjcVersion
+                    info.description = description
+                    info.artifactType = artifactType
+                    info.executable = executable
+                    info.authors = authors
+                    info.repository = repository
+                    info.homepage = homepage
+                    info.documentation = documentation
+                    info.tag = tag
+                    info.category = category
+                    info.license = license
+                    info.metaVersion = metaVersion
+                    return Some(info)
                 case _ => r.skip()
             }
         }

@@ -22,9 +22,9 @@ func makeProxyService(): (ProxyService, PackageStore, MemoryBlobStore, UpstreamS
     (proxy, pkgStore, blob, ups)
 }
 
-// 构造一个包索引 NDJSON
+// 构造一个包索引 NDJSON（含 cjc-version）
 func makeIndexNDJSON(name: String, org: String, version: String, sha: String): String {
-    "{\"organization\":\"${org}\",\"name\":\"${name}\",\"version\":\"${version}\",\"sha256sum\":\"${sha}\",\"yanked\":false,\"index-version\":1}\n"
+    "{\"organization\":\"${org}\",\"name\":\"${name}\",\"version\":\"${version}\",\"cjc-version\":\"1.1.0\",\"sha256sum\":\"${sha}\",\"yanked\":false,\"index-version\":1}\n"
 }
 
 @Test
@@ -38,6 +38,9 @@ func testCacheIndexEntries() {
     @Expect(versions.size, 2)
     // 来源标记
     @Expect(versions[0].upstreamName, "official")
+    // index 条目字段入列：cjc-version / sha256
+    @Expect(versions[0].cjcVersion, "1.1.0")
+    @Expect(versions[0].sha256, "sha1")
     // 重复缓存不覆盖
     proxy.cacheIndexEntries("test", "lib", ndjson, proxy.upstreamSvc.getByName("official").getOrThrow())
     @Expect(pkgStore.listVersions("test", "lib").size, 2)

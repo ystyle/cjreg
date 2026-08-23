@@ -50,6 +50,31 @@ func makePublishBody(org: String, name: String, version: String, sha: String): A
     toByteArray(buf)
 }
 
+// 构造带完整展示字段的 meta（官方规格全字段）
+func makeMetaFullJson(org: String, name: String, version: String, sha: String): String {
+    "{\"organization\":\"${org}\",\"name\":\"${name}\",\"version\":\"${version}\"," +
+    "\"cjc-version\":\"1.1.3\",\"description\":\"demo package\"," +
+    "\"artifact-type\":\"src\",\"executable\":true," +
+    "\"authors\":[\"Tom\",\"Joan\"],\"repository\":\"https://github.com/x/demo\"," +
+    "\"homepage\":\"https://demo.example.com\",\"documentation\":\"https://demo.example.com/docs\"," +
+    "\"tag\":[\"cangjie\",\"cjpm\"],\"category\":[\"Network\"],\"license\":[\"Apache-2.0\"]," +
+    "\"meta-version\":1,\"index\":{\"sha256sum\":\"${sha}\",\"index-version\":1}}"
+}
+
+// 全字段 meta + tar 的发布 body（用于入库字段断言）
+func makePublishBodyFull(org: String, name: String, version: String): Array<Byte> {
+    let tar: Array<Byte> = [UInt8(31), UInt8(139), UInt8(8), UInt8(0), UInt8(1)]
+    let meta = makeMetaFullJson(org, name, version, sha256Hex(tar))
+    let buf = ArrayList<Byte>()
+    for (b in makeSection(META_VERSION, meta.toArray())) {
+        buf.add(b)
+    }
+    for (b in makeSection(TARBALL_VERSION, tar)) {
+        buf.add(b)
+    }
+    toByteArray(buf)
+}
+
 // 让 meta 的 sha 与指定 tar 一致
 func makePublishBodyWithTar(org: String, name: String, version: String, tar: Array<Byte>): Array<Byte> {
     let sha = sha256Hex(tar)
@@ -88,6 +113,50 @@ func testPublishOk() {
     // 同版本同 sha → 幂等 Ok
     let r2 = svc.publish("test", "demo", body)
     @Expect(r2.outcome == PublishOutcome.Ok, true)
+}
+
+@Test
+func testParseMetaFullFields() {
+    let meta = makeMetaFullJson("test", "demo", "1.0.0", "abc123")
+    let info = parseMetaJson(meta.toArray())
+    @Expect(info.isSome(), true)
+    let m = info.getOrThrow()
+    @Expect(m.org, "test")
+    @Expect(m.name, "demo")
+    @Expect(m.version, "1.0.0")
+    @Expect(m.sha256sum, "abc123")
+    @Expect(m.cjcVersion, "1.1.3")
+    @Expect(m.description, "demo package")
+    @Expect(m.artifactType, "src")
+    @Expect(m.executable, true)
+    @Expect(m.authors.size, 2)
+    @Expect(m.authors[0], "Tom")
+    @Expect(m.repository, "https://github.com/x/demo")
+    @Expect(m.homepage, "https://demo.example.com")
+    @Expect(m.documentation, "https://demo.example.com/docs")
+    @Expect(m.tag.size, 2)
+    @Expect(m.category.size, 1)
+    @Expect(m.license[0], "Apache-2.0")
+    @Expect(m.metaVersion, 1)
+}
+
+@Test
+func testPublishStoresFullMetadata() {
+    let svc = makePublishService()
+    let body = makePublishBodyFull("test", "demo", "2.0.0")
+    let r = svc.publish("test", "demo", body)
+    @Expect(r.outcome == PublishOutcome.Ok, true)
+    let versions = svc.store.listVersions("test", "demo")
+    @Expect(versions.size, 1)
+    let d = versions[0]
+    @Expect(d.description, "demo package")
+    @Expect(d.cjcVersion, "1.1.3")
+    @Expect(d.executable, true)
+    @Expect(d.authors.size, 2)
+    @Expect(d.license.size, 1)
+    @Expect(d.metaVersion, 1)
+    @Expect(d.sha256 == sha256Hex([UInt8(31), UInt8(139), UInt8(8), UInt8(0), UInt8(1)]), true)
+    @Expect(d.tarballSize, 5)
 }
 
 @Test

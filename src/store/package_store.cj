@@ -26,7 +26,8 @@ public class PackageDoc {
     public var tag: ArrayList<String> = ArrayList<String>()
     public var category: ArrayList<String> = ArrayList<String>()
     public var license: ArrayList<String> = ArrayList<String>()
-    public var indexJson: String = ""   // 完整 index 条目 JSON（原样保存）
+    public var metaVersion: Int64 = 1       // meta-data 规格版本号（meta-version）
+    public var indexJson: String = ""   // 完整 meta-data.json 原文（含嵌套 index 条目，原样保存，展示/提取用）
 
     // 服务端附加字段
     public var publisherId: Int64 = 0        // 发布者用户 ID
@@ -34,6 +35,8 @@ public class PackageDoc {
     public var upstreamId: Int64 = 0         // 来源上游 ID（回源落库）
     public var upstreamName: String = ""     // 来源上游名
     public var readme: String = ""           // 提取的 README（可选）
+    public var sha256: String = ""           // 制品 SHA-256（独立列，发布校验值 / 索引 sha256sum）
+    public var tarballSize: Int64 = 0        // 制品字节数（回源缓存为 0，发布为实际大小）
     public var deletedAt: Int64 = 0          // 软删除时间戳（0 = 未删除）
     public var createdAt: Int64 = 0
     public var updatedAt: Int64 = 0

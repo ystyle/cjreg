@@ -177,6 +177,9 @@ public class ProxyService {
             doc.organization = e.organization
             doc.name = e.name
             doc.version = e.version
+            // index 条目含 cjc-version/sha256sum（展示字段不在索引协议内，保持空）
+            doc.cjcVersion = e.cjcVersion
+            doc.sha256 = e.sha256sum
             doc.upstreamId = up.id
             doc.upstreamName = up.name
             // 每个 doc 只存对应版本的单行索引（避免多行取 [0] 导致重复）

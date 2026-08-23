@@ -9,9 +9,13 @@
 .login-card { background: #fff; border-radius: 8px; padding: 32px; width: 380px; box-shadow: 0 4px 16px rgba(0,0,0,.2); }
 .login-error { color: #f56c6c; font-size: 13px; margin: 8px 0; }
 .toolbar { display: flex; gap: 12px; margin-bottom: 16px; align-items: center; }
-.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 16px; }
-.stat-card { background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
-.stat-label { font-size: 13px; color: #909399; margin-top: 4px; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 20px; margin-bottom: 24px; }
+.stat-card { background: #fff; border-radius: 10px; padding: 20px 24px; box-shadow: 0 2px 8px rgba(0,0,0,.06); display: flex; align-items: center; transition: box-shadow .2s; }
+.stat-card:hover { box-shadow: 0 6px 18px rgba(0,0,0,.1); }
+.stat-card-inner { display: flex; align-items: center; gap: 16px; width: 100%; }
+.stat-card-icon { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.stat-card-text { flex: 1; min-width: 0; }
+.page-subtitle { font-size: 14px; color: #909399; margin: -8px 0 18px; }
 .public-nav { display: flex; align-items: center; gap: 8px; background: #1d2b3a; padding: 0 24px; height: 56px; }
 .brand { font-size: 18px; font-weight: 700; color: #fff; margin-right: 24px; }
 .public-nav .nav-item { color: #c0c4cc; padding: 8px 12px; }

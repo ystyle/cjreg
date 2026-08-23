@@ -8,14 +8,29 @@ import ystyle::cjreg.store.*
 import ystyle::cjreg.config.*
 import std.collection.*
 import std.convert.*
+import std.time.*
 
 // ===== 仪表盘 =====
 @Page["/admin", "仪表盘", requireAdmin]
 class DashboardPage <: Component {
     var state: Option<CjregState> = None
+    // 最近操作日志（Table 信号）
+    var recentLogs = Signal<ArrayList<LogDoc>>(ArrayList<LogDoc>())
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
+        refreshLogs()
+    }
+
+    func refreshLogs(): Unit {
+        match (this.state) {
+            case Some(st) =>
+                let logs = st.adminData.listLogs(Option<String>.None, 8)
+                let data = ArrayList<LogDoc>()
+                for (l in logs) { data.add(l) }
+                this.recentLogs.set(data)
+            case None => ()
+        }
     }
 
     public func render(): IComponent {
@@ -26,54 +41,100 @@ class DashboardPage <: Component {
         let allPkgs = st.pkgStore.storm.all<PackageDoc>()
         var versions: Int64 = 0
         var downloads: Int64 = 0
+        var deletedPkgs: Int64 = 0
         for (d in allPkgs) {
-            versions++
+            if (d.deletedAt != 0) {
+                deletedPkgs++
+            } else {
+                versions++
+            }
             downloads += d.downloadCount
         }
-        let userCount = st.userStore.listAllUsers().size
-        let upCount = st.upStore.listAll().size
-        let planCount = st.adminData.listPlans().size
-        let logCount = st.adminData.listLogs(Option<String>.None, 1000).size
+        // 用户
+        let users = st.userStore.listAllUsers()
+        var disabledUsers: Int64 = 0
+        for (u in users) {
+            if (!u.isActive) { disabledUsers++ }
+        }
+        // 上游
+        let ups = st.upStore.listAll()
+        var enabledUps: Int64 = 0
+        for (u in ups) {
+            if (u.enabled) { enabledUps++ }
+        }
+        // 计划
+        let plans = st.adminData.listPlans()
+        var runningPlans: Int64 = 0
+        for (p in plans) {
+            if (p.status == "running") { runningPlans++ }
+        }
+        // 日志
+        let logs = st.adminData.listLogs(Option<String>.None, 1000)
+        var failedLogs: Int64 = 0
+        for (l in logs) {
+            if (l.status == "failed") { failedLogs++ }
+        }
         let stats = ArrayList<IComponent>()
-        stats.add(statCard("${allPkgs.size}", "包总数"))
-        stats.add(statCard("${versions}", "版本总数"))
-        stats.add(statCard("${downloads}", "累计下载"))
-        stats.add(statCard("${userCount}", "用户数"))
-        stats.add(statCard("${upCount}", "上游数"))
-        stats.add(statCard("${planCount}", "发布计划"))
-        stats.add(statCard("${logCount}", "日志条数"))
-        // 快捷入口
-        let quick = ArrayList<IComponent>()
-        quick.add(quickLink("/admin/packages", "包管理"))
-        quick.add(quickLink("/admin/upstreams", "上游管理"))
-        quick.add(quickLink("/admin/publish-plans", "发布计划"))
-        quick.add(quickLink("/admin/organizations", "组织管理"))
-        quick.add(quickLink("/admin/teams", "团队管理"))
-        quick.add(quickLink("/admin/users", "用户管理"))
-        quick.add(quickLink("/admin/logs", "日志"))
+        stats.add(statCard("${allPkgs.size}", "包总数", "view", "#409eff"))
+        stats.add(statCard("${versions}", "发布版本", "more", "#409eff"))
+        stats.add(statCard("${downloads}", "累计下载", "arrow-down", "#67c23a"))
+        stats.add(statCard("${deletedPkgs}", "软删包", "circle-close", "#f56c6c"))
+        stats.add(statCard("${users.size}", "注册用户", "user", "#e6a23c"))
+        stats.add(statCard("${disabledUsers}", "禁用用户", "lock", "#f56c6c"))
+        stats.add(statCard("${ups.size}", "上游总数", "arrow-up", "#409eff"))
+        stats.add(statCard("${enabledUps}", "启用上游", "check", "#67c23a"))
+        stats.add(statCard("${plans.size}", "发布计划", "calendar", "#9b59b6"))
+        stats.add(statCard("${runningPlans}", "执行中", "loading", "#e6a23c"))
+        stats.add(statCard("${logs.size}", "操作日志", "edit", "#909399"))
+        stats.add(statCard("${failedLogs}", "失败操作", "error-filled", "#f56c6c"))
+        // 最近操作
+        let recentTable = Table<LogDoc>()
+            .data(this.recentLogs)
+            .stripe()
+            .add(TableColumn<LogDoc>().label("时间").width(150).render({ l, i =>
+                text(formatLogTime(l.createdAt))
+            }))
+            .add(TableColumn<LogDoc>().label("操作者").accessor({ l => l.actorName }).width(110))
+            .add(TableColumn<LogDoc>().label("操作").accessor({ l => l.action }).minWidth(260).showOverflowTooltip())
+            .add(TableColumn<LogDoc>().label("对象").accessor({ l => l.target }).minWidth(150).showOverflowTooltip())
+            .add(TableColumn<LogDoc>().label("结果").width(80).render({ l, i =>
+                if (l.status == "ok") {
+                    Tag([text("成功")]).kind(ComponentKind.Success)
+                } else {
+                    Tag([text("失败")]).kind(ComponentKind.Danger)
+                }
+            }))
         adminLayout("/admin", [
             div([text("仪表盘")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
+            div([text("仓库运行概览")], attrs: Some(HashMap<String, String>([("class", cls("page-subtitle"))]))),
             div(stats.toArray(), attrs: Some(HashMap<String, String>([("class", cls("stat-grid"))]))),
-            adminCard("快捷入口", [
-                div(quick.toArray(), attrs: Some(HashMap<String, String>([("class", cls("stat-grid"))]))),
-            ]),
+            adminCard("最近操作", [recentTable]),
         ])
     }
 }
 
-// 快捷入口卡片
-func quickLink(path: String, label: String): IComponent {
-    let go: ActionHandler = { c =>
-        c.route.push(path)
-        PatchResult.ReRender
-    }
+// 统计卡：左侧彩色圆底图标 + Statistic 指标，顶部色条
+func statCard(value: String, label: String, icon: String, color: String): IComponent {
     div([
-        div([text(label)], attrs: Some(HashMap<String, String>([("class", cls("stat-label"))]))),
-    ], attrs: Some(HashMap<String, String>([("class", cls("stat-card"))]))).onClick(go)
+        div([
+            div([
+                Icon(icon).size("20px").color("#ffffff"),
+            ], attrs: Some(HashMap<String, String>([("class", cls("stat-card-icon")), ("style", "background-color: ${color}")]))),
+            div([
+                Statistic()
+                    .title(label)
+                    .value(value)
+                    .valueStyle("font-size: 26px; font-weight: 700; color: #303133"),
+            ], attrs: Some(HashMap<String, String>([("class", cls("stat-card-text"))]))),
+        ], attrs: Some(HashMap<String, String>([("class", cls("stat-card-inner"))]))),
+    ], attrs: Some(HashMap<String, String>([("class", cls("stat-card")),
+        ("style", "border-top: 3px solid ${color}")])))
 }
 
-func statCard(value: String, label: String): IComponent {
-    Statistic().title(label).value(value)
+// 秒级时间戳 → 可读时间（本地时区）
+func formatLogTime(ms: Int64): String {
+    if (ms <= 0) { return "-" }
+    DateTime.fromUnixTimeStamp(Duration.millisecond * ms).inLocal().format("MM-dd HH:mm")
 }
 
 // ===== 上游管理 =====

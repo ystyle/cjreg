@@ -50,10 +50,10 @@ class PublicHome <: Component {
         }
         let users = st.userStore.listAllUsers().size
         let stats = ArrayList<IComponent>()
-        stats.add(statCard("${all.size}", "包总数"))
-        stats.add(statCard("${versions}", "版本总数"))
-        stats.add(statCard("${users}", "注册用户"))
-        stats.add(statCard("${downloads}", "累计下载"))
+        stats.add(statCard("${all.size}", "包总数", "view", "#409eff"))
+        stats.add(statCard("${versions}", "版本总数", "more", "#409eff"))
+        stats.add(statCard("${users}", "注册用户", "user", "#e6a23c"))
+        stats.add(statCard("${downloads}", "累计下载", "arrow-down", "#67c23a"))
         div([
             publicNav("/"),
             div([

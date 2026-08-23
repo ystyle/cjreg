@@ -117,3 +117,18 @@
 4. ⚠️ `admin.css` 手写样式段全部移除（被组件替代的 100% 清除），总行数 49 → 36（-26%，未到 50% 目标——剩余为布局骨架/公开页自绘样式，属必要保留）。
 5. ✅ cjxt 新增/修改 API（TableColumn.render、Table.onRowClick+ctx、FormItem.bindValue）全部带单元测试（tests 包 7 个）；cjreg 新增纯逻辑 pageWindow/rowStr 8 个单测。
 6. ✅ cjxt 主包 205 测试、cjreg 96 测试全过；管理端 + 公开页 agent-browser 冒烟全链路通过。
+
+---
+
+## 追加：阶段 G — Table<T> 泛型化 ✅ 已完成（2026-08-24）
+
+用户质疑点：为什么 Table 数据模型是 `Signal<ArrayList<HashMap<String, String>>>`？因为 cjxt Table 组件早期设计就是字符串行模型（对齐 EP prop 字符串索引 + 前后端 JSON 直通 + 组件早期实现简化），导致每个页面都要手工做「实体 → HashMap」组装和 `Int64.parse` 转回。
+
+**解决：Table/TableColumn 泛型化为 `Table<T>`**（cjxt `0014779`，cjreg `997fd00`）：
+
+- `TableColumn<T>.accessor((T) -> String)`：文本列取值 + 排序依据；`formatter((String)->String)` 保留；`render((T,Int64) -> IComponent)` 优先
+- `Table<T>.data(Signal<ArrayList<T>>)`、`rowKey((T)->String)`（选择/当前行唯一键）、`onRowClick((T,Int64,ActionContext)->PatchResult)`
+- 排序抽出顶层纯函数 `sortByAccessor<T>`（13 个泛型测试 + showcase TableRow 演示）
+- cjreg 11 处表格全部迁移：`Table<User>`/`Table<OrgDoc>`/`Table<TeamRow>`/`Table<Upstream>`/`Table<PlanRow>`/`Table<PackageDoc>`/`Table<PlanItemDoc>`/`Table<LogDoc>`/`Table<PkgRow>`/`Table<MemberRow>`/`Table<PkgChoice>`
+- 行视图类型只保留实体外的派生字段（计数/上游名/关联标记），`m["x"]=...` 组装样板、`rowStr`/`Int64.parse` 转回全部删除（净 -42 行）
+- 破坏性变更（Table 需类型参数），cjxt showcase/harness 无兼容负担；cjreg 单测 95 全过 + agent-browser 冒烟通过

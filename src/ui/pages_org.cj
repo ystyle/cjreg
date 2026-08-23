@@ -360,6 +360,11 @@ class UsersPage <: Component {
 class OrganizationsPage <: Component {
     var state: Option<CjregState> = None
     var msg = Signal<String>("")
+    // 行数据 + 分页
+    var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    var currentPage = Signal<Int64>(1)
+    var pageSize = Signal<Int64>(20)
+    var total = Signal<Int64>(0)
     // 新增/编辑 Dialog
     var dialogVisible = Signal<Bool>(false)
     var dialogMode = Signal<String>("create")
@@ -368,6 +373,8 @@ class OrganizationsPage <: Component {
     var formDisplay = Signal<String>("")
     var formDesc = Signal<String>("")
     var formIsDefault = Signal<Bool>(false)
+    var nameError = Signal<String>("")
+    var orgForm = Form([])
     // 删除确认
     var confirmVisible = Signal<Bool>(false)
     var pendingDeleteId: Int64 = 0
@@ -375,6 +382,37 @@ class OrganizationsPage <: Component {
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
+        refresh()
+    }
+
+    // 分页切片 + 行数据组装
+    func refresh(): Unit {
+        match (this.state) {
+            case Some(st) =>
+                let orgs = st.adminData.listOrgs()
+                this.total.set(orgs.size)
+                let (start, end) = pageWindow(orgs.size, this.currentPage.get(), this.pageSize.get())
+                let data = ArrayList<HashMap<String, String>>()
+                var i = start
+                while (i < end) {
+                    let o = orgs[i]
+                    let m = HashMap<String, String>()
+                    m["id"] = o.id.toString()
+                    m["name"] = o.name
+                    m["displayName"] = o.displayName
+                    m["description"] = o.description
+                    m["isDefault"] = if (o.isDefault) { "1" } else { "0" }
+                    data.add(m)
+                    i++
+                }
+                this.rows.set(data)
+            case None => ()
+        }
+    }
+
+    func onPageChange(ctx: ActionContext): PatchResult {
+        this.refresh()
+        PatchResult.ReRender
     }
 
     // ===== 新增/编辑 =====
@@ -384,6 +422,7 @@ class OrganizationsPage <: Component {
         this.formDisplay.set("")
         this.formDesc.set("")
         this.formIsDefault.set(false)
+        this.nameError.set("")
         this.dialogVisible.set(true)
         PatchResult.ReRender
     }
@@ -421,14 +460,13 @@ class OrganizationsPage <: Component {
             this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
+        if (!this.orgForm.validate()) {
+            return PatchResult.ReRender
+        }
         let name = this.formName.get()
         let display = this.formDisplay.get()
         let desc = this.formDesc.get()
         let isDefault = this.formIsDefault.get()
-        if (name.isEmpty()) {
-            this.msg.set("组织名必填")
-            return PatchResult.ReRender
-        }
         let uid = sessionUid(ctx)
         let uname = sessionUsername(ctx)
         if (this.dialogMode.get() == "create") {
@@ -444,14 +482,23 @@ class OrganizationsPage <: Component {
             }
         }
         this.dialogVisible.set(false)
+        this.refresh()
         PatchResult.ReRender
     }
 
     // ===== 删除 =====
-    func askDelete(ctx: ActionContext, o: OrgDoc): PatchResult {
-        this.pendingDeleteId = o.id
-        this.pendingDeleteName = o.name
-        this.confirmVisible.set(true)
+    func askDelete(ctx: ActionContext, id: Int64): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        match (st.adminData.getOrg(id)) {
+            case Some(o) =>
+                this.pendingDeleteId = o.id
+                this.pendingDeleteName = o.name
+                this.confirmVisible.set(true)
+            case None => ()
+        }
         PatchResult.ReRender
     }
 
@@ -481,48 +528,33 @@ class OrganizationsPage <: Component {
     }
 
     // ===== 渲染 =====
-    func renderOrgRow(o: OrgDoc): IComponent {
-        let editHandler: ActionHandler = { c => this.openEdit(c, o.id) }
-        let deleteHandler: ActionHandler = { c => this.askDelete(c, o) }
-        let defaultTag = if (o.isDefault) {
-            Tag([text("默认")]).kind(ComponentKind.Primary)
-        } else {
-            Tag([text("普通")]).kind(ComponentKind.Info)
-        }
-        div([
-            div([text(o.id.toString())], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(o.name)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(o.displayName)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(o.description)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([defaultTag], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([
-                Button([text("编辑")]).size(ButtonSize.Small).onClick(editHandler),
-                Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteHandler),
-            ], attrs: Some(HashMap<String, String>([("class", cls("admin-td") + " " + cls("admin-actions"))]))),
-        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr"))])))
-    }
-
     func renderList(): IComponent {
-        let orgs = match (this.state) {
-            case Some(st) => st.adminData.listOrgs()
-            case None => ArrayList<OrgDoc>()
-        }
-        if (orgs.size == 0) {
+        if (this.rows.get().size == 0) {
             return emptyState("暂无组织，点击「新增组织」创建")
         }
-        let rows = ArrayList<IComponent>()
-        rows.add(div([
-            div([text("ID")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("组织名")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("显示名")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("描述")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("默认")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("操作")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr") + " " + cls("admin-th"))]))))
-        for (o in orgs) {
-            rows.add(this.renderOrgRow(o))
-        }
-        div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("admin-table"))])))
+        Table()
+            .data(this.rows)
+            .stripe()
+            .add(TableColumn().label("ID").colProp("id").width(60))
+            .add(TableColumn().label("组织名").colProp("name").minWidth(140))
+            .add(TableColumn().label("显示名").colProp("displayName").minWidth(140))
+            .add(TableColumn().label("描述").colProp("description").minWidth(200))
+            .add(TableColumn().label("默认").colProp("isDefault").width(80).render({ r, i =>
+                if (r["isDefault"] == "1") {
+                    Tag([text("默认")]).kind(ComponentKind.Primary)
+                } else {
+                    Tag([text("普通")]).kind(ComponentKind.Info)
+                }
+            }))
+            .add(TableColumn().label("操作").colProp("id").minWidth(160).render({ r, i =>
+                let id = Int64.parse(r["id"], radix: 10)
+                let editH: ActionHandler = { c => this.openEdit(c, id) }
+                let deleteH: ActionHandler = { c => this.askDelete(c, id) }
+                div([
+                    Button([text("编辑")]).size(ButtonSize.Small).onClick(editH),
+                    Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteH),
+                ])
+            }))
     }
 
     func renderFormDialog(): IComponent {
@@ -533,18 +565,20 @@ class OrganizationsPage <: Component {
         } else {
             Input().bind(this.formName)
         }
-        let dlg = Dialog([
-            div([
-                div([text("组织名")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
-                nameInput,
-                div([text("显示名")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
-                Input().bind(this.formDisplay).placeholder("可选"),
-                div([text("描述")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
-                Input().bind(this.formDesc).placeholder("可选"),
-                div([text("默认组织")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
-                Switch().bind(this.formIsDefault).activeText("默认").inactiveText("普通"),
-            ], attrs: Some(HashMap<String, String>([("class", cls("dialog-form"))]))),
-        ])
+        let form = Form([
+            FormItem([nameInput]).label("组织名")
+                .bindValue({ => this.formName.get() })
+                .rule(FormRule(required: true, message: "组织名必填"))
+                .errorSignal(this.nameError),
+            FormItem([Input().bind(this.formDisplay).placeholder("可选")]).label("显示名")
+                .bindValue({ => this.formDisplay.get() }),
+            FormItem([Input().bind(this.formDesc).placeholder("可选")]).label("描述")
+                .bindValue({ => this.formDesc.get() }),
+            FormItem([Switch().bind(this.formIsDefault).activeText("默认").inactiveText("普通")]).label("默认组织")
+                .bindValue({ => if (this.formIsDefault.get()) { "1" } else { "0" } }),
+        ]).labelTop()
+        this.orgForm = form
+        let dlg = Dialog([form])
             .visible(this.dialogVisible)
             .title(title)
             .width("440px")
@@ -580,9 +614,15 @@ class OrganizationsPage <: Component {
                 div()
             },
         ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))])))
+        let pager = Pagination()
+            .currentPage(this.currentPage)
+            .pageSize(this.pageSize)
+            .total(this.total.get())
+            .layout("total, prev, pager, next, sizes")
+            .onChange(onPageChange)
         adminLayout("/admin/organizations", [
             div([text("组织管理")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
-            adminCard("组织列表", [toolbar, this.renderList(), this.renderFormDialog(), this.renderConfirmDialog()]),
+            adminCard("组织列表", [toolbar, this.renderList(), pager, this.renderFormDialog(), this.renderConfirmDialog()]),
         ])
     }
 }

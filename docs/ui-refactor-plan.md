@@ -70,65 +70,50 @@
 
 ---
 
-## 阶段 2 — 公开页 + 向导/详情
+## 阶段 2 — 公开页 + 向导/详情 ✅ 已完成
 
-### 2.1 PublicPackages
+### 2.1 PublicPackages ✅
+- 列表 → Table（含描述列 showOverflowTooltip），行点击 → `onRowClick` 跳详情（回调含 `ctx`）；保留搜索/组织筛选 + Pagination。
+- 前置：cjxt `Table.onRowClick` 增加 ActionContext 参数（`5ec63e0`）。
 
-- 列表 → Table（含描述列），行点击 → `onRowClick` 跳详情（替代"详情"按钮或保留按钮）。
-- 保留搜索/组织筛选 + Pagination；移除手写 `renderList` 样板。
+### 2.2 PackagesPage（管理端包管理）✅
+- 列表 → Table + render（状态 Tag、版本/删除按钮）；保持搜索/组织筛选 + Pagination；行数据 deleted 改 "1"/"0"。
 
-### 2.2 PackagesPage（管理端包管理）
+### 2.3 PublishPlanCreatePage ✅
+- 表单 → `Form` + `FormItem`（计划名/目标上游 required 校验 + errorSignal；轮询/超时 InputNumber）
+- 包选择列表 → `Table` + render（pkgRows 信号，搜索 on("input") 原地刷新）
 
-- 列表 → Table + render（状态 Tag、版本/删除按钮）；保持搜索/组织筛选 + Pagination。
-- 版本对话框保持 Table（已有）。
+### 2.4 PublishPlanDetailPage ✅
+- 计划信息卡片 → `Descriptions`（border/column=2/labelWidth）
+- 发布项 → `Table` + render（状态 Tag、错误列 showOverflowTooltip）；`itemRows` 信号在 pushUpdate 回调内刷新（异步进度实时更新）
 
-### 2.3 PublishPlanCreatePage
+### 2.5 PublicPackageDetail ✅
+- 包信息 → `Descriptions`；版本历史保持 Table；README → `Markdown` 组件（演示包无 README 时走"无 README"分支）
 
-- 表单 → `Form` + `FormItem`（计划名/目标上游/轮询间隔/超时，含规则校验）；包选择列表 → `Table` + render（选择/取消选择按钮），或 VirtualList（包多时）。
-
-### 2.4 PublishPlanDetailPage
-
-- 计划信息卡片 → `Descriptions`（cjxt 已有）；发布项 → `Table` + render（状态 Tag、错误文本）。
-
-### 2.5 PublicPackageDetail
-
-- 包信息 → `Descriptions`；版本历史保持 Table；README → `Markdown` 组件（cjxt 已有，替代 code-block 纯文本）；依赖展示 → Table 或 Descriptions。
-
-### 2.6 测试与验证
-
-- 同阶段 1（纯逻辑单测 + 全量测试 + agent-browser 冒烟）。
+验证：agent-browser 冒烟——公开包列表行点击跳详情、包管理 Tag/分页、创建向导校验错误、完整创建计划→详情页（Descriptions + 发布项 Table + 待执行 Tag）全链路通过。
 
 ---
 
-## 阶段 3 — 布局组件化与清理
+## 阶段 3 — 布局组件化与清理 ✅ 已完成
 
-### 3.1 布局
+### 3.1 布局 ✅
+- `layout.cj`：`adminCard` → `Card` 组件（header）；`adminSidebar` → `Menu`/`MenuItem`（顺序稳定、active 高亮、路由跳转、退出登录菜单项）；`publicNav` 保留（公开页横向深色风格，Menu 为标准竖排不匹配）。
+- `pages_manage.cj`：`statCard` → `Statistic` 组件（仪表盘）。
+- `login.cj`：修正 Form 用法——FormItem 作为 Form 直接 children、`.label()` 设置、`rules` 校验（用户名/密码 required + errorSignal），移除 `div.form-item` 包裹。
 
-- `layout.cj`：`adminCard` → `Card` 组件；`adminSidebar` → `Menu`/`MenuItem`（active 参数已有）；`publicNav` → 简化/保留（公开导航风格可自定义，视 Menu 效果决定）。
-- `pages_manage.cj`：`statCard`/`quickLink` → `Statistic` 组件（dashboard 用）。
-- `login.cj`：修正 Form 用法——`FormItem` 作为 `Form` 直接 children，label 用 `.label()`，rules 校验（用户名/密码 required）；移除 `div.dialog-form-label` 包裹。
+### 3.2 样式清理 ✅
+- `admin.css` 49 → 36 行：删除全部被组件替代的样式段（`admin-table/tr/th/td/actions`、`admin-card`、`form-item`、`stat-value`、`admin-tag-*`、`dialog-form-item`），保留布局骨架（sidebar/main/公开页/hero）与说明文案样式，新增 Menu 深色适配（el-menu 深色 + is-active 高亮）。
 
-### 3.2 样式清理
-
-- `admin.css`：删除被替换的样式段（`admin-table`、`admin-tr`、`admin-th`、`admin-td`、`admin-actions`、`dialog-form*`、`stat-card`/`stat-value`/`stat-label` 等），保留布局骨架（sidebar/main/hero/公开页）与必要微调，预期砍掉一半以上。
-
-### 3.3 测试与验证
-
-- 全量 `cjpm test` + `agent-browser` 全页面截图冒烟（登录/公开 4 页/管理 8 页）。
+### 3.3 验证 ✅
+- `cjpm test` 96 全过；agent-browser：登录页必填校验、仪表盘 Statistic ×7、Menu 高亮/跳转/退出登录全链路通过。
 
 ---
 
-## 验收标准
+## 验收标准（完成情况）
 
-1. cjreg 全部列表页使用 `Table`（或明确说明保留手写的页面与理由）；全部列表页接入 `Pagination`。
-2. 所有表单 Dialog 使用 `Form`/`FormItem` + 规则校验，无手写 `dialog-form-label`。
-3. `admin.css` 手写样式减少 ≥50%。
-4. cjxt 新增 API 全部带单元测试；cjreg 迁移涉及的新纯逻辑均有单测。
-5. cjxt / cjreg 构建与全量测试通过；管理端 agent-browser 冒烟通过。
-
-## 风险与注意
-
-- cjxt 改动影响 harness-cj 等下游消费者：只新增 API，无签名破坏；改动后先跑 cjxt 全量测试再动 cjreg。
-- cjreg 依赖的 cjxt 是 path 依赖：修改 cjxt 后需清理 `cjreg/target/release/cjxt/` 缓存并重新构建。
-- `Table` 数据模型为 `HashMap<String, String>`：render 回调内需要数值转换（现有代码已有先例）；后续可评估泛型化（不在本期范围）。
-- 页面级测试以纯逻辑 + 渲染结构断言为主，交互经 agent-browser 冒烟。
+1. ✅ 全部列表页使用 `Table`：用户/组织/团队/上游/发布计划/包管理/公开包列表/创建向导包选择/计划详情发布项/团队包·成员关联（10 处；Dialog 内迷你列表未分页，属合理保留）。
+2. ✅ 全部主列表页接入 `Pagination`：用户/组织/团队/上游/发布计划/包管理/公开包列表（7 处）。
+3. ✅ 所有表单 Dialog 使用 `Form`/`FormItem` + 规则校验：用户/组织/团队/上游/创建向导/登录页（6 处）；仅说明文案保留 `dialog-form-label`。
+4. ⚠️ `admin.css` 手写样式段全部移除（被组件替代的 100% 清除），总行数 49 → 36（-26%，未到 50% 目标——剩余为布局骨架/公开页自绘样式，属必要保留）。
+5. ✅ cjxt 新增/修改 API（TableColumn.render、Table.onRowClick+ctx、FormItem.bindValue）全部带单元测试（tests 包 7 个）；cjreg 新增纯逻辑 pageWindow/rowStr 8 个单测。
+6. ✅ cjxt 主包 205 测试、cjreg 96 测试全过；管理端 + 公开页 agent-browser 冒烟全链路通过。

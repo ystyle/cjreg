@@ -14,12 +14,20 @@ import std.convert.*
 class UsersPage <: Component {
     var state: Option<CjregState> = None
     var msg = Signal<String>("")
+    // 行数据 + 分页
+    var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    var currentPage = Signal<Int64>(1)
+    var pageSize = Signal<Int64>(20)
+    var total = Signal<Int64>(0)
     // 新增 Dialog
     var dialogVisible = Signal<Bool>(false)
     var formUser = Signal<String>("")
     var formPass = Signal<String>("")
     var formEmail = Signal<String>("")
     var formIsAdmin = Signal<Bool>(false)
+    var userError = Signal<String>("")
+    var passError = Signal<String>("")
+    var createForm = Form([])
     // Token 展示/重置 Dialog
     var tokenVisible = Signal<Bool>(false)
     var tokenUser: String = ""
@@ -32,13 +40,37 @@ class UsersPage <: Component {
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
+        refresh()
     }
 
-    func refresh(): ArrayList<User> {
+    // 分页切片 + 行数据组装（Table 数据模型为 HashMap<String, String>）
+    func refresh(): Unit {
         match (this.state) {
-            case Some(st) => st.userStore.listAllUsers()
-            case None => ArrayList<User>()
+            case Some(st) =>
+                let users = st.userStore.listAllUsers()
+                this.total.set(users.size)
+                let (start, end) = pageWindow(users.size, this.currentPage.get(), this.pageSize.get())
+                let data = ArrayList<HashMap<String, String>>()
+                var i = start
+                while (i < end) {
+                    let u = users[i]
+                    let m = HashMap<String, String>()
+                    m["id"] = u.id.toString()
+                    m["username"] = u.username
+                    m["email"] = u.email
+                    m["isAdmin"] = if (u.isAdmin) { "1" } else { "0" }
+                    m["isActive"] = if (u.isActive) { "1" } else { "0" }
+                    data.add(m)
+                    i++
+                }
+                this.rows.set(data)
+            case None => ()
         }
+    }
+
+    func onPageChange(ctx: ActionContext): PatchResult {
+        this.refresh()
+        PatchResult.ReRender
     }
 
     // ===== 新增用户 =====
@@ -47,6 +79,8 @@ class UsersPage <: Component {
         this.formPass.set("")
         this.formEmail.set("")
         this.formIsAdmin.set(false)
+        this.userError.set("")
+        this.passError.set("")
         this.dialogVisible.set(true)
         PatchResult.ReRender
     }
@@ -65,12 +99,12 @@ class UsersPage <: Component {
             this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
-        let uname = this.formUser.get()
-        let pass = this.formPass.get()
-        if (uname.isEmpty() || pass.isEmpty()) {
-            this.msg.set("用户名和密码必填")
+        // Form 校验（FormItem.errorSignal 展示错误）
+        if (!this.createForm.validate()) {
             return PatchResult.ReRender
         }
+        let uname = this.formUser.get()
+        let pass = this.formPass.get()
         match (st.auth.createUser(uname, pass, this.formIsAdmin.get(), email: this.formEmail.get())) {
             case Some(u) =>
                 this.dialogVisible.set(false)
@@ -88,11 +122,19 @@ class UsersPage <: Component {
     }
 
     // ===== Token 展示/重置 =====
-    func showToken(ctx: ActionContext, u: User): PatchResult {
-        this.tokenUser = u.username
-        this.tokenValue.set(u.publishToken)
-        this.tokenUserId = u.id
-        this.tokenVisible.set(true)
+    func showToken(ctx: ActionContext, id: Int64): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        match (st.userStore.getUser(id)) {
+            case Some(u) =>
+                this.tokenUser = u.username
+                this.tokenValue.set(u.publishToken)
+                this.tokenUserId = u.id
+                this.tokenVisible.set(true)
+            case None => ()
+        }
         PatchResult.ReRender
     }
 
@@ -120,7 +162,7 @@ class UsersPage <: Component {
     }
 
     // ===== 启停 =====
-    func toggleActive(ctx: ActionContext, u: User): PatchResult {
+    func toggleActive(ctx: ActionContext, id: Int64): PatchResult {
         let st = match (this.state) {
             case Some(x) => x
             case None => return PatchResult.ReRender
@@ -129,18 +171,31 @@ class UsersPage <: Component {
             this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
-        if (st.auth.setUserActive(u.id, !u.isActive)) {
-            this.msg.set(if (!u.isActive) { "已启用 ${u.username}" } else { "已禁用 ${u.username}" })
-            st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "toggle user ${u.username}", "ok", nowMs())
+        match (st.userStore.getUser(id)) {
+            case Some(u) =>
+                if (st.auth.setUserActive(u.id, !u.isActive)) {
+                    this.msg.set(if (!u.isActive) { "已启用 ${u.username}" } else { "已禁用 ${u.username}" })
+                    st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "toggle user ${u.username}", "ok", nowMs())
+                }
+            case None => ()
         }
+        this.refresh()
         PatchResult.ReRender
     }
 
     // ===== 删除 =====
-    func askDelete(ctx: ActionContext, u: User): PatchResult {
-        this.pendingDeleteId = u.id
-        this.pendingDeleteName = u.username
-        this.confirmVisible.set(true)
+    func askDelete(ctx: ActionContext, id: Int64): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        match (st.userStore.getUser(id)) {
+            case Some(u) =>
+                this.pendingDeleteId = u.id
+                this.pendingDeleteName = u.username
+                this.confirmVisible.set(true)
+            case None => ()
+        }
         PatchResult.ReRender
     }
 
@@ -170,71 +225,69 @@ class UsersPage <: Component {
     }
 
     // ===== 渲染 =====
-    func renderUserRow(u: User): IComponent {
-        let tokenHandler: ActionHandler = { c => this.showToken(c, u) }
-        let toggleHandler: ActionHandler = { c => this.toggleActive(c, u) }
-        let deleteHandler: ActionHandler = { c => this.askDelete(c, u) }
-        let adminTag = if (u.isAdmin) {
-            Tag([text("管理员")]).kind(ComponentKind.Primary)
-        } else {
-            Tag([text("普通")]).kind(ComponentKind.Info)
-        }
-        let activeTag = if (u.isActive) {
-            Tag([text("正常")]).kind(ComponentKind.Success)
-        } else {
-            Tag([text("禁用")]).kind(ComponentKind.Danger)
-        }
-        div([
-            div([text(u.id.toString())], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(u.username)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text(u.email)], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([adminTag], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([activeTag], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([
-                Button([text("Token")]).size(ButtonSize.Small).onClick(tokenHandler),
-                Button([text(if (u.isActive) { "禁用" } else { "启用" })]).size(ButtonSize.Small).onClick(toggleHandler),
-                if (u.isAdmin) {
-                    div()
-                } else {
-                    Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteHandler)
-                },
-            ], attrs: Some(HashMap<String, String>([("class", cls("admin-td") + " " + cls("admin-actions"))]))),
-        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr"))])))
-    }
-
     func renderList(): IComponent {
-        let users = this.refresh()
-        if (users.size == 0) {
+        if (this.rows.get().size == 0) {
             return emptyState("暂无用户，点击「新增用户」创建")
         }
-        let rows = ArrayList<IComponent>()
-        rows.add(div([
-            div([text("ID")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("用户名")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("邮箱")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("角色")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("状态")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-            div([text("操作")], attrs: Some(HashMap<String, String>([("class", cls("admin-td"))]))),
-        ], attrs: Some(HashMap<String, String>([("class", cls("admin-tr") + " " + cls("admin-th"))]))))
-        for (u in users) {
-            rows.add(this.renderUserRow(u))
-        }
-        div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("admin-table"))])))
+        Table()
+            .data(this.rows)
+            .stripe()
+            .add(TableColumn().label("ID").colProp("id").width(60))
+            .add(TableColumn().label("用户名").colProp("username").minWidth(120))
+            .add(TableColumn().label("邮箱").colProp("email").minWidth(160))
+            .add(TableColumn().label("角色").colProp("isAdmin").width(90).render({ r, i =>
+                if (r["isAdmin"] == "1") {
+                    Tag([text("管理员")]).kind(ComponentKind.Primary)
+                } else {
+                    Tag([text("普通")]).kind(ComponentKind.Info)
+                }
+            }))
+            .add(TableColumn().label("状态").colProp("isActive").width(90).render({ r, i =>
+                if (r["isActive"] == "1") {
+                    Tag([text("正常")]).kind(ComponentKind.Success)
+                } else {
+                    Tag([text("禁用")]).kind(ComponentKind.Danger)
+                }
+            }))
+            .add(TableColumn().label("操作").colProp("id").minWidth(230).render({ r, i =>
+                let id = Int64.parse(r["id"], radix: 10)
+                let tokenH: ActionHandler = { c => this.showToken(c, id) }
+                let toggleH: ActionHandler = { c => this.toggleActive(c, id) }
+                let deleteH: ActionHandler = { c => this.askDelete(c, id) }
+                div([
+                    Button([text("Token")]).size(ButtonSize.Small).onClick(tokenH),
+                    Button([text(if (r["isActive"] == "1") { "禁用" } else { "启用" })]).size(ButtonSize.Small).onClick(toggleH),
+                    if (r["isAdmin"] == "1") {
+                        div()
+                    } else {
+                        Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteH)
+                    },
+                ])
+            }))
     }
 
     func renderCreateDialog(): IComponent {
-        let dlg = Dialog([
-            div([
-                div([text("用户名")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
-                Input().bind(this.formUser).placeholder("登录用户名"),
-                div([text("密码")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
-                Input().bind(this.formPass).placeholder("初始密码").password(),
-                div([text("邮箱")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
-                Input().bind(this.formEmail).placeholder("可选"),
-                div([text("管理员")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
-                Switch().bind(this.formIsAdmin).activeText("管理员").inactiveText("普通"),
-            ], attrs: Some(HashMap<String, String>([("class", cls("dialog-form"))]))),
-        ])
+        let form = Form([
+            FormItem([Input().bind(this.formUser).placeholder("登录用户名")])
+                .label("用户名")
+                .bindValue({ => this.formUser.get() })
+                .rule(FormRule(required: true, message: "用户名必填"))
+                .errorSignal(this.userError),
+            FormItem([Input().bind(this.formPass).placeholder("初始密码").password()])
+                .label("密码")
+                .bindValue({ => this.formPass.get() })
+                .rule(FormRule(required: true, message: "密码必填"))
+                .errorSignal(this.passError),
+            FormItem([Input().bind(this.formEmail).placeholder("可选")])
+                .label("邮箱")
+                .bindValue({ => this.formEmail.get() }),
+            FormItem([Switch().bind(this.formIsAdmin).activeText("管理员").inactiveText("普通")])
+                .label("管理员")
+                .bindValue({ => if (this.formIsAdmin.get()) { "1" } else { "0" } }),
+        ]).labelTop()
+        // 保存最新 Form 实例供 submitCreate 的 validate() 使用
+        this.createForm = form
+        let dlg = Dialog([form])
             .visible(this.dialogVisible)
             .title("新增用户")
             .width("440px")
@@ -289,9 +342,15 @@ class UsersPage <: Component {
                 div()
             },
         ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))])))
+        let pager = Pagination()
+            .currentPage(this.currentPage)
+            .pageSize(this.pageSize)
+            .total(this.total.get())
+            .layout("total, prev, pager, next, sizes")
+            .onChange(onPageChange)
         adminLayout("/admin/users", [
             div([text("用户管理")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
-            adminCard("用户列表", [toolbar, this.renderList(), this.renderCreateDialog(), this.renderTokenDialog(), this.renderConfirmDialog()]),
+            adminCard("用户列表", [toolbar, this.renderList(), pager, this.renderCreateDialog(), this.renderTokenDialog(), this.renderConfirmDialog()]),
         ])
     }
 }

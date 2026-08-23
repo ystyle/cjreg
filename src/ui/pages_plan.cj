@@ -10,13 +10,37 @@ import ystyle::cjreg.index.*
 import std.collection.*
 import std.convert.*
 
+// ===== 列表行视图类型（泛型 Table<T> 行：实体 + 按需计算的次要字段） =====
+
+/// 发布计划列表行：计划实体 + 目标上游名
+public struct PlanRow {
+    public let doc: PlanDoc
+    public let upstream: String
+
+    public init(doc: PlanDoc, upstream: String) {
+        this.doc = doc
+        this.upstream = upstream
+    }
+}
+
+/// 创建向导包选择行：包实体 + 是否已选中
+public struct PkgChoice {
+    public let doc: PackageDoc
+    public let selected: Bool
+
+    public init(doc: PackageDoc, selected: Bool) {
+        this.doc = doc
+        this.selected = selected
+    }
+}
+
 // ===== 发布计划列表 =====
 @Page["/admin/publish-plans", "发布计划", requireAdmin]
 class PublishPlansPage <: Component {
     var state: Option<CjregState> = None
     var msg = Signal<String>("")
-    // 行数据 + 分页
-    var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    // 行数据 + 分页（泛型 Table<PlanRow>：计划实体 + 上游名）
+    var rows = Signal<ArrayList<PlanRow>>(ArrayList<PlanRow>())
     var currentPage = Signal<Int64>(1)
     var pageSize = Signal<Int64>(20)
     var total = Signal<Int64>(0)
@@ -30,24 +54,18 @@ class PublishPlansPage <: Component {
         refresh()
     }
 
-    // 分页切片 + 行数据组装
+    // 分页切片（行数据为 PlanRow 视图）
     func refresh(): Unit {
         match (this.state) {
             case Some(st) =>
                 let plans = st.adminData.listPlans()
                 this.total.set(plans.size)
                 let (start, end) = pageWindow(plans.size, this.currentPage.get(), this.pageSize.get())
-                let data = ArrayList<HashMap<String, String>>()
+                let data = ArrayList<PlanRow>()
                 var i = start
                 while (i < end) {
                     let p = plans[i]
-                    let m = HashMap<String, String>()
-                    m["id"] = p.id.toString()
-                    m["name"] = p.name
-                    m["status"] = p.status
-                    m["upstream"] = this.upstreamName(st, p.targetUpstream)
-                    m["progress"] = "${p.completedCount}/${p.totalCount}"
-                    data.add(m)
+                    data.add(PlanRow(p, this.upstreamName(st, p.targetUpstream)))
                     i++
                 }
                 this.rows.set(data)
@@ -131,18 +149,18 @@ class PublishPlansPage <: Component {
         if (this.rows.get().size == 0) {
             return emptyState("暂无发布计划，点击「创建计划」新建")
         }
-        Table()
+        Table<PlanRow>()
             .data(this.rows)
             .stripe()
-            .add(TableColumn().label("ID").colProp("id").width(50))
-            .add(TableColumn().label("计划名").colProp("name").minWidth(140))
-            .add(TableColumn().label("状态").colProp("status").width(90).render({ r, i =>
-                this.statusTag(rowStr(r, "status"))
+            .add(TableColumn<PlanRow>().label("ID").accessor({ r => r.doc.id.toString() }).width(50))
+            .add(TableColumn<PlanRow>().label("计划名").accessor({ r => r.doc.name }).minWidth(140))
+            .add(TableColumn<PlanRow>().label("状态").width(90).render({ r, i =>
+                this.statusTag(r.doc.status)
             }))
-            .add(TableColumn().label("目标上游").colProp("upstream").minWidth(140))
-            .add(TableColumn().label("进度").colProp("progress").width(90))
-            .add(TableColumn().label("操作").colProp("id").minWidth(150).render({ r, i =>
-                let id = Int64.parse(r["id"], radix: 10)
+            .add(TableColumn<PlanRow>().label("目标上游").accessor({ r => r.upstream }).minWidth(140))
+            .add(TableColumn<PlanRow>().label("进度").accessor({ r => "${r.doc.completedCount}/${r.doc.totalCount}" }).width(90))
+            .add(TableColumn<PlanRow>().label("操作").minWidth(150).render({ r, i =>
+                let id = r.doc.id
                 let detailH: ActionHandler = { c => this.gotoDetail(c, id) }
                 let deleteH: ActionHandler = { c => this.askDelete(c, id) }
                 div([
@@ -201,7 +219,7 @@ class PublishPlanCreatePage <: Component {
     var pkgSearch = Signal<String>("")
     var selectedPkgs = Signal<ArrayList<Int64>>(ArrayList<Int64>())
     // 包选择行数据（Table 信号）
-    var pkgRows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    var pkgRows = Signal<ArrayList<PkgChoice>>(ArrayList<PkgChoice>())
     var nameError = Signal<String>("")
     var upstreamError = Signal<String>("")
     var planForm = Form([])
@@ -222,7 +240,7 @@ class PublishPlanCreatePage <: Component {
             case Some(st) =>
                 let kw = this.pkgSearch.get()
                 let selected = this.selectedPkgs.get()
-                let data = ArrayList<HashMap<String, String>>()
+                let data = ArrayList<PkgChoice>()
                 for (d in st.pkgStore.storm.all<PackageDoc>()) {
                     if (d.deletedAt != 0) { continue }
                     if (kw != "" && !d.name.contains(kw)) { continue }
@@ -233,13 +251,7 @@ class PublishPlanCreatePage <: Component {
                             break
                         }
                     }
-                    let m = HashMap<String, String>()
-                    m["id"] = d.id.toString()
-                    m["org"] = if (d.organization.isEmpty()) { "-" } else { d.organization }
-                    m["name"] = d.name
-                    m["version"] = d.version
-                    m["selected"] = if (isSel) { "1" } else { "0" }
-                    data.add(m)
+                    data.add(PkgChoice(d, isSel))
                 }
                 this.pkgRows.set(data)
             case None => ()
@@ -322,17 +334,16 @@ class PublishPlanCreatePage <: Component {
     }
 
     func renderPkgPicker(): IComponent {
-        Table()
+        Table<PkgChoice>()
             .data(this.pkgRows)
             .stripe()
-            .add(TableColumn().label("包").colProp("name").minWidth(300).render({ r, i =>
-                text("${rowStr(r, "org")}/${rowStr(r, "name")}@${rowStr(r, "version")}")
+            .add(TableColumn<PkgChoice>().label("包").minWidth(300).render({ r, i =>
+                text("${if (r.doc.organization.isEmpty()) { "-" } else { r.doc.organization }}/${r.doc.name}@${r.doc.version}")
             }))
-            .add(TableColumn().label("操作").colProp("selected").width(110).render({ r, i =>
-                let id = Int64.parse(rowStr(r, "id"), radix: 10)
-                let isSel = rowStr(r, "selected") == "1"
+            .add(TableColumn<PkgChoice>().label("操作").width(110).render({ r, i =>
+                let id = r.doc.id
                 let toggleH: ActionHandler = { c => this.togglePkg(c, id) }
-                Button([text(if (isSel) { "取消选择" } else { "选择" })]).size(ButtonSize.Small).kind(if (isSel) { ButtonKind.Danger } else { ButtonKind.Primary }).onClick(toggleH)
+                Button([text(if (r.selected) { "取消选择" } else { "选择" })]).size(ButtonSize.Small).kind(if (r.selected) { ButtonKind.Danger } else { ButtonKind.Primary }).onClick(toggleH)
             }))
     }
 
@@ -394,7 +405,7 @@ class PublishPlanDetailPage <: Component {
     var planId: Int64 = 0
     var msg = Signal<String>("")
     // 发布项行数据（pushUpdate 时经 refreshItems 更新）
-    var itemRows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    var itemRows = Signal<ArrayList<PlanItemDoc>>(ArrayList<PlanItemDoc>())
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
@@ -526,15 +537,9 @@ class PublishPlanDetailPage <: Component {
         match (this.state) {
             case Some(st) =>
                 let items = st.adminData.listPlanItems(this.planId)
-                let data = ArrayList<HashMap<String, String>>()
+                let data = ArrayList<PlanItemDoc>()
                 for (d in items) {
-                    let m = HashMap<String, String>()
-                    m["order"] = d.order.toString()
-                    m["pkg"] = "${d.packageOrg}/${d.packageName}@${d.packageVersion}"
-                    m["category"] = d.category
-                    m["status"] = d.status
-                    m["error"] = d.error
-                    data.add(m)
+                    data.add(d)
                 }
                 this.itemRows.set(data)
             case None => ()
@@ -542,16 +547,16 @@ class PublishPlanDetailPage <: Component {
     }
 
     func renderItems(): IComponent {
-        Table()
+        Table<PlanItemDoc>()
             .data(this.itemRows)
             .stripe()
-            .add(TableColumn().label("序").colProp("order").width(50))
-            .add(TableColumn().label("包").colProp("pkg").minWidth(260))
-            .add(TableColumn().label("分类").colProp("category").width(120))
-            .add(TableColumn().label("状态").colProp("status").width(90).render({ r, i =>
-                this.itemStatusTag(rowStr(r, "status"))
+            .add(TableColumn<PlanItemDoc>().label("序").accessor({ d => d.order.toString() }).width(50))
+            .add(TableColumn<PlanItemDoc>().label("包").accessor({ d => "${d.packageOrg}/${d.packageName}@${d.packageVersion}" }).minWidth(260))
+            .add(TableColumn<PlanItemDoc>().label("分类").accessor({ d => d.category }).width(120))
+            .add(TableColumn<PlanItemDoc>().label("状态").width(90).render({ d, i =>
+                this.itemStatusTag(d.status)
             }))
-            .add(TableColumn().label("错误").colProp("error").minWidth(160).showOverflowTooltip())
+            .add(TableColumn<PlanItemDoc>().label("错误").accessor({ d => d.error }).minWidth(160).showOverflowTooltip())
     }
 
     public func render(): IComponent {
@@ -637,7 +642,7 @@ public func getDataDir(): String {
 @Page["/admin/logs", "日志", requireAdmin]
 class LogsPage <: Component {
     var state: Option<CjregState> = None
-    var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    var rows = Signal<ArrayList<LogDoc>>(ArrayList<LogDoc>())
     var kindFilter = Signal<String>("all")
     var statusFilter = Signal<String>("all")
     var msg = Signal<String>("")
@@ -653,19 +658,12 @@ class LogsPage <: Component {
             case Some(st) =>
                 let kind = if (this.kindFilter.get() == "all") { Option<String>.None } else { Some(this.kindFilter.get()) }
                 let logs = st.adminData.listLogs(kind, 300)
-                let data = ArrayList<HashMap<String, String>>()
+                let data = ArrayList<LogDoc>()
                 for (l in logs) {
                     if (this.statusFilter.get() != "all" && l.status != this.statusFilter.get()) {
                         continue
                     }
-                    let m = HashMap<String, String>()
-                    m["id"] = l.id.toString()
-                    m["kind"] = kindLabel(l.kind)
-                    m["actor"] = l.actorName
-                    m["action"] = l.action
-                    m["target"] = l.target
-                    m["status"] = l.status
-                    data.add(m)
+                    data.add(l)
                 }
                 this.rows.set(data)
             case None => ()
@@ -733,15 +731,17 @@ class LogsPage <: Component {
                 div()
             },
         ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))])))
-        let table = Table()
+        let table = Table<LogDoc>()
             .data(this.rows)
             .stripe()
-            .add(TableColumn().label("ID").colProp("id").width(60))
-            .add(TableColumn().label("类型").colProp("kind").width(80))
-            .add(TableColumn().label("操作者").colProp("actor").width(100))
-            .add(TableColumn().label("操作").colProp("action"))
-            .add(TableColumn().label("对象").colProp("target").width(120))
-            .add(TableColumn().label("结果").colProp("status").width(80))
+            .add(TableColumn<LogDoc>().label("ID").accessor({ l => l.id.toString() }).width(60))
+            .add(TableColumn<LogDoc>().label("类型").width(80).render({ l, i =>
+                text(this.kindLabel(l.kind))
+            }))
+            .add(TableColumn<LogDoc>().label("操作者").accessor({ l => l.actorName }).width(100))
+            .add(TableColumn<LogDoc>().label("操作").accessor({ l => l.action }))
+            .add(TableColumn<LogDoc>().label("对象").accessor({ l => l.target }).width(120))
+            .add(TableColumn<LogDoc>().label("结果").accessor({ l => l.status }).width(80))
         let confirmDlg = Dialog([
             div([text("确定要清空全部日志吗？此操作不可恢复。")]),
         ])

@@ -80,7 +80,8 @@ func statCard(value: String, label: String): IComponent {
 @Page["/admin/upstreams", "上游管理", requireAdmin]
 class UpstreamsPage <: Component {
     var state: Option<CjregState> = None
-    var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    // 行数据 + 分页（泛型 Table<Upstream>）
+    var rows = Signal<ArrayList<Upstream>>(ArrayList<Upstream>())
     var currentPage = Signal<Int64>(1)
     var pageSize = Signal<Int64>(20)
     var total = Signal<Int64>(0)
@@ -107,27 +108,17 @@ class UpstreamsPage <: Component {
         refresh()
     }
 
-    // 分页切片 + 行数据组装
+    // 分页切片（行数据直接为强类型 Upstream）
     func refresh(): Unit {
         match (this.state) {
             case Some(st) =>
                 let list = st.upStore.listAll()
                 this.total.set(list.size)
                 let (start, end) = pageWindow(list.size, this.currentPage.get(), this.pageSize.get())
-                let data = ArrayList<HashMap<String, String>>()
+                let data = ArrayList<Upstream>()
                 var i = start
                 while (i < end) {
-                    let u = list[i]
-                    let m = HashMap<String, String>()
-                    m["id"] = u.id.toString()
-                    m["name"] = u.name
-                    m["url"] = u.url
-                    m["enabled"] = if (u.enabled) { "1" } else { "0" }
-                    m["official"] = if (u.isOfficial) { "1" } else { "0" }
-                    m["priority"] = u.priority.toString()
-                    m["cacheTtl"] = "${u.cacheTtl}s"
-                    m["lastSync"] = if (u.lastSyncAt > 0) { u.lastSyncAt.toString() } else { "-" }
-                    data.add(m)
+                    data.add(list[i])
                     i++
                 }
                 this.rows.set(data)
@@ -288,39 +279,38 @@ class UpstreamsPage <: Component {
         if (this.rows.get().size == 0) {
             return emptyState("暂无上游，点击「新增上游」添加")
         }
-        Table()
+        Table<Upstream>()
             .data(this.rows)
             .stripe()
-            .add(TableColumn().label("ID").colProp("id").width(50))
-            .add(TableColumn().label("名称").colProp("name").minWidth(130))
-            .add(TableColumn().label("URL").colProp("url").minWidth(220))
-            .add(TableColumn().label("类型").colProp("official").width(80).render({ r, i =>
-                if (rowStr(r, "official") == "1") {
+            .add(TableColumn<Upstream>().label("ID").accessor({ u => u.id.toString() }).width(50))
+            .add(TableColumn<Upstream>().label("名称").accessor({ u => u.name }).minWidth(130))
+            .add(TableColumn<Upstream>().label("URL").accessor({ u => u.url }).minWidth(220))
+            .add(TableColumn<Upstream>().label("类型").width(80).render({ u, i =>
+                if (u.isOfficial) {
                     Tag([text("官方")]).kind(ComponentKind.Primary)
                 } else {
                     Tag([text("镜像")]).kind(ComponentKind.Warning)
                 }
             }))
-            .add(TableColumn().label("状态").colProp("enabled").width(80).render({ r, i =>
-                if (rowStr(r, "enabled") == "1") {
+            .add(TableColumn<Upstream>().label("状态").width(80).render({ u, i =>
+                if (u.enabled) {
                     Tag([text("启用")]).kind(ComponentKind.Success)
                 } else {
                     Tag([text("禁用")]).kind(ComponentKind.Info)
                 }
             }))
-            .add(TableColumn().label("优先级").colProp("priority").width(80))
-            .add(TableColumn().label("缓存").colProp("cacheTtl").width(90))
-            .add(TableColumn().label("最后同步").colProp("lastSync").minWidth(110))
-            .add(TableColumn().label("操作").colProp("id").minWidth(210).render({ r, i =>
-                let id = Int64.parse(r["id"], radix: 10)
-                let official = rowStr(r, "official") == "1"
+            .add(TableColumn<Upstream>().label("优先级").accessor({ u => u.priority.toString() }).width(80))
+            .add(TableColumn<Upstream>().label("缓存").accessor({ u => "${u.cacheTtl}s" }).width(90))
+            .add(TableColumn<Upstream>().label("最后同步").accessor({ u => if (u.lastSyncAt > 0) { u.lastSyncAt.toString() } else { "-" } }).minWidth(110))
+            .add(TableColumn<Upstream>().label("操作").minWidth(210).render({ u, i =>
+                let id = u.id
                 let editH: ActionHandler = { c => this.openEdit(c, id) }
                 let toggleH: ActionHandler = { c => this.toggleEnabled(c, id) }
                 let deleteH: ActionHandler = { c => this.askDelete(c, id) }
                 div([
                     Button([text("编辑")]).size(ButtonSize.Small).onClick(editH),
-                    Button([text(if (rowStr(r, "enabled") == "1") { "禁用" } else { "启用" })]).size(ButtonSize.Small).onClick(toggleH),
-                    if (official) {
+                    Button([text(if (u.enabled) { "禁用" } else { "启用" })]).size(ButtonSize.Small).onClick(toggleH),
+                    if (u.isOfficial) {
                         div()
                     } else {
                         Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteH)
@@ -412,7 +402,8 @@ class UpstreamsPage <: Component {
 @Page["/admin/packages", "包管理", requireAdmin]
 class PackagesPage <: Component {
     var state: Option<CjregState> = None
-    var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    // 行数据 + 分页（泛型 Table<PackageDoc>）
+    var rows = Signal<ArrayList<PackageDoc>>(ArrayList<PackageDoc>())
     var search = Signal<String>("")
     var orgFilter = Signal<String>("all")
     var msg = Signal<String>("")
@@ -422,7 +413,7 @@ class PackagesPage <: Component {
     var total = Signal<Int64>(0)
     // 版本对话框
     var verDialogVisible = Signal<Bool>(false)
-    var verRows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    var verRows = Signal<ArrayList<PackageDoc>>(ArrayList<PackageDoc>())
     var verTitle = Signal<String>("")
     // 删除确认
     var confirmVisible = Signal<Bool>(false)
@@ -449,19 +440,11 @@ class PackagesPage <: Component {
                     filtered.add(d)
                 }
                 this.total.set(filtered.size)
-                let start = (this.currentPage.get() - 1) * this.pageSize.get()
-                let data = ArrayList<HashMap<String, String>>()
+                let (start, end) = pageWindow(filtered.size, this.currentPage.get(), this.pageSize.get())
+                let data = ArrayList<PackageDoc>()
                 var i = start
-                while (i < filtered.size && data.size < this.pageSize.get()) {
-                    let d = filtered[i]
-                    let m = HashMap<String, String>()
-                    m["id"] = d.id.toString()
-                    m["org"] = d.organization
-                    m["name"] = d.name
-                    m["version"] = d.version
-                    m["downloads"] = d.downloadCount.toString()
-                    m["deleted"] = if (d.deletedAt != 0) { "1" } else { "0" }
-                    data.add(m)
+                while (i < end) {
+                    data.add(filtered[i])
                     i++
                 }
                 this.rows.set(data)
@@ -486,14 +469,9 @@ class PackagesPage <: Component {
             case None => return PatchResult.ReRender
         }
         let versions = st.pkgStore.listVersions(org, name)
-        let data = ArrayList<HashMap<String, String>>()
+        let data = ArrayList<PackageDoc>()
         for (d in versions) {
-            let m = HashMap<String, String>()
-            m["id"] = d.id.toString()
-            m["version"] = d.version
-            m["downloads"] = d.downloadCount.toString()
-            m["deleted"] = if (d.deletedAt != 0) { "已删" } else { "正常" }
-            data.add(m)
+            data.add(d)
         }
         this.verTitle.set("${name} 版本列表（${data.size}）")
         this.verRows.set(data)
@@ -546,26 +524,26 @@ class PackagesPage <: Component {
         if (this.rows.get().size == 0) {
             return emptyState("暂无包数据")
         }
-        Table()
+        Table<PackageDoc>()
             .data(this.rows)
             .stripe()
-            .add(TableColumn().label("ID").colProp("id").width(60))
-            .add(TableColumn().label("组织").colProp("org").width(110))
-            .add(TableColumn().label("包名").colProp("name").minWidth(140))
-            .add(TableColumn().label("版本").colProp("version").width(110))
-            .add(TableColumn().label("下载").colProp("downloads").width(80))
-            .add(TableColumn().label("状态").colProp("deleted").width(80).render({ r, i =>
-                if (rowStr(r, "deleted") == "1") {
+            .add(TableColumn<PackageDoc>().label("ID").accessor({ d => d.id.toString() }).width(60))
+            .add(TableColumn<PackageDoc>().label("组织").accessor({ d => d.organization }).width(110))
+            .add(TableColumn<PackageDoc>().label("包名").accessor({ d => d.name }).minWidth(140))
+            .add(TableColumn<PackageDoc>().label("版本").accessor({ d => d.version }).width(110))
+            .add(TableColumn<PackageDoc>().label("下载").accessor({ d => d.downloadCount.toString() }).width(80))
+            .add(TableColumn<PackageDoc>().label("状态").width(80).render({ d, i =>
+                if (d.deletedAt != 0) {
                     Tag([text("已删")]).kind(ComponentKind.Danger)
                 } else {
                     Tag([text("正常")]).kind(ComponentKind.Success)
                 }
             }))
-            .add(TableColumn().label("操作").colProp("id").minWidth(150).render({ r, i =>
-                let org = rowStr(r, "org")
-                let name = rowStr(r, "name")
-                let version = rowStr(r, "version")
-                let id = Int64.parse(rowStr(r, "id"), radix: 10)
+            .add(TableColumn<PackageDoc>().label("操作").minWidth(150).render({ d, i =>
+                let org = d.organization
+                let name = d.name
+                let version = d.version
+                let id = d.id
                 let versionsH: ActionHandler = { c => this.showVersions(c, org, name) }
                 let deleteH: ActionHandler = { c => this.askDelete(c, id, name, version) }
                 div([
@@ -576,13 +554,19 @@ class PackagesPage <: Component {
     }
 
     func renderVersionDialog(): IComponent {
-        let table = Table()
+        let table = Table<PackageDoc>()
             .data(this.verRows)
             .stripe()
-            .add(TableColumn().label("ID").colProp("id").width(60))
-            .add(TableColumn().label("版本").colProp("version"))
-            .add(TableColumn().label("下载").colProp("downloads").width(80))
-            .add(TableColumn().label("状态").colProp("deleted").width(80))
+            .add(TableColumn<PackageDoc>().label("ID").accessor({ d => d.id.toString() }).width(60))
+            .add(TableColumn<PackageDoc>().label("版本").accessor({ d => d.version }))
+            .add(TableColumn<PackageDoc>().label("下载").accessor({ d => d.downloadCount.toString() }).width(80))
+            .add(TableColumn<PackageDoc>().label("状态").width(80).render({ d, i =>
+                if (d.deletedAt != 0) {
+                    Tag([text("已删")]).kind(ComponentKind.Danger)
+                } else {
+                    Tag([text("正常")]).kind(ComponentKind.Success)
+                }
+            }))
         let dlg = Dialog([
             table,
         ])

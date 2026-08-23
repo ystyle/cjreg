@@ -14,11 +14,3 @@ public func pageWindow(total: Int64, page: Int64, size: Int64): (Int64, Int64) {
     let end = if (start + safeSize > total) { total } else { start + safeSize }
     (start, end)
 }
-
-/// 行数据通用助手：从 HashMap 读字段（缺失返回 ""）
-public func rowStr(row: HashMap<String, String>, key: String): String {
-    match (row.get(key)) {
-        case Some(v) => v
-        case None => ""
-    }
-}

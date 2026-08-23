@@ -9,13 +9,52 @@ import ystyle::cjreg.auth.model.*
 import std.collection.*
 import std.convert.*
 
+// ===== 列表行视图类型（泛型 Table<T> 行：实体 + 按需计算的次要字段） =====
+
+/// 团队列表行：团队实体 + 成员/组织/包关联计数
+public struct TeamRow {
+    public let doc: TeamDoc
+    public let members: Int64
+    public let orgs: Int64
+    public let pkgs: Int64
+
+    public init(doc: TeamDoc, members: Int64, orgs: Int64, pkgs: Int64) {
+        this.doc = doc
+        this.members = members
+        this.orgs = orgs
+        this.pkgs = pkgs
+    }
+}
+
+/// 团队-包关联行：包实体 + 是否已关联
+public struct PkgRow {
+    public let doc: PackageDoc
+    public let linked: Bool
+
+    public init(doc: PackageDoc, linked: Bool) {
+        this.doc = doc
+        this.linked = linked
+    }
+}
+
+/// 团队-成员关联行：用户实体 + 是否已关联
+public struct MemberRow {
+    public let user: User
+    public let linked: Bool
+
+    public init(user: User, linked: Bool) {
+        this.user = user
+        this.linked = linked
+    }
+}
+
 // ===== 用户管理 =====
 @Page["/admin/users", "用户管理", requireAdmin]
 class UsersPage <: Component {
     var state: Option<CjregState> = None
     var msg = Signal<String>("")
-    // 行数据 + 分页
-    var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    // 行数据 + 分页（泛型 Table<User>）
+    var rows = Signal<ArrayList<User>>(ArrayList<User>())
     var currentPage = Signal<Int64>(1)
     var pageSize = Signal<Int64>(20)
     var total = Signal<Int64>(0)
@@ -43,24 +82,17 @@ class UsersPage <: Component {
         refresh()
     }
 
-    // 分页切片 + 行数据组装（Table 数据模型为 HashMap<String, String>）
+    // 分页切片（行数据直接为强类型 User）
     func refresh(): Unit {
         match (this.state) {
             case Some(st) =>
                 let users = st.userStore.listAllUsers()
                 this.total.set(users.size)
                 let (start, end) = pageWindow(users.size, this.currentPage.get(), this.pageSize.get())
-                let data = ArrayList<HashMap<String, String>>()
+                let data = ArrayList<User>()
                 var i = start
                 while (i < end) {
-                    let u = users[i]
-                    let m = HashMap<String, String>()
-                    m["id"] = u.id.toString()
-                    m["username"] = u.username
-                    m["email"] = u.email
-                    m["isAdmin"] = if (u.isAdmin) { "1" } else { "0" }
-                    m["isActive"] = if (u.isActive) { "1" } else { "0" }
-                    data.add(m)
+                    data.add(users[i])
                     i++
                 }
                 this.rows.set(data)
@@ -229,35 +261,34 @@ class UsersPage <: Component {
         if (this.rows.get().size == 0) {
             return emptyState("暂无用户，点击「新增用户」创建")
         }
-        Table()
+        Table<User>()
             .data(this.rows)
             .stripe()
-            .add(TableColumn().label("ID").colProp("id").width(60))
-            .add(TableColumn().label("用户名").colProp("username").minWidth(120))
-            .add(TableColumn().label("邮箱").colProp("email").minWidth(160))
-            .add(TableColumn().label("角色").colProp("isAdmin").width(90).render({ r, i =>
-                if (r["isAdmin"] == "1") {
+            .add(TableColumn<User>().label("ID").accessor({ u => u.id.toString() }).width(60))
+            .add(TableColumn<User>().label("用户名").accessor({ u => u.username }).minWidth(120))
+            .add(TableColumn<User>().label("邮箱").accessor({ u => u.email }).minWidth(160))
+            .add(TableColumn<User>().label("角色").width(90).render({ u, i =>
+                if (u.isAdmin) {
                     Tag([text("管理员")]).kind(ComponentKind.Primary)
                 } else {
                     Tag([text("普通")]).kind(ComponentKind.Info)
                 }
             }))
-            .add(TableColumn().label("状态").colProp("isActive").width(90).render({ r, i =>
-                if (r["isActive"] == "1") {
+            .add(TableColumn<User>().label("状态").width(90).render({ u, i =>
+                if (u.isActive) {
                     Tag([text("正常")]).kind(ComponentKind.Success)
                 } else {
                     Tag([text("禁用")]).kind(ComponentKind.Danger)
                 }
             }))
-            .add(TableColumn().label("操作").colProp("id").minWidth(230).render({ r, i =>
-                let id = Int64.parse(r["id"], radix: 10)
-                let tokenH: ActionHandler = { c => this.showToken(c, id) }
-                let toggleH: ActionHandler = { c => this.toggleActive(c, id) }
-                let deleteH: ActionHandler = { c => this.askDelete(c, id) }
+            .add(TableColumn<User>().label("操作").minWidth(230).render({ u, i =>
+                let tokenH: ActionHandler = { c => this.showToken(c, u.id) }
+                let toggleH: ActionHandler = { c => this.toggleActive(c, u.id) }
+                let deleteH: ActionHandler = { c => this.askDelete(c, u.id) }
                 div([
                     Button([text("Token")]).size(ButtonSize.Small).onClick(tokenH),
-                    Button([text(if (r["isActive"] == "1") { "禁用" } else { "启用" })]).size(ButtonSize.Small).onClick(toggleH),
-                    if (r["isAdmin"] == "1") {
+                    Button([text(if (u.isActive) { "禁用" } else { "启用" })]).size(ButtonSize.Small).onClick(toggleH),
+                    if (u.isAdmin) {
                         div()
                     } else {
                         Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteH)
@@ -360,8 +391,8 @@ class UsersPage <: Component {
 class OrganizationsPage <: Component {
     var state: Option<CjregState> = None
     var msg = Signal<String>("")
-    // 行数据 + 分页
-    var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    // 行数据 + 分页（泛型 Table<OrgDoc>）
+    var rows = Signal<ArrayList<OrgDoc>>(ArrayList<OrgDoc>())
     var currentPage = Signal<Int64>(1)
     var pageSize = Signal<Int64>(20)
     var total = Signal<Int64>(0)
@@ -385,24 +416,17 @@ class OrganizationsPage <: Component {
         refresh()
     }
 
-    // 分页切片 + 行数据组装
+    // 分页切片（行数据直接为强类型 OrgDoc）
     func refresh(): Unit {
         match (this.state) {
             case Some(st) =>
                 let orgs = st.adminData.listOrgs()
                 this.total.set(orgs.size)
                 let (start, end) = pageWindow(orgs.size, this.currentPage.get(), this.pageSize.get())
-                let data = ArrayList<HashMap<String, String>>()
+                let data = ArrayList<OrgDoc>()
                 var i = start
                 while (i < end) {
-                    let o = orgs[i]
-                    let m = HashMap<String, String>()
-                    m["id"] = o.id.toString()
-                    m["name"] = o.name
-                    m["displayName"] = o.displayName
-                    m["description"] = o.description
-                    m["isDefault"] = if (o.isDefault) { "1" } else { "0" }
-                    data.add(m)
+                    data.add(orgs[i])
                     i++
                 }
                 this.rows.set(data)
@@ -532,24 +556,23 @@ class OrganizationsPage <: Component {
         if (this.rows.get().size == 0) {
             return emptyState("暂无组织，点击「新增组织」创建")
         }
-        Table()
+        Table<OrgDoc>()
             .data(this.rows)
             .stripe()
-            .add(TableColumn().label("ID").colProp("id").width(60))
-            .add(TableColumn().label("组织名").colProp("name").minWidth(140))
-            .add(TableColumn().label("显示名").colProp("displayName").minWidth(140))
-            .add(TableColumn().label("描述").colProp("description").minWidth(200))
-            .add(TableColumn().label("默认").colProp("isDefault").width(80).render({ r, i =>
-                if (r["isDefault"] == "1") {
+            .add(TableColumn<OrgDoc>().label("ID").accessor({ o => o.id.toString() }).width(60))
+            .add(TableColumn<OrgDoc>().label("组织名").accessor({ o => o.name }).minWidth(140))
+            .add(TableColumn<OrgDoc>().label("显示名").accessor({ o => o.displayName }).minWidth(140))
+            .add(TableColumn<OrgDoc>().label("描述").accessor({ o => o.description }).minWidth(200))
+            .add(TableColumn<OrgDoc>().label("默认").width(80).render({ o, i =>
+                if (o.isDefault) {
                     Tag([text("默认")]).kind(ComponentKind.Primary)
                 } else {
                     Tag([text("普通")]).kind(ComponentKind.Info)
                 }
             }))
-            .add(TableColumn().label("操作").colProp("id").minWidth(160).render({ r, i =>
-                let id = Int64.parse(r["id"], radix: 10)
-                let editH: ActionHandler = { c => this.openEdit(c, id) }
-                let deleteH: ActionHandler = { c => this.askDelete(c, id) }
+            .add(TableColumn<OrgDoc>().label("操作").minWidth(160).render({ o, i =>
+                let editH: ActionHandler = { c => this.openEdit(c, o.id) }
+                let deleteH: ActionHandler = { c => this.askDelete(c, o.id) }
                 div([
                     Button([text("编辑")]).size(ButtonSize.Small).onClick(editH),
                     Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteH),
@@ -632,8 +655,8 @@ class OrganizationsPage <: Component {
 class TeamsPage <: Component {
     var state: Option<CjregState> = None
     var msg = Signal<String>("")
-    // 行数据 + 分页
-    var rows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    // 行数据 + 分页（泛型 Table<TeamRow>：实体 + 关联计数视图）
+    var rows = Signal<ArrayList<TeamRow>>(ArrayList<TeamRow>())
     var currentPage = Signal<Int64>(1)
     var pageSize = Signal<Int64>(20)
     var total = Signal<Int64>(0)
@@ -653,11 +676,11 @@ class TeamsPage <: Component {
     // 包关联 Dialog
     var pkgDialogVisible = Signal<Bool>(false)
     var pkgSearch = Signal<String>("")
-    var pkgRows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    var pkgRows = Signal<ArrayList<PkgRow>>(ArrayList<PkgRow>())
     // 成员关联 Dialog
     var memberDialogVisible = Signal<Bool>(false)
     var memberSearch = Signal<String>("")
-    var memberRows = Signal<ArrayList<HashMap<String, String>>>(ArrayList<HashMap<String, String>>())
+    var memberRows = Signal<ArrayList<MemberRow>>(ArrayList<MemberRow>())
     // 删除确认
     var confirmVisible = Signal<Bool>(false)
     var pendingDeleteId: Int64 = 0
@@ -668,26 +691,21 @@ class TeamsPage <: Component {
         refresh()
     }
 
-    // 分页切片 + 行数据组装
+    // 分页切片（行数据为 TeamRow 视图）
     func refresh(): Unit {
         match (this.state) {
             case Some(st) =>
                 let teams = st.adminData.listTeams()
                 this.total.set(teams.size)
                 let (start, end) = pageWindow(teams.size, this.currentPage.get(), this.pageSize.get())
-                let data = ArrayList<HashMap<String, String>>()
+                let data = ArrayList<TeamRow>()
                 var i = start
                 while (i < end) {
                     let t = teams[i]
-                    let m = HashMap<String, String>()
-                    m["id"] = t.id.toString()
-                    m["name"] = t.name
-                    m["displayName"] = t.displayName
-                    m["permission"] = t.permission
-                    m["members"] = st.adminData.listTeamMembers(t.id).size.toString()
-                    m["orgs"] = st.adminData.listTeamOrganizations(t.id).size.toString()
-                    m["pkgs"] = st.adminData.listTeamPackages(t.id).size.toString()
-                    data.add(m)
+                    data.add(TeamRow(t,
+                        st.adminData.listTeamMembers(t.id).size,
+                        st.adminData.listTeamOrganizations(t.id).size,
+                        st.adminData.listTeamPackages(t.id).size))
                     i++
                 }
                 this.rows.set(data)
@@ -837,7 +855,7 @@ class TeamsPage <: Component {
             case Some(st) =>
                 let kw = this.pkgSearch.get()
                 let linked = st.adminData.listTeamPackages(this.editingId)
-                let data = ArrayList<HashMap<String, String>>()
+                let data = ArrayList<PkgRow>()
                 for (d in st.pkgStore.storm.all<PackageDoc>()) {
                     if (d.deletedAt != 0) { continue }
                     if (kw != "" && !d.name.contains(kw)) { continue }
@@ -848,12 +866,7 @@ class TeamsPage <: Component {
                             break
                         }
                     }
-                    let m = HashMap<String, String>()
-                    m["org"] = if (d.organization.isEmpty()) { "-" } else { d.organization }
-                    m["name"] = d.name
-                    m["version"] = d.version
-                    m["linked"] = if (isLinked) { "1" } else { "0" }
-                    data.add(m)
+                    data.add(PkgRow(d, isLinked))
                 }
                 this.pkgRows.set(data)
             case None => ()
@@ -908,7 +921,7 @@ class TeamsPage <: Component {
             case Some(st) =>
                 let kw = this.memberSearch.get()
                 let linked = st.adminData.listTeamMemberIds(this.editingId)
-                let data = ArrayList<HashMap<String, String>>()
+                let data = ArrayList<MemberRow>()
                 for (u in st.userStore.listAllUsers()) {
                     if (kw != "" && !u.username.contains(kw)) { continue }
                     var isLinked = false
@@ -918,11 +931,7 @@ class TeamsPage <: Component {
                             break
                         }
                     }
-                    let m = HashMap<String, String>()
-                    m["id"] = u.id.toString()
-                    m["username"] = u.username
-                    m["linked"] = if (isLinked) { "1" } else { "0" }
-                    data.add(m)
+                    data.add(MemberRow(u, isLinked))
                 }
                 this.memberRows.set(data)
             case None => ()
@@ -1011,20 +1020,20 @@ class TeamsPage <: Component {
         if (this.rows.get().size == 0) {
             return emptyState("暂无团队，点击「新增团队」创建")
         }
-        Table()
+        Table<TeamRow>()
             .data(this.rows)
             .stripe()
-            .add(TableColumn().label("ID").colProp("id").width(50))
-            .add(TableColumn().label("团队名").colProp("name").minWidth(130))
-            .add(TableColumn().label("显示名").colProp("displayName").minWidth(130))
-            .add(TableColumn().label("权限").colProp("permission").width(90).render({ r, i =>
-                this.permTag(rowStr(r, "permission"))
+            .add(TableColumn<TeamRow>().label("ID").accessor({ r => r.doc.id.toString() }).width(50))
+            .add(TableColumn<TeamRow>().label("团队名").accessor({ r => r.doc.name }).minWidth(130))
+            .add(TableColumn<TeamRow>().label("显示名").accessor({ r => r.doc.displayName }).minWidth(130))
+            .add(TableColumn<TeamRow>().label("权限").width(90).render({ r, i =>
+                this.permTag(r.doc.permission)
             }))
-            .add(TableColumn().label("成员").colProp("members").width(70))
-            .add(TableColumn().label("组织").colProp("orgs").width(70))
-            .add(TableColumn().label("包").colProp("pkgs").width(70))
-            .add(TableColumn().label("操作").colProp("id").minWidth(260).render({ r, i =>
-                let id = Int64.parse(r["id"], radix: 10)
+            .add(TableColumn<TeamRow>().label("成员").accessor({ r => r.members.toString() }).width(70))
+            .add(TableColumn<TeamRow>().label("组织").accessor({ r => r.orgs.toString() }).width(70))
+            .add(TableColumn<TeamRow>().label("包").accessor({ r => r.pkgs.toString() }).width(70))
+            .add(TableColumn<TeamRow>().label("操作").minWidth(260).render({ r, i =>
+                let id = r.doc.id
                 let editH: ActionHandler = { c => this.openEdit(c, id) }
                 let orgH: ActionHandler = { c => this.openOrgs(c, id) }
                 let pkgH: ActionHandler = { c => this.openPackages(c, id) }
@@ -1115,18 +1124,17 @@ class TeamsPage <: Component {
                     this.refreshPkgs()
                     PatchResult.ReRender
                 }),
-                Table()
+                Table<PkgRow>()
                     .data(this.pkgRows)
                     .stripe()
-                    .add(TableColumn().label("包").colProp("name").minWidth(280).render({ r, i =>
-                        text("${rowStr(r, "org")}/${rowStr(r, "name")}@${rowStr(r, "version")}")
+                    .add(TableColumn<PkgRow>().label("包").minWidth(280).render({ r, i =>
+                        text("${if (r.doc.organization.isEmpty()) { "-" } else { r.doc.organization }}/${r.doc.name}@${r.doc.version}")
                     }))
-                    .add(TableColumn().label("操作").colProp("linked").width(100).render({ r, i =>
-                        let org = rowStr(r, "org")
-                        let name = rowStr(r, "name")
-                        let isLinked = rowStr(r, "linked") == "1"
+                    .add(TableColumn<PkgRow>().label("操作").width(100).render({ r, i =>
+                        let org = r.doc.organization
+                        let name = r.doc.name
                         let toggleH: ActionHandler = { c => this.togglePkg(c, org, name) }
-                        Button([text(if (isLinked) { "移除" } else { "关联" })]).size(ButtonSize.Small).kind(if (isLinked) { ButtonKind.Danger } else { ButtonKind.Primary }).onClick(toggleH)
+                        Button([text(if (r.linked) { "移除" } else { "关联" })]).size(ButtonSize.Small).kind(if (r.linked) { ButtonKind.Danger } else { ButtonKind.Primary }).onClick(toggleH)
                     })),
             ], attrs: Some(HashMap<String, String>([("class", cls("dialog-form"))]))),
         ])
@@ -1148,15 +1156,14 @@ class TeamsPage <: Component {
                     this.refreshMembers()
                     PatchResult.ReRender
                 }),
-                Table()
+                Table<MemberRow>()
                     .data(this.memberRows)
                     .stripe()
-                    .add(TableColumn().label("用户名").colProp("username").minWidth(200))
-                    .add(TableColumn().label("操作").colProp("linked").width(100).render({ r, i =>
-                        let uid = Int64.parse(rowStr(r, "id"), radix: 10)
-                        let isLinked = rowStr(r, "linked") == "1"
+                    .add(TableColumn<MemberRow>().label("用户名").accessor({ r => r.user.username }).minWidth(200))
+                    .add(TableColumn<MemberRow>().label("操作").width(100).render({ r, i =>
+                        let uid = r.user.id
                         let toggleH: ActionHandler = { c => this.toggleMember(c, uid) }
-                        Button([text(if (isLinked) { "移除" } else { "添加" })]).size(ButtonSize.Small).kind(if (isLinked) { ButtonKind.Danger } else { ButtonKind.Primary }).onClick(toggleH)
+                        Button([text(if (r.linked) { "移除" } else { "添加" })]).size(ButtonSize.Small).kind(if (r.linked) { ButtonKind.Danger } else { ButtonKind.Primary }).onClick(toggleH)
                     })),
             ], attrs: Some(HashMap<String, String>([("class", cls("dialog-form"))]))),
         ])

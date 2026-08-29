@@ -312,11 +312,6 @@ class PublicPackages <: Component {
         PatchResult.ReRender
     }
 
-    func onSearchInput(ctx: ActionContext): PatchResult {
-        this.currentPage.set(1)
-        PatchResult.ReRender
-    }
-
     func renderCard(p: PackageDoc): IComponent {
         let go: ActionHandler = { c => this.gotoDetail(c, p.organization, p.name) }
         let title = pkgDisplayName(p.organization, p.name)
@@ -393,7 +388,7 @@ class PublicPackages <: Component {
                     div([text("发现仓颉包")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
                     div([text("浏览和搜索仓颉生态系统中的精彩包")], attrs: Some(HashMap<String, String>([("class", cls("page-subtitle"))]))),
                     div([
-                        Input().bind(this.search).placeholder("搜索包名、描述，或使用 org::关键词 格式搜索组织包...").on("input", { ctx => this.onSearchInput(ctx) }),
+                        Input().bind(this.search).placeholder("搜索包名、描述，或使用 org::关键词 格式搜索组织包..."),
                     ], attrs: Some(HashMap<String, String>([("class", cls("search-box"))]))),
                 ], attrs: Some(HashMap<String, String>([("class", cls("search-section"))]))),
                 div([

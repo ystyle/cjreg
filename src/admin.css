@@ -66,7 +66,11 @@
 
 /* ===== 包列表：布局 ===== */
 .pkg-layout { display: flex; gap: 24px; align-items: flex-start; }
-.pkg-sidebar { width: 240px; flex-shrink: 0; background: #fff; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,.06); position: sticky; top: 80px; max-height: calc(100vh - 100px); overflow-y: auto; }
+.pkg-sidebar { width: 240px; flex-shrink: 0; background: #fff; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,.06); max-height: calc(100vh - 140px); overflow-y: auto; }
+@media (max-width: 900px) {
+  .pkg-layout { flex-direction: column; }
+  .pkg-sidebar { width: 100%; }
+}
 .sidebar-header { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 600; color: #303133; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #ebeef5; }
 .sidebar-title { font-size: 16px; font-weight: 600; }
 .sidebar-empty { font-size: 13px; color: #909399; }

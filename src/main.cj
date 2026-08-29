@@ -152,7 +152,7 @@ func cmdServe(dataDir: String, port: UInt16): Int64 {
     }
     let cjxtApp = App()
     cjxtApp
-        .configure(AppConfig(cssBundle: "/css/bundle.css?v=2"))
+        .configure(AppConfig(cssBundle: "/css/bundle.css?v=3"))
         .serveStatic("/css", "public/css")
         .UseComponent()
         .state<CjregState>({ => CjregState(pkgStore, userStore, upStore, adminData, authSvc, app: Some(cjxtApp)) })
@@ -262,7 +262,7 @@ func cmdAdminUI(dataDir: String, port: UInt16): Int64 {
     let authSvc = AuthService(userStore, 86400)
     let cjxtApp = App()
     cjxtApp
-        .configure(AppConfig(cssBundle: "/css/bundle.css?v=2"))
+        .configure(AppConfig(cssBundle: "/css/bundle.css?v=3"))
         .serveStatic("/css", "public/css")
         .UseComponent()
         .state<CjregState>({ => CjregState(pkgStore, userStore, upStore, adminData, authSvc, app: Some(cjxtApp)) })

@@ -584,6 +584,12 @@ class PublicPackageDetail <: Component {
         }
     }
 
+    // 返回包列表（包详情头部返回按钮）
+    func gotoPackages(ctx: ActionContext): PatchResult {
+        ctx.route.push("/packages")
+        PatchResult.ReRender
+    }
+
     public func render(): IComponent {
         let latestOpt = this.latest()
         match (latestOpt) {
@@ -669,10 +675,14 @@ class PublicPackageDetail <: Component {
             ], attrs: Some(HashMap<String, String>([("class", cls("usage-block"))]))),
         ], attrs: Some(HashMap<String, String>([("class", cls("sidebar-card"))])))
 
+        let backBtn = Button("返回").icon("arrow-left").plain().onClick(gotoPackages)
         let header = div([
             div([
-                span([text(displayName)], attrs: Some(HashMap<String, String>([("class", cls("detail-name"))]))),
-                Tag([text(p.version)]).kind(ComponentKind.Success).size(TagSize.Large),
+                div([
+                    span([text(displayName)], attrs: Some(HashMap<String, String>([("class", cls("detail-name"))]))),
+                    Tag([text(p.version)]).kind(ComponentKind.Success).size(TagSize.Large),
+                ], attrs: Some(HashMap<String, String>([("class", cls("detail-title-left"))]))),
+                backBtn,
             ], attrs: Some(HashMap<String, String>([("class", cls("detail-title-row"))]))),
             div([text(if (p.description.isEmpty()) { "暂无描述" } else { p.description })], attrs: Some(HashMap<String, String>([("class", cls("detail-desc"))]))),
             div(headerMeta.toArray(), attrs: Some(HashMap<String, String>([("class", cls("detail-meta"))]))),

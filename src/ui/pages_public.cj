@@ -35,6 +35,63 @@ func pkgDisplayName(org: String, name: String): String {
     "${org}::${name}"
 }
 
+// ===== 官方制品分类（对齐 cjrepo / 中心仓相关CJPM配置项.md） =====
+// 返回 (分类名, 中文标签)；分类名与 meta-data 中 category 字段的标准值一致
+func officialCategories(): ArrayList<(String, String)> {
+    let list = ArrayList<(String, String)>()
+    list.add(("Network", "网络"))
+    list.add(("Database Driver", "数据库驱动"))
+    list.add(("Data Encapsulation and Transfer", "数据封装传递"))
+    list.add(("Data Analysis", "数据解析"))
+    list.add(("Database Framework", "数据库框架"))
+    list.add(("Object Storage", "对象存储"))
+    list.add(("Distributed", "分布式"))
+    list.add(("Task Scheduling", "任务调度"))
+    list.add(("Security", "安全类"))
+    list.add(("Utility", "工具类"))
+    list.add(("Logging", "日志类"))
+    list.add(("Algorithm", "算法类"))
+    list.add(("Audio and Video", "音视频"))
+    list.add(("Character Encoding", "字符编码"))
+    list.add(("Image Processing", "图像处理"))
+    list.add(("Developer Tools", "开发者工具"))
+    list.add(("Animation", "动画类"))
+    list.add(("Infrastructure", "基础设施"))
+    list.add(("Geographic Information", "地理信息"))
+    list.add(("UI", "UI 类"))
+    list.add(("Scientific Computing", "科学计算"))
+    list.add(("Programming Framework", "编程框架"))
+    list.add(("Data Monitoring", "数据监控"))
+    list.add(("Circuit Breaker and Downgrading", "熔断降级"))
+    list.add(("Message Queue", "消息队列"))
+    list
+}
+
+// 分类名 → 中文标签（未在官方列表时回退原名）
+func categoryLabel(name: String): String {
+    for ((cn, label) in officialCategories()) {
+        if (cn == name) { return label }
+    }
+    name
+}
+
+// 分类名是否在官方列表内（用于包卡片显示中文标签时，无需额外校验）
+func isOfficialCategory(name: String): Bool {
+    for ((cn, _) in officialCategories()) {
+        if (cn == name) { return true }
+    }
+    false
+}
+
+// 把一组分类名映射为中文标签列表
+func categoryLabels(strs: ArrayList<String>): ArrayList<String> {
+    let out = ArrayList<String>()
+    for (s in strs) {
+        out.add(categoryLabel(s))
+    }
+    out
+}
+
 // ===== 公开顶部导航 =====
 public func publicNav(active: String): IComponent {
     let children = ArrayList<IComponent>()
@@ -217,19 +274,6 @@ class PublicPackages <: Component {
         false
     }
 
-    func collectCategories(all: ArrayList<PackageDoc>): ArrayList<String> {
-        let result = ArrayList<String>()
-        for (d in all) {
-            if (d.deletedAt != 0) { continue }
-            for (c in d.category) {
-                var found = false
-                for (r in result) { if (r == c) { found = true; break } }
-                if (!found) { result.add(c) }
-            }
-        }
-        result
-    }
-
     func loadPage(all: ArrayList<PackageDoc>): (ArrayList<PackageDoc>, Int64) {
         let latest = this.collectLatest(all)
         let q = this.search.get()
@@ -280,7 +324,7 @@ class PublicPackages <: Component {
         meta.add(Tag([text(if (p.artifactType == "src") { "源码" } else { "二进制" })]).size(TagSize.Small).kind(if (p.artifactType == "src") { ComponentKind.Info } else { ComponentKind.Warning }))
         if (p.executable) { meta.add(Tag([text("可执行")]).size(TagSize.Small).kind(ComponentKind.Danger)) }
         if (p.license.size > 0) { meta.add(Tag([text(p.license[0])]).size(TagSize.Small).kind(ComponentKind.Primary)) }
-        if (p.category.size > 0) { meta.add(Tag([text(p.category[0])]).size(TagSize.Small)) }
+        if (p.category.size > 0) { meta.add(Tag([text(categoryLabel(p.category[0]))]).size(TagSize.Small).kind(ComponentKind.Warning)) }
         var tagCount = 0
         for (t in p.tag) {
             if (tagCount >= 2) { break }
@@ -307,11 +351,11 @@ class PublicPackages <: Component {
         }
         let all = st.pkgStore.storm.all<PackageDoc>()
         let (rows, total) = this.loadPage(all)
-        let cats = this.collectCategories(all)
+        let cats = officialCategories()
 
         let categoryItems = ArrayList<IComponent>()
-        for (c in cats) {
-            categoryItems.add(Checkbox([text(c)], c))
+        for ((cn, label) in cats) {
+            categoryItems.add(Checkbox([text(label)], cn))
         }
         let sidebar = div([
             div([
@@ -440,7 +484,7 @@ class PublicPackageDetail <: Component {
             items.add(this.infoItem("协议", this.tags(p.license, ComponentKind.Success)))
         }
         if (p.category.size > 0) {
-            items.add(this.infoItem("分类", this.tags(p.category, ComponentKind.Warning)))
+            items.add(this.infoItem("分类", this.tags(categoryLabels(p.category), ComponentKind.Warning)))
         }
         if (p.tag.size > 0) {
             items.add(this.infoItem("标签", this.tags(p.tag, ComponentKind.Info)))
@@ -564,7 +608,7 @@ class PublicPackageDetail <: Component {
         let headerMeta = ArrayList<IComponent>()
         headerMeta.add(this.metaItem("更新于", [text(reqDateText(vs.toArray()))]))
         if (p.category.size > 0) {
-            headerMeta.add(this.metaItem("分类", this.tags(p.category, ComponentKind.Warning)))
+            headerMeta.add(this.metaItem("分类", this.tags(categoryLabels(p.category), ComponentKind.Warning)))
         }
         if (p.tag.size > 0) {
             headerMeta.add(this.metaItem("标签", this.tags(p.tag, ComponentKind.Info)))
@@ -664,44 +708,35 @@ func linkOut(url: String, text_: String): IComponent {
     ])))
 }
 
-// ===== 文档页 =====
+// ===== 文档页（VitePress 风格：左导航 + markdown 内容） =====
 @Page["/docs", "文档"]
 class DocsPage <: Component {
+    var activeDoc = Signal<String>(docsDefaultId())
+
+    func navItem(sid: String, title: String, active: Bool): IComponent {
+        let clsName = if (active) { cls("docs-nav-item") + " " + cls("docs-nav-active") } else { cls("docs-nav-item") }
+        div([text(title)], attrs: Some(HashMap<String, String>([("class", clsName)]))).onClick({ c =>
+            this.activeDoc.set(sid)
+            PatchResult.ReRender
+        })
+    }
+
     public func render(): IComponent {
+        let sections = docsSections()
+        let active = this.activeDoc.get()
+        let navItems = ArrayList<IComponent>()
+        for ((sid, title) in sections) {
+            navItems.add(this.navItem(sid, title, sid == active))
+        }
+        let content = docContent(if (docsIdValid(active)) { active } else { docsDefaultId() })
         div([
             publicNav("/docs"),
             div([
-                div([text("使用文档")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
-                adminCard("快速开始", [
-                    div([
-                        div([text("1. 初始化数据目录（创建管理员 + 官方上游）：")]),
-                        div([text("cjreg init -d ./data --username admin --password <密码>")], attrs: Some(HashMap<String, String>([("class", cls("code-block"))]))),
-                        div([text("2. 启动服务：")]),
-                        div([text("cjreg serve -d ./data -p 8060")], attrs: Some(HashMap<String, String>([("class", cls("code-block"))]))),
-                        div([text("3. 浏览器访问管理后台 http://localhost:8060/admin 登录。")]),
-                    ]),
-                ]),
-                adminCard("客户端配置", [
-                    div([
-                        div([text("在 cjpm.toml 中配置私有仓依赖（registry 指向本服务）：")]),
-                        div([text("name = \"my-app\"\nversion = \"0.1.0\"\n\n[dependencies]\n'demo::demo-app' = { version = '1.0.0' }")], attrs: Some(HashMap<String, String>([("class", cls("code-block"))]))),
-                        div([text("发布配置（cangjie-repo.toml）：")]),
-                        div([text("[registry]\nurl = \"http://localhost:8060\"\ntoken = \"<用户在管理后台获取的发布 Token>\"")], attrs: Some(HashMap<String, String>([("class", cls("code-block"))]))),
-                    ]),
-                ]),
-                adminCard("多仓与代理", [
-                    div([
-                        div([text("在上游管理中配置镜像仓：官方仓不可删除，镜像仓可配置认证 Token 与缓存时间。")]),
-                        div([text("依赖解析按优先级选择上游，本地无缓存时自动回源拉取并落库。")]),
-                    ]),
-                ]),
-                adminCard("发布计划", [
-                    div([
-                        div([text("创建发布计划：选择目标上游与要发布的包，系统按依赖拓扑排序后推送。")]),
-                        div([text("详情页可查看每个包的执行状态与错误信息。")]),
-                    ]),
-                ]),
-            ], attrs: Some(HashMap<String, String>([("class", cls("public-main"))]))),
+                div(navItems.toArray(), attrs: Some(HashMap<String, String>([("class", cls("docs-nav"))]))),
+                div([
+                    Markdown().content(content),
+                ], attrs: Some(HashMap<String, String>([("class", cls("docs-content"))]))),
+            ], attrs: Some(HashMap<String, String>([("class", cls("docs-layout"))]))),
         ])
     }
 }

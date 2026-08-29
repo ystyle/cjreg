@@ -102,7 +102,9 @@
 .meta-value { color: #303133; font-weight: 500; }
 
 /* 包详情侧栏 */
-.sidebar-card { background: #fff; border-radius: 16px; padding: 28px; box-shadow: 0 2px 12px rgba(0,0,0,.06); position: sticky; top: 80px; }
+.sidebar-card { background: #fff; border-radius: 16px; padding: 28px; box-shadow: 0 2px 12px rgba(0,0,0,.06); }
+/* 包详情左侧内容卡片：白底 + 内边距，与右侧 sidebar-card 顶部对齐 */
+.detail-card { background: #fff; border-radius: 16px; padding: 20px 24px 24px; box-shadow: 0 2px 12px rgba(0,0,0,.06); }
 .sidebar-head-title { font-size: 18px; font-weight: 600; color: #303133; margin: 0 0 20px 0; padding-bottom: 16px; border-bottom: 2px solid #f0f0f0; }
 .info-list { margin-bottom: 24px; }
 .info-item { display: flex; justify-content: space-between; align-items: flex-start; padding: 12px 0; border-bottom: 1px solid #f5f7fa; gap: 12px; }

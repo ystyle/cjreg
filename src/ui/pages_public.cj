@@ -95,7 +95,10 @@ func categoryLabels(strs: ArrayList<String>): ArrayList<String> {
 // ===== 公开顶部导航 =====
 public func publicNav(active: String): IComponent {
     let children = ArrayList<IComponent>()
-    children.add(div([text("cjreg")], attrs: Some(HashMap<String, String>([("class", cls("public-brand"))]))))
+    let brandGo: ActionHandler = { c => c.route.push("/"); PatchResult.ReRender }
+    var brand = div([text("cjreg")], attrs: Some(HashMap<String, String>([("class", cls("public-brand"))])))
+    brand = brand.onClick(brandGo)
+    children.add(brand)
     children.add(navLink("/", "首页", active == "/"))
     children.add(navLink("/packages", "包列表", active == "/packages"))
     children.add(navLink("/docs", "帮助文档", active == "/docs"))
@@ -685,7 +688,7 @@ class PublicPackageDetail <: Component {
             div([
                 header,
                 Row([
-                    Col([contentTabs], span: 16),
+                    Col([div([contentTabs], attrs: Some(HashMap<String, String>([("class", cls("detail-card"))])))], span: 16),
                     Col([sidebar], span: 8),
                 ], gutter: 24),
             ], attrs: Some(HashMap<String, String>([("class", cls("public-main"))]))),

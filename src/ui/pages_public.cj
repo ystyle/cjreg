@@ -407,7 +407,7 @@ class PublicPackages <: Component {
                             },
                         ], attrs: Some(HashMap<String, String>([("class", cls("pkg-list"))]))),
                     ], attrs: Some(HashMap<String, String>([("class", cls("pkg-layout"))]))),
-                ], attrs: Some(HashMap<String, String>([("class", cls("public-block"))]))),
+                ], attrs: Some(HashMap<String, String>([("class", cls("pkg-block"))]))),
             ], attrs: Some(HashMap<String, String>([("class", cls("public-main"))]))),
         ])
     }
@@ -682,10 +682,10 @@ class PublicPackageDetail <: Component {
             publicNav("/packages"),
             div([
                 header,
-                Row([
-                    Col([div([contentTabs], attrs: Some(HashMap<String, String>([("class", cls("detail-card"))])))], span: 16),
-                    Col([sidebar], span: 8),
-                ], gutter: 24),
+                div([
+                    div([div([contentTabs], attrs: Some(HashMap<String, String>([("class", cls("detail-card"))])))], attrs: Some(HashMap<String, String>([("class", cls("detail-left"))]))),
+                    div([sidebar], attrs: Some(HashMap<String, String>([("class", cls("detail-right"))]))),
+                ], attrs: Some(HashMap<String, String>([("class", cls("detail-row"))]))),
             ], attrs: Some(HashMap<String, String>([("class", cls("public-main"))]))),
         ])
     }

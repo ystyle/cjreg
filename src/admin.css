@@ -32,6 +32,8 @@
 /* ===== 公开端主容器 ===== */
 .public-main { max-width: 1400px; margin: 0 auto; padding: 32px 24px 60px; }
 .public-block { max-width: 1400px; margin: 0 auto; padding: 48px 20px; }
+/* 包列表内容区块：水平 padding 0，与上方 search-section 白带左右对齐（public-block 被首页复用，故单独建） */
+.pkg-block { max-width: 1400px; margin: 0 auto; padding: 48px 0; }
 .public-section-header { text-align: center; margin-bottom: 36px; }
 .section-title { font-size: 32px; font-weight: 700; color: #303133; margin-bottom: 10px; }
 .section-sub { font-size: 16px; color: #909399; margin: 0; }
@@ -96,6 +98,14 @@
 .pager-wrap { margin-top: 40px; display: flex; justify-content: center; padding: 20px 0; }
 
 /* ===== 包详情 ===== */
+/* 内容区 + 侧栏两列：不用 Row/Col 的负 margin，与 detail-header 左右边缘对齐 */
+.detail-row { display: flex; gap: 24px; align-items: flex-start; }
+.detail-left { flex: 1 1 66%; min-width: 0; }
+.detail-right { flex: 1 1 33%; min-width: 0; }
+@media (max-width: 992px) {
+  .detail-row { flex-direction: column; }
+  .detail-left, .detail-right { flex-basis: auto; }
+}
 .detail-header { background: #fff; border-radius: 16px; padding: 28px; margin-bottom: 24px; box-shadow: 0 2px 12px rgba(0,0,0,.08); }
 .detail-title-row { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
 .detail-name { font-size: 28px; font-weight: 700; color: #303133; word-break: break-all; }

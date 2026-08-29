@@ -580,9 +580,9 @@ class PublicPackageDetail <: Component {
 
     func installToml(p: PackageDoc, org: String, name: String): String {
         if (org.isEmpty()) {
-            "${name} = { version = '${p.version}' }"
+            "${name} = \"${p.version}\""
         } else {
-            "'${org}::${name}' = { version = '${p.version}' }"
+            "'${org}::${name}' = \"${p.version}\""
         }
     }
 

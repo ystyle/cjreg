@@ -19,10 +19,10 @@
 [dependencies]
   "tomlcj" = "1.0.0"
   "semver" = "0.0.3"
-  "pbkdf2" = { path = "../pbkdf2" }
-  "tang" = { path = "../tang" }
-  "bstorm" = "1.4.3"
-  "gjson" = "1.2.0"
+  "pbkdf2" = "1.0.0"
+  "tang" = "1.0.4"
+  "bstorm" = "1.4.7"
+  "gjson" = "1.2.1"
   "cjxt" = { path = "../cjxt" }
 
 # badger-cj（bstorm 底层）的 io_uring 支持

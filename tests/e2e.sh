@@ -209,6 +209,15 @@ import sys, json
 d = json.load(sys.stdin)
 assert any(x['action'] == 'clean_logs' for x in d['items']), d
 print('  清理动作自身入审计 ✓')
+# 发布计划推送也入审计（目标仓地址 + 成功计数，token 不落库）
+plan = [x for x in d['items'] if x['action'] == 'execute_publish_plan']
+assert plan, d
+p0 = plan[0]
+assert p0['status'] == 'ok' and 'success=6/6' in p0['detail'], p0
+assert '18070' in p0['target'], p0
+assert 'target_token' not in json.dumps(p0) and p0['detail'].count('explicitToken=true') <= 1, p0
+assert p0['ipAddr'] and p0['userAgent'], p0
+print('  发布计划推送审计（目标/计数/不落 token）✓')
 "
 # 5.5 未鉴权访问日志端点 → 401
 CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$PORTA/api/admin/logs/all")

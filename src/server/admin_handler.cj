@@ -457,10 +457,15 @@ public class AdminService {
             writeJson(ctx, 400u16, "{\"error\":\"name and url required\"}")
             return
         }
+        let (upActorId, upActorName) = this.actorOf(ctx)
         match (this.upstreamSvc.add(name, url, priority, "", 0)) {
             case Some(u) =>
+                writeAudit(this.adminData, LogKind.Admin, upActorId, upActorName, "add_upstream", "ok", name, ctx,
+                    detail: "url=${url} priority=${priority}")
                 writeJson(ctx, 200u16, "{\"id\":${u.id},\"name\":\"${u.name}\",\"isOfficial\":${u.isOfficial}}")
             case None =>
+                writeAudit(this.adminData, LogKind.Admin, upActorId, upActorName, "add_upstream", "failed", name, ctx,
+                    error: "upstream name exists or invalid")
                 writeJson(ctx, 409u16, "{\"error\":\"upstream name exists or invalid\"}")
         }
     }
@@ -471,9 +476,20 @@ public class AdminService {
         }
         let idStr = ctx.param("id")
         let id = Int64.parse(idStr)
+        let (delActorId, delActorName) = this.actorOf(ctx)
+        // 目标名尽量取真实上游名（删除后查不到，故先查）
+        var upName = "#${id}"
+        for (u in this.upstreamStore.listAll()) {
+            if (u.id == id) {
+                upName = u.name
+            }
+        }
         if (this.upstreamSvc.remove(id)) {
+            writeAudit(this.adminData, LogKind.Admin, delActorId, delActorName, "delete_upstream", "ok", upName, ctx)
             writeJson(ctx, 200u16, "{\"status\":\"ok\"}")
         } else {
+            writeAudit(this.adminData, LogKind.Admin, delActorId, delActorName, "delete_upstream", "failed", upName, ctx,
+                error: "not found or official protected")
             writeJson(ctx, 409u16, "{\"error\":\"cannot delete (not found or official protected)\"}")
         }
     }
@@ -597,19 +613,29 @@ public class AdminService {
         } catch (e: Exception) {
             ()
         }
+        let (planActorId, planActorName) = this.actorOf(ctx)
         if (roots.size == 0 || targetUrl.isEmpty()) {
+            writeAudit(this.adminData, LogKind.Admin, planActorId, planActorName, "execute_publish_plan", "failed",
+                targetUrl, ctx, error: "packages and target_url required")
             writeJson(ctx, 400u16, "{\"error\":\"packages and target_url required\"}")
             return
         }
         // 目标仓鉴权：显式 target_token 优先，否则按 URL 匹配上游表取该上游 authToken
+        // （token 属敏感信息，审计只记「是否使用显式 token」，不落明文）
         let token = resolveTargetToken(targetToken, targetUrl, this.upstreamStore.listAll())
         // 先 analyze 得拓扑 items
         let (items, _) = this.planSvc.analyze(roots)
         if (items.size == 0) {
+            writeAudit(this.adminData, LogKind.Admin, planActorId, planActorName, "execute_publish_plan", "failed",
+                targetUrl, ctx, error: "no packages found locally")
             writeJson(ctx, 400u16, "{\"error\":\"no packages found locally\"}")
             return
         }
         let (ok, total, errors) = this.executor.execute(items, targetUrl, token)
+        writeAudit(this.adminData, LogKind.Admin, planActorId, planActorName, "execute_publish_plan",
+            if (ok == total && total > 0) { "ok" } else { "failed" }, targetUrl, ctx,
+            error: if (errors.size > 0) { errors[0] } else { "" },
+            detail: "success=${ok}/${total} roots=${roots.size} explicitToken=${!targetToken.isEmpty()}")
         let sb = StringBuilder()
         sb.append("{\"success\":${ok},\"total\":${total},\"errors\":[")
         for (i in 0..errors.size) {

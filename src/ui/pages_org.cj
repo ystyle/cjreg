@@ -53,6 +53,8 @@ public struct MemberRow {
 class UsersPage <: Component {
     var state: Option<CjregState> = None
     var msg = Signal<String>("")
+    // 提示语气：true=成功（绿），false=失败/受阻（红）
+    var msgOk = Signal<Bool>(true)
     // 行数据 + 分页（泛型 Table<User>）
     var rows = Signal<ArrayList<User>>(ArrayList<User>())
     var currentPage = Signal<Int64>(1)
@@ -105,6 +107,12 @@ class UsersPage <: Component {
         PatchResult.ReRender
     }
 
+    // 统一提示（成功/失败决定 Tag 颜色）
+    func notify(text: String, ok: Bool): Unit {
+        this.msg.set(text)
+        this.msgOk.set(ok)
+    }
+
     // ===== 新增用户 =====
     func openCreate(ctx: ActionContext): PatchResult {
         this.formUser.set("")
@@ -128,7 +136,7 @@ class UsersPage <: Component {
             case None => return PatchResult.ReRender
         }
         if (!st.isAdminSession(ctx)) {
-            this.msg.set("无权限：需要管理员登录")
+            this.notify("无权限：需要管理员登录", false)
             return PatchResult.ReRender
         }
         // Form 校验（FormItem.errorSignal 展示错误）
@@ -140,7 +148,8 @@ class UsersPage <: Component {
         match (st.auth.createUser(uname, pass, this.formIsAdmin.get(), email: this.formEmail.get())) {
             case Some(u) =>
                 this.dialogVisible.set(false)
-                this.msg.set("已创建 ${u.username}")
+                let role = if (u.isAdmin) { "（管理员）" } else { "" }
+                this.notify("已创建 ${u.username}${role}", true)
                 st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "create user ${u.username}", "ok", nowMs())
                 // 展示新用户发布 Token
                 this.tokenUser = u.username
@@ -148,7 +157,7 @@ class UsersPage <: Component {
                 this.tokenUserId = u.id
                 this.tokenVisible.set(true)
             case None =>
-                this.msg.set("创建失败（用户已存在）")
+                this.notify("创建失败（用户已存在）", false)
         }
         PatchResult.ReRender
     }
@@ -181,12 +190,13 @@ class UsersPage <: Component {
             case None => return PatchResult.ReRender
         }
         if (!st.isAdminSession(ctx)) {
+            this.notify("无权限：需要管理员登录", false)
             return PatchResult.ReRender
         }
         match (st.auth.resetPublishToken(this.tokenUserId)) {
             case Some(t) =>
                 this.tokenValue.set(t)
-                this.msg.set("已重置 ${this.tokenUser} 的 Token")
+                this.notify("已重置 ${this.tokenUser} 的 Token", true)
                 st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "reset token ${this.tokenUser}", "ok", nowMs())
             case None => ()
         }
@@ -200,14 +210,46 @@ class UsersPage <: Component {
             case None => return PatchResult.ReRender
         }
         if (!st.isAdminSession(ctx)) {
-            this.msg.set("无权限：需要管理员登录")
+            this.notify("无权限：需要管理员登录", false)
             return PatchResult.ReRender
         }
         match (st.userStore.getUser(id)) {
             case Some(u) =>
                 if (st.auth.setUserActive(u.id, !u.isActive)) {
-                    this.msg.set(if (!u.isActive) { "已启用 ${u.username}" } else { "已禁用 ${u.username}" })
+                    let text = if (!u.isActive) { "已启用 ${u.username}" } else { "已禁用 ${u.username}" }
+                    this.notify(text, true)
                     st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "toggle user ${u.username}", "ok", nowMs())
+                } else {
+                    // 唯一失败原因：目标是最后一个启用管理员
+                    this.notify("不能禁用最后一个启用管理员（否则管理端将无人可登录）", false)
+                }
+            case None => ()
+        }
+        this.refresh()
+        PatchResult.ReRender
+    }
+
+    // ===== 管理员身份 =====
+    func toggleAdmin(ctx: ActionContext, id: Int64): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        if (!st.isAdminSession(ctx)) {
+            this.notify("无权限：需要管理员登录", false)
+            return PatchResult.ReRender
+        }
+        match (st.userStore.getUser(id)) {
+            case Some(u) =>
+                let target = !u.isAdmin
+                if (st.auth.setUserAdmin(u.id, target)) {
+                    let action = if (target) { "grant admin " } else { "revoke admin " }
+                    st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), action + u.username, "ok", nowMs())
+                    let text = if (target) { "已设为管理员 ${u.username}" } else { "已取消管理员 ${u.username}" }
+                    this.notify(text, true)
+                } else {
+                    // 唯一失败原因：目标是最后一个启用管理员
+                    this.notify("不能取消最后一个启用管理员的身份（否则管理端将无人可登录）", false)
                 }
             case None => ()
         }
@@ -242,14 +284,14 @@ class UsersPage <: Component {
             case None => return PatchResult.ReRender
         }
         if (!st.isAdminSession(ctx)) {
-            this.msg.set("无权限：需要管理员登录")
+            this.notify("无权限：需要管理员登录", false)
             return PatchResult.ReRender
         }
         if (st.auth.deleteUser(this.pendingDeleteId)) {
-            this.msg.set("已删除用户 ${this.pendingDeleteName}")
+            this.notify("已删除用户 ${this.pendingDeleteName}", true)
             st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "delete user ${this.pendingDeleteName}", "ok", nowMs())
         } else {
-            this.msg.set("删除失败（管理员受保护）")
+            this.notify("删除失败（管理员受保护）", false)
         }
         this.confirmVisible.set(false)
         this.pendingDeleteId = 0
@@ -281,12 +323,14 @@ class UsersPage <: Component {
                     Tag([text("禁用")]).kind(ComponentKind.Danger)
                 }
             }))
-            .add(TableColumn<User>().label("操作").minWidth(260).render({ u, i =>
+            .add(TableColumn<User>().label("操作").minWidth(380).render({ u, i =>
                 let tokenH: ActionHandler = { c => this.showToken(c, u.id) }
                 let toggleH: ActionHandler = { c => this.toggleActive(c, u.id) }
+                let adminH: ActionHandler = { c => this.toggleAdmin(c, u.id) }
                 let deleteH: ActionHandler = { c => this.askDelete(c, u.id) }
                 div([
                     Button([text("Token")]).size(ButtonSize.Small).onClick(tokenH),
+                    Button([text(if (u.isAdmin) { "取消管理员" } else { "设为管理员" })]).size(ButtonSize.Small).kind(ButtonKind.Primary).onClick(adminH),
                     Button([text(if (u.isActive) { "禁用" } else { "启用" })]).size(ButtonSize.Small).onClick(toggleH),
                     if (u.isAdmin) {
                         div()
@@ -365,10 +409,11 @@ class UsersPage <: Component {
     }
 
     public func render(): IComponent {
+        let msgKind = if (this.msgOk.get()) { ComponentKind.Success } else { ComponentKind.Danger }
         let toolbar = div([
             Button([text("新增用户")]).kind(ButtonKind.Primary).onClick(openCreate),
             if (this.msg.get() != "") {
-                Tag([text(this.msg.get())]).kind(ComponentKind.Success)
+                Tag([text(this.msg.get())]).kind(msgKind)
             } else {
                 div()
             },

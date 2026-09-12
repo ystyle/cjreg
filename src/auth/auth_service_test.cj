@@ -221,3 +221,108 @@ func testSetUserActiveAndDelete() {
     @Expect(svc.setUserActive(999, false), false)
 }
 
+// ===== 多管理员：提升/降级 + 「最后一个启用管理员」保护 =====
+
+@Test
+func testSetUserAdminPromoteAndDemote() {
+    PasswordHash.ITERATIONS = 1000  // 测试提速
+    let svc = makeService()
+    let _ = svc.initAdmin("admin", "AdminPass1")
+    let alice = svc.createUser("alice", "AlicePass1", false).getOrThrow()
+
+    // 提升普通用户为管理员
+    @Expect(svc.setUserAdmin(alice.id, true), true)
+    @Expect(svc.store.getUser(alice.id).getOrThrow().isAdmin, true)
+    @Expect(svc.countActiveAdmins(), 2)
+    // 提升后可用管理员入口登录
+    @Expect(svc.login("alice", "AlicePass1").isSome(), true)
+
+    // 幂等：目标状态与当前一致 → true 且无副作用
+    @Expect(svc.setUserAdmin(alice.id, true), true)
+    @Expect(svc.countActiveAdmins(), 2)
+
+    // 存在第二个启用管理员时可降级
+    @Expect(svc.setUserAdmin(alice.id, false), true)
+    @Expect(svc.store.getUser(alice.id).getOrThrow().isAdmin, false)
+    @Expect(svc.countActiveAdmins(), 1)
+
+    // 不存在的用户
+    @Expect(svc.setUserAdmin(999, true), false)
+    @Expect(svc.setUserAdmin(999, false), false)
+}
+
+@Test
+func testLastActiveAdminProtection() {
+    PasswordHash.ITERATIONS = 1000  // 测试提速
+    let svc = makeService()
+    let admin = svc.initAdmin("admin", "AdminPass1").getOrThrow()
+    @Expect(svc.countActiveAdmins(), 1)
+    @Expect(svc.isLastActiveAdmin(admin.id), true)
+
+    // 唯一启用管理员：既不可降级也不可禁用，状态保持不变
+    @Expect(svc.setUserAdmin(admin.id, false), false)
+    @Expect(svc.setUserActive(admin.id, false), false)
+    let after = svc.store.getUser(admin.id).getOrThrow()
+    @Expect(after.isAdmin, true)
+    @Expect(after.isActive, true)
+    // 管理端仍可登录（未锁死）
+    @Expect(svc.login("admin", "AdminPass1").isSome(), true)
+
+    // 出现第二个启用管理员 → 保护解除
+    let alice = svc.createUser("alice", "AlicePass1", true).getOrThrow()
+    @Expect(svc.countActiveAdmins(), 2)
+    @Expect(svc.isLastActiveAdmin(admin.id), false)
+    @Expect(svc.setUserAdmin(alice.id, false), true)
+    @Expect(svc.setUserAdmin(alice.id, true), true)
+
+    // 已禁用的管理员不占用「启用管理员」名额
+    @Expect(svc.setUserActive(alice.id, false), true)
+    @Expect(svc.countActiveAdmins(), 1)
+    @Expect(svc.isLastActiveAdmin(alice.id), false)
+    @Expect(svc.setUserAdmin(alice.id, false), true)
+    // 仍然只剩一个启用管理员 → 继续受保护
+    @Expect(svc.setUserActive(admin.id, false), false)
+    @Expect(svc.setUserAdmin(admin.id, false), false)
+
+    // 非管理员不受该约束
+    let bob = svc.createUser("bob", "BobPass1", false).getOrThrow()
+    @Expect(svc.setUserActive(bob.id, false), true)
+    @Expect(svc.setUserActive(bob.id, true), true)
+}
+
+@Test
+func testRecoverAdmin() {
+    PasswordHash.ITERATIONS = 1000  // 测试提速
+    let svc = makeService()
+    let _ = svc.initAdmin("admin", "AdminPass1")
+    let alice = svc.createUser("alice", "AlicePass1", false).getOrThrow()
+
+    // 参数缺失 / 用户不存在 → 拒绝（应急恢复不创建新用户）
+    @Expect(svc.recoverAdmin("", "Pass123").isNone(), true)
+    @Expect(svc.recoverAdmin("alice", "").isNone(), true)
+    @Expect(svc.recoverAdmin("nobody", "Pass123").isNone(), true)
+
+    // 普通用户 → 重置口令 + 强制启用管理员
+    match (svc.recoverAdmin("alice", "RescuePass1")) {
+        case Some(u) =>
+            @Expect(u.username, "alice")
+            @Expect(u.isAdmin, true)
+            @Expect(u.isActive, true)
+        case None => @Fail("recoverAdmin should succeed for existing user")
+    }
+    @Expect(svc.login("alice", "RescuePass1").isSome(), true)
+    @Expect(svc.login("alice", "AlicePass1").isNone(), true)
+
+    // 模拟锁死现场：两个启用管理员时禁用 + 降级 alice；应急恢复应同时修回身份与启用状态
+    @Expect(svc.setUserActive(alice.id, false), true)
+    @Expect(svc.setUserAdmin(alice.id, false), true)
+    let locked = svc.store.getUser(alice.id).getOrThrow()
+    @Expect(locked.isAdmin, false)
+    @Expect(locked.isActive, false)
+    @Expect(svc.recoverAdmin("alice", "RescuePass2").isSome(), true)
+    let rescued = svc.store.getUser(alice.id).getOrThrow()
+    @Expect(rescued.isAdmin, true)
+    @Expect(rescued.isActive, true)
+    @Expect(svc.login("alice", "RescuePass2").isSome(), true)
+}
+

@@ -132,6 +132,7 @@ public func buildServer(
             app.get("/api/admin/me", { ctx => adm.me(ctx) })
             app.get("/api/admin/users", { ctx => adm.listUsers(ctx) })
             app.post("/api/admin/users", { ctx => adm.createUser(ctx) })
+            app.put("/api/admin/users/:id/admin", { ctx => adm.setUserAdmin(ctx) })
             app.get("/api/admin/upstreams", { ctx => adm.listUpstreams(ctx) })
             app.post("/api/admin/upstreams", { ctx => adm.addUpstream(ctx) })
             app.delete("/api/admin/upstreams/:id", { ctx => adm.deleteUpstream(ctx) })

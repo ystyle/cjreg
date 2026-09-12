@@ -24,7 +24,7 @@ func printUsage(): Unit {
     println("命令:")
     println("  serve   启动私有中心仓 HTTP 服务（发布/下载/索引 + 管理 API）")
     println("  init    初始化数据目录（空数据目录创建首个管理员 + 默认官方上游）")
-    println("  admin   应急管理（reset-password）")
+    println("  admin   应急管理（reset-password --username <u> --password <p>）")
     println()
     println("选项:")
     println("  -d, --data <dir>   数据目录（默认 ./data）")
@@ -92,7 +92,11 @@ main(args: Array<String>): Int64 {
         case "init" =>
             return cmdInit(dataDir, username, password)
         case "admin" =>
-            return cmdAdmin(dataDir)
+            var sub = ""
+            if (result.nonOptions.size >= 2) {
+                sub = result.nonOptions[1]
+            }
+            return cmdAdmin(dataDir, sub, username, password)
         case "admin-ui" =>
             return cmdAdminUI(dataDir, port)
         case _ =>
@@ -245,10 +249,39 @@ func cmdInit(dataDir: String, username: String, password: String): Int64 {
     return 0
 }
 
-// admin：应急管理（reset-password）——当前占位
-func cmdAdmin(dataDir: String): Int64 {
-    println("cjreg: admin reset-password 尚未实现（需命令行参数用户名/密码）")
-    return 1
+// admin：应急管理（reset-password）——管理端锁死（管理员被禁用/降级）后的兜底通道
+// 语义：重置口令 + 强制 isAdmin=true + isActive=true；信任凭证 = 本地数据目录持有者
+func cmdAdmin(dataDir: String, sub: String, username: String, password: String): Int64 {
+    let usage = "用法: cjreg admin reset-password --username <用户名> --password <新口令> [-d <数据目录>]"
+    if (sub.isEmpty() || sub == "help") {
+        println(usage)
+        return 2
+    }
+    if (sub != "reset-password") {
+        println("cjreg: 未知的 admin 子命令 ${sub}")
+        println(usage)
+        return 2
+    }
+    if (username.isEmpty() || password.isEmpty()) {
+        println("cjreg: reset-password 需要 --username 和 --password")
+        return 2
+    }
+    let stores = openStores(dataDir)
+    if (stores.isNone()) {
+        return 1
+    }
+    let (_, userStore, _) = stores.getOrThrow()
+    let authSvc = AuthService(userStore, 86400)
+    let recovered = authSvc.recoverAdmin(username, password)
+    userStore.storm.close()  // 必须 close 才落盘（badger flush）
+    match (recovered) {
+        case Some(u) =>
+            println("cjreg: 已重置 ${u.username} 的口令，并确保其为启用状态的管理员（id=${u.id}）")
+            return 0
+        case None =>
+            println("cjreg: 用户 ${username} 不存在（应急恢复不创建新用户）")
+            return 1
+    }
 }
 
 // admin-ui：启动 cjxt 管理界面（直接访问同进程 store/service）

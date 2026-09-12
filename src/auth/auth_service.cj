@@ -123,11 +123,58 @@ public class AuthService {
         return Some(user)
     }
 
-    // 启用/禁用用户
+    // ===== 管理员安全约束 =====
+
+    // 启用状态的管理员数量（「最后一个管理员」保护的判定依据）
+    public func countActiveAdmins(): Int64 {
+        var n: Int64 = 0
+        for (u in this.store.listAllUsers()) {
+            if (u.isAdmin && u.isActive) {
+                n++
+            }
+        }
+        return n
+    }
+
+    // 该用户是否为「最后一个启用管理员」：禁用或降级他会使管理端无人可登录
+    // （isAdminSession 要求 isAdmin && isActive；非启用管理员恒为 false）
+    public func isLastActiveAdmin(userId: Int64): Bool {
+        match (this.store.getUser(userId)) {
+            case Some(user) =>
+                if (!(user.isAdmin && user.isActive)) {
+                    return false
+                }
+                return this.countActiveAdmins() <= 1
+            case None => return false
+        }
+    }
+
+    // 启用/禁用用户；拒绝禁用最后一个启用管理员（否则管理端彻底锁死）
     public func setUserActive(userId: Int64, active: Bool): Bool {
         match (this.store.getUser(userId)) {
             case Some(user) =>
+                if (!active && this.isLastActiveAdmin(userId)) {
+                    return false
+                }
                 user.isActive = active
+                this.store.saveUser(user)
+                return true
+            case None => return false
+        }
+    }
+
+    // 提升/取消管理员；拒绝取消最后一个启用管理员的身份
+    // 幂等：目标状态与当前一致时直接返回 true（不写库）
+    public func setUserAdmin(userId: Int64, isAdmin: Bool): Bool {
+        match (this.store.getUser(userId)) {
+            case Some(user) =>
+                if (user.isAdmin == isAdmin) {
+                    return true
+                }
+                if (!isAdmin && this.isLastActiveAdmin(userId)) {
+                    return false
+                }
+                user.isAdmin = isAdmin
                 this.store.saveUser(user)
                 return true
             case None => return false
@@ -154,6 +201,23 @@ public class AuthService {
                 this.store.saveUser(user)
                 return true
             case None => return false
+        }
+    }
+
+    // 应急恢复（本地 CLI `cjreg admin reset-password`）：重置口令 + 强制管理员身份与启用状态
+    // 用于管理端全部管理员被禁用/降级后的兜底；信任凭证 = 本地数据目录持有者
+    public func recoverAdmin(username: String, newPassword: String): ?User {
+        if (username.isEmpty() || newPassword.isEmpty()) {
+            return None
+        }
+        match (this.store.getUserByUsername(username)) {
+            case Some(user) =>
+                user.passwordHash = PasswordHash.hash(newPassword)
+                user.isAdmin = true
+                user.isActive = true
+                this.store.saveUser(user)
+                return Some(user)
+            case None => return None
         }
     }
 

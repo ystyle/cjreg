@@ -288,7 +288,8 @@ TokenGenerator：sess-* / publish-* + 32 位随机串（cjcc 同款）
 | `POST /api/admin/login` | 无 | 用户名+密码 → `{user, token, expiresAt}` |
 | `POST /api/admin/logout` | session | 注销 token |
 | `GET  /api/admin/me` | session | 当前用户信息 |
-| `POST /api/admin/users` | session+admin | 创建用户（普通/管理员） |
+| `POST /api/admin/users` | session+admin | 创建用户（普通/管理员，body `{username,password,isAdmin?,email?}`） |
+| `PUT  /api/admin/users/:id/admin` | session+admin | 提升/取消管理员（body `{isAdmin}`；最后一个启用管理员 → 409） |
 | `PUT  /api/admin/users/:id/password` | session+admin/本人 | 修改密码 |
 | `POST /api/admin/users/:id/reset-token` | session+admin | 重置发布 token |
 | `POST /pkg/:name` | **发布 token** | 包上传（兼容 cjpm cangjie-repo.toml token） |

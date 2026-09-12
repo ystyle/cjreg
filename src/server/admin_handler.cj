@@ -34,6 +34,54 @@ public class LoginRequest <: JsonDeserializable<LoginRequest> {
     }
 }
 
+// 创建用户请求（body: {username, password, isAdmin?, email?}）
+public class CreateUserRequest <: JsonDeserializable<CreateUserRequest> {
+    public var username: String = ""
+    public var password: String = ""
+    public var isAdmin: Bool = false
+    public var email: String = ""
+
+    public init() {}
+
+    public static func fromJson(r: JsonReader): CreateUserRequest {
+        let req = CreateUserRequest()
+        r.startObject()
+        while (r.peek() != EndObject) {
+            let n = r.readName()
+            match (n) {
+                case "username" => req.username = r.readValue<String>()
+                case "password" => req.password = r.readValue<String>()
+                case "isAdmin" => req.isAdmin = r.readValue<Bool>()
+                case "email" => req.email = r.readValue<String>()
+                case _ => r.skip()
+            }
+        }
+        r.endObject()
+        return req
+    }
+}
+
+// 用户角色变更请求（body: {isAdmin: true|false}）
+public class SetUserAdminRequest <: JsonDeserializable<SetUserAdminRequest> {
+    public var isAdmin: ?Bool = None
+
+    public init() {}
+
+    public static func fromJson(r: JsonReader): SetUserAdminRequest {
+        let req = SetUserAdminRequest()
+        r.startObject()
+        while (r.peek() != EndObject) {
+            let n = r.readName()
+            match (n) {
+                case "isAdmin" => req.isAdmin = Some(r.readValue<Bool>())
+                case _ => r.skip()
+            }
+        }
+        r.endObject()
+        return req
+    }
+}
+
 // 管理服务：组装 auth + 上游 + resolve + 发布计划
 public class AdminService {
     public var auth: AuthService
@@ -142,22 +190,75 @@ public class AdminService {
         writeJson(ctx, 200u16, sb.toString())
     }
 
+    // 创建用户（普通/管理员）：body {username, password, isAdmin?, email?}
+    // isAdmin 显式传入（与管理端 UI 的「管理员」开关口径一致，不再硬编码 false）
     public func createUser(ctx: TangHttpContext): Unit {
         if (!requireAdmin(ctx)) {
             return
         }
-        let username = ctx.fromValue("username") ?? ""
-        let password = ctx.fromValue("password") ?? ""
-        if (username.isEmpty() || password.isEmpty()) {
-            writeJson(ctx, 400u16, "{\"error\":\"username and password required\"}")
+        let req = parseJsonBody<CreateUserRequest>(ctx.bodyRaw(), { r => CreateUserRequest.fromJson(r) })
+        match (req) {
+            case Some(r) =>
+                if (r.username.isEmpty() || r.password.isEmpty()) {
+                    writeJson(ctx, 400u16, "{\"error\":\"username and password required\"}")
+                    return
+                }
+                match (this.auth.createUser(r.username, r.password, r.isAdmin, email: r.email)) {
+                    case Some(u) =>
+                        writeJson(ctx, 200u16,
+                            "{\"id\":${u.id},\"username\":\"${u.username}\",\"isAdmin\":${u.isAdmin}}")
+                    case None =>
+                        writeJson(ctx, 409u16, "{\"error\":\"user already exists\"}")
+                }
+            case None =>
+                writeJson(ctx, 400u16, "{\"error\":\"invalid JSON body\"}")
+        }
+    }
+
+    // 提升/取消管理员：PUT /api/admin/users/:id/admin  body {isAdmin: bool}
+    // 「最后一个启用管理员」不可被取消身份（409）——与管理端 UI 同一约束
+    public func setUserAdmin(ctx: TangHttpContext): Unit {
+        if (!requireAdmin(ctx)) {
             return
         }
-        match (this.auth.createUser(username, password, false)) {
-            case Some(u) =>
-                writeJson(ctx, 200u16, "{\"id\":${u.id},\"username\":\"${u.username}\"}")
-            case None =>
-                writeJson(ctx, 409u16, "{\"error\":\"user already exists\"}")
+        let uid = match (Int64.tryParse(ctx.param("id"))) {
+            case Some(n) => n
+            case None => 0
         }
+        if (uid <= 0) {
+            writeJson(ctx, 400u16, "{\"error\":\"invalid user id\"}")
+            return
+        }
+        let req = parseJsonBody<SetUserAdminRequest>(ctx.bodyRaw(), { r => SetUserAdminRequest.fromJson(r) })
+        // 字段缺失（None）与显式 false 必须区分：前者 400，后者是「降级」语义
+        var hasFlag = false
+        var target = false
+        match (req) {
+            case Some(r) => match (r.isAdmin) {
+                case Some(b) =>
+                    target = b
+                    hasFlag = true
+                case None => ()
+            }
+            case None => ()
+        }
+        if (!hasFlag) {
+            writeJson(ctx, 400u16, "{\"error\":\"isAdmin (bool) required in JSON body\"}")
+            return
+        }
+        match (this.userStore.getUser(uid)) {
+            case None =>
+                writeJson(ctx, 404u16, "{\"error\":\"user not found\"}")
+                return
+            case Some(_) => ()
+        }
+        if (!this.auth.setUserAdmin(uid, target)) {
+            writeJson(ctx, 409u16, "{\"error\":\"cannot revoke the last active admin\"}")
+            return
+        }
+        let u = this.userStore.getUser(uid).getOrThrow()
+        writeJson(ctx, 200u16,
+            "{\"id\":${u.id},\"username\":\"${u.username}\",\"isAdmin\":${u.isAdmin}}")
     }
 
     // ===== 上游管理 =====
@@ -405,32 +506,22 @@ public func writeJson(ctx: TangHttpContext, code: UInt16, body: String): Unit {
     ctx.contentType("application/json").status(code).writeStringWithCode(code, body)
 }
 
-// 手动解析登录 JSON body（{username, password}）
+// 解析登录 JSON body（{username, password}）
 public func parseLoginBody(body: Array<Byte>): ?LoginRequest {
-    let text = String.fromUtf8(body)
-    let bb = ByteBuffer()
-    bb.write(text.toArray())
-    let r = JsonReader(bb)
-    let req = LoginRequest()
+    parseJsonBody<LoginRequest>(body, { r => LoginRequest.fromJson(r) })
+}
+
+// 解析 JSON body（空 body / 非 JSON / 字段类型不符均返回 None）
+// 统一登录、创建用户、角色变更等端点的 body 解析入口
+public func parseJsonBody<T>(body: Array<Byte>, f: (JsonReader) -> T): ?T {
     try {
-        while (let Some(v) <- r.peek()) {
-            match (v) {
-                case BeginObject =>
-                    r.startObject()
-                    while (r.peek() != EndObject) {
-                        let n = r.readName()
-                        match (n) {
-                            case "username" => req.username = r.readValue<String>()
-                            case "password" => req.password = r.readValue<String>()
-                            case _ => r.skip()
-                        }
-                    }
-                    r.endObject()
-                    return Some(req)
-                case _ => r.skip()
-            }
+        let text = String.fromUtf8(body)
+        if (text.isEmpty()) {
+            return None
         }
-        return None
+        let bb = ByteBuffer()
+        bb.write(text.toArray())
+        return Some(f(JsonReader(bb)))
     } catch (e: Exception) {
         return None
     }

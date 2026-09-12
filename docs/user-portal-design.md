@@ -81,7 +81,7 @@
 - **始终保留 ≥1 个启用状态的管理员**：禁止禁用或降级「最后一个启用管理员」（`isAdminSession` 要求 `isAdmin && isActive`，否则管理端锁死）。
 - **管理员身份变更必须写审计日志**（提升/降级/禁用，含操作者），与建用户/重置 Token 的现有日志口径一致。
 - **UI 与 API 口径一致**：创建用户时 `isAdmin` 可指定（API 侧不得再硬编码 `false`）。
-- **逃生通道**：`cjreg admin reset-password` CLI 需真正实现，作为管理端锁死后的兜底（当前为占位）。
+- **逃生通道**：`cjreg admin reset-password --username <u> --password <p>`（本地 CLI），语义为**重置口令 + 强制 `isAdmin=true` + `isActive=true`**，用于管理端锁死（管理员被禁用/降级）或口令丢失后的兜底；不创建新用户。
 
 ### 7.4 backlog：team owner（路线 A）
 

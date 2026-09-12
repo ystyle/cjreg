@@ -11,7 +11,7 @@ cjreg <command> [options]
 
   serve      启动私有中心仓 HTTP 服务（发布/下载/索引 + 管理 API）
   init       初始化数据目录（空数据目录创建首个管理员 + 默认官方上游）
-  admin      应急管理（reset-password）
+  admin      应急管理（reset-password --username <u> --password <p>）
 ```
 
 选项：
@@ -53,7 +53,8 @@ cjpm build -j 16
 POST   /api/admin/login              登录获取 token
 GET    /api/admin/me                 当前用户
 GET    /api/admin/users              用户列表（admin）
-POST   /api/admin/users              创建用户（admin）
+POST   /api/admin/users              创建用户（admin，JSON body {username,password,isAdmin?,email?}）
+PUT    /api/admin/users/:id/admin    提升/取消管理员（admin，JSON body {isAdmin}；最后一个启用管理员不可取消，409）
 GET    /api/admin/upstreams          上游列表（admin）
 POST   /api/admin/upstreams          添加上游（admin，JSON body {name,url,priority}）
 DELETE /api/admin/upstreams/:id      删除上游（官方仓受保护）

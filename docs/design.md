@@ -294,6 +294,9 @@ TokenGenerator：sess-* / publish-* + 32 位随机串（cjcc 同款）
 | `PUT  /api/admin/users/:id/password` | session+admin/本人 | 修改密码 |
 | `POST /api/admin/users/:id/reset-token` | session+admin | 重置发布 token |
 | `POST /pkg/:name` | **发布 token** | 包上传（兼容 cjpm cangjie-repo.toml token） |
+| `GET /api/user/me` 等 4 端点 | **session**（任意用户） | 用户门户只读 API：me / publish-token / packages / teams |
+
+**用户门户（`/me`，普通用户与管理员共用）**：页面守卫 `requireUser`（登录即可）；登录入口 `/user/login` 接受所有启用用户（导航在**渲染期**读 cjxt `SessionContext` 决定显示「登录 / 我的 / 管理后台」，令牌恢复后也能正确刷新）；`/admin/login` 仍只接受管理员（同时是 `requireAdmin` 的跳转目标）。
 
 > 首个管理员走 CLI `init`（空数据目录），HTTP 层无 bootstrap 端点、无 admin key。
 

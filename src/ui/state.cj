@@ -17,6 +17,8 @@ public class CjregState <: AppState {
     public var auth: AuthService
     // cjxt App 实例（异步执行时服务端推送进度用）
     public var app: Option<App>
+    // 发布权限模式（open/team）：门户用来提示「是否需要团队授权」
+    public var permissionMode: String
     // 登录态
     public var currentUser: Signal<Option<User>> = Signal<Option<User>>(Option<User>.None)
     public var sessionToken: Signal<String> = Signal<String>("")
@@ -27,13 +29,30 @@ public class CjregState <: AppState {
 
     public init(pkgStore: PackageStore, userStore: BstormUserStore,
                 upStore: BstormUpstreamStore, adminData: AdminDataStore, auth: AuthService,
-                app!: Option<App> = None) {
+                app!: Option<App> = None, permissionMode!: String = "open") {
         this.pkgStore = pkgStore
         this.userStore = userStore
         this.upStore = upStore
         this.adminData = adminData
         this.auth = auth
         this.app = app
+        this.permissionMode = permissionMode
+    }
+
+    /// 操作级用户校验：已登录且用户仍存在、启用（不要求管理员）——用户门户动作用
+    public func userSession(ctx: ActionContext): ?User {
+        match (ctx.getContext().get("uid")) {
+            case Some(uidStr) =>
+                let uid = match (Int64.tryParse(uidStr)) {
+                    case Some(n) => n
+                    case None => return None
+                }
+                match (this.userStore.getUser(uid)) {
+                    case Some(u) => if (u.isActive) { Some(u) } else { None }
+                    case None => None
+                }
+            case None => None
+        }
     }
 
     /// 操作级权限校验：会话上下文标记为管理员，且该用户仍存在、启用、isAdmin
@@ -42,16 +61,8 @@ public class CjregState <: AppState {
         if (requireAdmin(ctx.getContext()).isSome()) {
             return false
         }
-        match (ctx.getContext().get("uid")) {
-            case Some(uidStr) =>
-                let uid = match (Int64.tryParse(uidStr)) {
-                    case Some(n) => n
-                    case None => return false
-                }
-                match (this.userStore.getUser(uid)) {
-                    case Some(u) => u.isAdmin && u.isActive
-                    case None => false
-                }
+        match (this.userSession(ctx)) {
+            case Some(u) => u.isAdmin
             case None => false
         }
     }

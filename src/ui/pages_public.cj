@@ -94,11 +94,16 @@ func categoryLabels(strs: ArrayList<String>): ArrayList<String> {
 
 // ===== 公开顶部导航 =====
 // sctx = 会话上下文（cjxt SessionContext 接口，页面 onMount 取、render 期读）：
-// 未登录 → 「登录」入口；已登录管理员 → 「管理后台」入口（登录后才显示管理入口）。
+// 未登录 → 「登录」入口（用户门户 /user/login）；已登录 → 「我的」（/me）；
+// 管理员额外显示「管理后台」入口（登录后才显示管理入口）。
 // 注意必须在 render() 里读：令牌恢复后的就地重渲不会重跑 onMount。
 public func publicNav(active: String, sctx: Option<SessionContext>): IComponent {
     let isAdmin = match (sctx) {
         case Some(s) => s.isAdmin
+        case None => false
+    }
+    let loggedIn = match (sctx) {
+        case Some(s) => s.uid > 0
         case None => false
     }
     let children = ArrayList<IComponent>()
@@ -109,10 +114,13 @@ public func publicNav(active: String, sctx: Option<SessionContext>): IComponent 
     children.add(navLink("/", "首页", active == "/"))
     children.add(navLink("/packages", "包列表", active == "/packages"))
     children.add(navLink("/docs", "帮助文档", active == "/docs"))
+    if (loggedIn) {
+        children.add(navLink("/me", "我的", active == "/me"))
+    } else {
+        children.add(navLink("/user/login", "登录", active == "/user/login"))
+    }
     if (isAdmin) {
         children.add(navLink("/admin", "管理后台", false))
-    } else {
-        children.add(navLink("/admin/login", "登录", false))
     }
     div(children.toArray(), attrs: Some(HashMap<String, String>([("class", cls("public-nav"))])))
 }

@@ -17,6 +17,24 @@ public func requireAdmin(ctx: HashMap<String, String>): Option<String> {
     }
 }
 
+/// 页面守卫：登录即可访问（普通用户与管理员均放行）——用户门户 /me 用。
+/// 未登录 → 跳转用户门户登录页（管理员从 /admin/login 登录后同样可访问）。
+public func requireUser(ctx: HashMap<String, String>): Option<String> {
+    match (ctx.get("uid")) {
+        case Some(v) => if (v.isEmpty()) { Some("/user/login") } else { None }
+        case None => Some("/user/login")
+    }
+}
+
+/// 清除会话上下文（登出）：uid/username/isAdmin/token 置空。
+/// 置空而非删除——守卫读 get(key)，空串与缺失语义一致（见 public_nav_test 的登出用例）。
+public func clearSessionContext(ctx: ActionContext): Unit {
+    ctx.setContext("uid", "")
+    ctx.setContext("username", "")
+    ctx.setContext("isAdmin", "")
+    ctx.setContext("token", "")
+}
+
 /// 会话上下文中的操作者 uid（未登录返回 0）
 public func sessionUid(ctx: ActionContext): Int64 {
     match (ctx.getContext().get("uid")) {

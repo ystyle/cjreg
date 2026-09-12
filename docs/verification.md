@@ -239,9 +239,9 @@ $ bash tests/e2e.sh
 - 演示/冒烟数据目录位于 `.smoke/`（已 gitignore），不进仓库。
 - 发布计划 item 状态目前为 `pending/running/completed/failed` 四态（设计中的 `publishing`/`waiting_index`/`skipped` 与 SSE 进度流未实现，
   现以 `App.pushUpdate` 推送进度）；`analyze` 响应暂未输出 `dependency_range/local_versions/remote_versions/recommended_version`。
-- 公开只读 API（`/api/stats`、`/api/packages*`、`/api/organizations`）与包三级删除的「恢复/硬删」入口尚未实现
-  （清单与优先级见 `docs/gap-analysis.md`）；审计日志（发布/认证/管理三类 + IP/UA + 查询/清理端点 + 管理端页面）
-  已实现并纳入 `tests/e2e.sh` 第 5 步与单元测试，详见 `docs/audit-log.md`。
+- 包三级删除的「恢复/硬删」入口尚未实现（清单与优先级见 `docs/gap-analysis.md`）；
+  审计日志（发布/认证/管理三类 + IP/UA + 查询/清理端点 + 管理端页面）与公开只读 API（C1–C5）
+  已实现，分别纳入 `tests/e2e.sh` 第 5 步与第 6 步，详见 `docs/audit-log.md`、`docs/public-api.md`。
 - 性能数据为单机冒烟测量，非正式基准。
 
 ## 6. 结论

@@ -28,6 +28,7 @@ export default defineConfig({
           { text: '团队与组织', link: '/guide/teams' },
           { text: '上游代理与多仓', link: '/guide/upstream' },
           { text: '发布计划', link: '/guide/publish-plan' },
+          { text: '公开只读 API', link: '/guide/public-api' },
         ]},
         { text: '运维', items: [
           { text: '服务端配置', link: '/deploy/env' },

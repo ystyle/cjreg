@@ -26,7 +26,7 @@
 | `/api/admin/logs/:kind` | GET | 审计日志查询（`kind` = `publish`/`admin`/`auth`/`all`；`keyword`/`status`/`from`/`to`/`offset`/`limit`） |
 | `/api/admin/logs/clean` | POST | 清理审计日志（`{kind?, before?}`，返回 `{"deleted":N}`） |
 
-Header：`Authorization: Bearer <会话 Token>`。
+Header：`Authorization: Bearer <会话 Token>`；审计日志字段见 [审计日志](/guide/audit)。
 
 ## 用户 API（`/api/user/*`，任意登录用户）
 
@@ -37,6 +37,19 @@ Header：`Authorization: Bearer <会话 Token>`。
 | `/api/user/me/packages` | GET | 我发布过版本的包（`page`/`size`/`q`，含 owner 标记） |
 | `/api/user/me/teams` | GET | 我所属团队 + 权限 + 关联组织/包 |
 
+## 公开只读 API（C1–C5）
+
+| 端点 | 方法 | 鉴权 | 说明 |
+|---|---|---|---|
+| `/api/stats` | GET | `require_auth=false` 时公开；`true` 时需 Token | 包/版本/下载/组织/团队/用户数、存储字节、服务端版本与运行时长 |
+| `/api/packages` | GET | 同上 | 包列表：`q`（支持 `org::name`）、`organization`、`category`（逗号 OR）、`sort`、`page`/`size` |
+| `/api/packages/:name` | GET | 同上 + 包级 read（私有仓） | 包详情：全部版本 + 聚合 + README（`?organization=`） |
+| `/api/packages/:name/:version` | GET | 同上 | 版本详情：meta 全字段 + `sha256` + 制品字节 + 下载数 + 发布者 |
+| `/api/organizations` | GET | 同上 | 组织列表（含包/版本计数；有包但未登记的组织也会出现，`id=0`） |
+
+软删版本对所有公开端点不可见；私有仓下未登录 401、越权包 403。
+字段与响应示例见 [公开只读 API](/guide/public-api)。
+
 ## 约定
 
 - 统一错误响应体：`{"error": "<message>"}`；
@@ -45,7 +58,4 @@ Header：`Authorization: Bearer <会话 Token>`。
 
 ## 规划中
 
-公开只读 API（`/api/stats`、`/api/packages`、`/api/packages/:name`、`/api/organizations`）、
 组织 CRUD REST 端点、上游连通性测试端点等，见仓库 `docs/gap-analysis.md`。
-
-审计日志端点的字段与用法见 [审计日志](/guide/audit)。

@@ -67,6 +67,18 @@ public func buildServer(
         case None => ()
     }
 
+    // 公开只读 API（C1–C5）：require_auth=false 时公开；true 时要求有效 token + 包级 read 权限
+    let pubUserStore: ?UserStore = match (admin) {
+        case Some(adm) => Some(adm.userStore)
+        case None => None
+    }
+    let publicApi = PublicApi(store, permData, publishAuth, pubUserStore, requireReadAuth, auditNowMs())
+    app.get("/api/packages/:name/:version", { ctx => publicApi.versionDetail(ctx) })
+    app.get("/api/packages/:name", { ctx => publicApi.packageDetail(ctx) })
+    app.get("/api/packages", { ctx => publicApi.listPackages(ctx) })
+    app.get("/api/organizations", { ctx => publicApi.organizations(ctx) })
+    app.get("/api/stats", { ctx => publicApi.stats(ctx) })
+
     // 发布 POST /pkg/:name[?organization=]
     app.post("/pkg/:name", { ctx =>
         let name = ctx.param("name")

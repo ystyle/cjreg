@@ -225,4 +225,72 @@ CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$PORTA/api/admin
 echo "  未鉴权查询日志被拒（401）✓"
 
 echo ""
+echo "=== 6. 公开只读 API（C1–C5）==="
+curl -s "http://localhost:$PORTA/api/stats" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['packages'] >= 6 and d['versions'] >= 6, d
+assert d['serverVersion'] and d['startedAt'] > 0, d
+assert d['storageBytes'] > 0, d
+print('  /api/stats：%d 包 / %d 版本 / %d 下载 / %d 字节 ✓' % (d['packages'], d['versions'], d['downloads'], d['storageBytes']))
+"
+curl -s "http://localhost:$PORTA/api/packages?size=100" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+names = [x['fullName'] for x in d['items']]
+assert d['total'] >= 6, d
+assert 'test::app' in names and 'test::mathUtils' in names, names
+row = [x for x in d['items'] if x['name'] == 'app'][0]
+assert row['versionCount'] >= 1 and row['latestVersion'] == '1.0.0', row
+assert row['updatedAt'] > 0 and isinstance(row['categories'], list) and isinstance(row['license'], list), row
+print('  /api/packages：%d 包（含聚合字段）✓' % d['total'])
+"
+curl -s "http://localhost:$PORTA/api/packages?q=test::app" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['total'] == 1 and d['items'][0]['fullName'] == 'test::app', d
+print('  q=org::name 语法 ✓')
+"
+curl -s "http://localhost:$PORTA/api/packages?organization=test&page=2&size=2&sort=name" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['total'] >= 6 and len(d['items']) == 2 and d['page'] == 2, d
+print('  组织过滤 + 分页 + 排序 ✓')
+"
+curl -s "http://localhost:$PORTA/api/packages/app?organization=test" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['name'] == 'app' and d['fullName'] == 'test::app', d
+assert d['versionCount'] >= 1 and d['latestVersion'] == '1.0.0', d
+assert d['versions'][0]['sha256'], d
+assert d['versions'][0]['publisherName'] == '$ADMIN_USER', d
+print('  /api/packages/app：%d 版本 + sha256 + 发布者 ✓' % d['versionCount'])
+"
+curl -s "http://localhost:$PORTA/api/packages/app/1.0.0?organization=test" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['version'] == '1.0.0', d
+assert d['sha256'] and d['tarballSize'] > 0, d
+assert 'cjcVersion' in d and 'publisherName' in d and d['publisherName'] == '$ADMIN_USER', d
+print('  /api/packages/app/1.0.0：版本详情 ✓')
+"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$PORTA/api/packages/app/9.9.9?organization=test")
+[ "$CODE" = "404" ] || { echo "不存在的版本应 404，实际 $CODE"; exit 1; }
+curl -s "http://localhost:$PORTA/api/organizations" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+orgs = {x['name']: x for x in d['items']}
+assert 'test' in orgs, d
+assert orgs['test']['packageCount'] >= 6 and orgs['test']['versionCount'] >= 6, orgs['test']
+print('  /api/organizations：%d 个组织（含包/版本计数）✓' % d['total'])
+"
+# B 仓（回源落库后的公开数据同样可用）
+curl -s "http://localhost:$PORTB/api/packages?size=100" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['total'] >= 6, d
+print('  B 仓公开包列表：%d 包 ✓' % d['total'])
+"
+
+echo ""
 echo "=== 双仓 e2e 全部通过 ✓ ==="

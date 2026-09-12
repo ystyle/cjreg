@@ -346,4 +346,84 @@ print('  连通性测试入审计（成功/失败分别记录）✓')
 "
 
 echo ""
+echo "=== 8. 包三级删除闭环（软删 / 恢复 / 硬删）==="
+# 8.1 管理端版本列表拿到 id + sha（自动化入口）
+INFO=$(curl -s "http://localhost:$PORTA/api/admin/packages?organization=test&name=mathUtils&includeDeleted=1" \
+  -H "Authorization: Bearer $TOKEN")
+PID=$(echo "$INFO" | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['total']>=1,d;print(d['items'][0]['id'])")
+SHA=$(echo "$INFO" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['items'][0]['sha256'])")
+echo "  mathUtils id=$PID sha=${SHA:0:12}…"
+[ -f ".smoke/A/data/blobs/$SHA" ] || { echo "  制品文件应存在：.smoke/A/data/blobs/$SHA"; exit 1; }
+
+# 8.2 软删除：索引/下载/公开 API 立即不可见，制品保留
+curl -s -X DELETE "http://localhost:$PORTA/api/admin/packages/$PID" -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['status'] == 'ok', d
+print('  软删除：%s（跳过计划项 %d）✓' % (d['message'], d['skippedPlanItems']))
+"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$PORTA/pkg/mathUtils/1.0.0?organization=test")
+[ "$CODE" = "404" ] || { echo "  软删后制品下载应 404，实际 $CODE"; exit 1; }
+CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$PORTA/index/ma/th/mathUtils?organization=test")
+[ "$CODE" = "404" ] || { echo "  软删后索引应 404，实际 $CODE"; exit 1; }
+curl -s "http://localhost:$PORTA/api/packages?q=test::mathUtils" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['total'] == 0, d
+print('  软删后：下载 404 / 索引 404 / 公开 API 不可见 ✓')
+"
+[ -f ".smoke/A/data/blobs/$SHA" ] || { echo "  软删除不应删除制品文件"; exit 1; }
+
+# 8.3 恢复（校验制品仍在）→ 索引/下载/公开 API 全部回来
+curl -s -X PUT "http://localhost:$PORTA/api/admin/packages/$PID/restore" -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['status'] == 'ok' and d['artifactPresent'], d
+print('  恢复：%s（制品存在=%s）✓' % (d['message'], d['artifactPresent']))
+"
+curl -s -o /dev/null -w "" "http://localhost:$PORTA/pkg/mathUtils/1.0.0?organization=test"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$PORTA/pkg/mathUtils/1.0.0?organization=test")
+[ "$CODE" = "200" ] || { echo "  恢复后下载应 200，实际 $CODE"; exit 1; }
+curl -s "http://localhost:$PORTA/api/packages?q=test::mathUtils" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['total'] == 1 and d['items'][0]['latestVersion'] == '1.0.0', d
+print('  恢复后：下载 200 / 公开 API 可见 ✓')
+"
+
+# 8.4 硬删前置：未软删直接硬删 → 409
+curl -s -o /dev/null -w "%{http_code}" -X DELETE "http://localhost:$PORTA/api/admin/packages/$PID/hard" \
+  -H "Authorization: Bearer $TOKEN" | grep -q 409 || { echo "  未软删直接硬删应 409"; exit 1; }
+echo "  未软删直接硬删被拒（409）✓"
+
+# 8.5 硬删：删记录 + 制品文件
+curl -s -o /dev/null -X DELETE "http://localhost:$PORTA/api/admin/packages/$PID" -H "Authorization: Bearer $TOKEN"
+curl -s -X DELETE "http://localhost:$PORTA/api/admin/packages/$PID/hard" -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['status'] == 'ok' and d['blobRemoved'], d
+print('  硬删除：%s（制品已删=%s）✓' % (d['message'], d['blobRemoved']))
+"
+[ -f ".smoke/A/data/blobs/$SHA" ] && { echo "  硬删除后制品文件应已删除"; exit 1; }
+curl -s "http://localhost:$PORTA/api/admin/packages?organization=test&name=mathUtils&includeDeleted=1" \
+  -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['total'] == 0, d
+print('  硬删后记录消失 / 制品文件已清理 ✓')
+"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "http://localhost:$PORTA/api/admin/packages/$PID/restore" -H "Authorization: Bearer $TOKEN")
+[ "$CODE" = "404" ] || { echo "  硬删后恢复应 404，实际 $CODE"; exit 1; }
+
+# 8.6 审计：三种操作都有记录
+curl -s "http://localhost:$PORTA/api/admin/logs/admin?limit=50" -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+actions = {x['action'] for x in d['items']}
+for a in ('delete_package', 'restore_package', 'hard_delete_package'):
+    assert a in actions, (a, sorted(actions))
+print('  审计：delete_package / restore_package / hard_delete_package 均已记录 ✓')
+"
+
+echo ""
 echo "=== 双仓 e2e 全部通过 ✓ ==="

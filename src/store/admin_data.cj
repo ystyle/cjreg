@@ -582,6 +582,16 @@ public class AdminDataStore {
         return d.id
     }
 
+    /// 全量列举计划项（跨计划扫描用：如包版本删除后的联动标记）
+    public func listPlanItems(): ArrayList<PlanItemDoc> {
+        let r = ArrayList<PlanItemDoc>()
+        for (d in this.storm.all<PlanItemDoc>()) {
+            r.add(d)
+        }
+        sort(r, by: planItemByOrderAsc)
+        r
+    }
+
     public func listPlanItems(planId: Int64): ArrayList<PlanItemDoc> {
         let r = ArrayList<PlanItemDoc>()
         for (d in this.storm.all<PlanItemDoc>()) {
@@ -630,4 +640,15 @@ func logAscCmp(a: LogDoc, b: LogDoc): Ordering {
         return if (a.id < b.id) { Ordering.LT } else { Ordering.GT }
     }
     return Ordering.EQ
+}
+
+// 计划项排序（order 升序，同序按 id）
+func planItemByOrderAsc(a: PlanItemDoc, b: PlanItemDoc): Ordering {
+    if (a.order != b.order) {
+        return if (a.order < b.order) { Ordering.LT } else { Ordering.GT }
+    }
+    if (a.id == b.id) {
+        return Ordering.EQ
+    }
+    return if (a.id < b.id) { Ordering.LT } else { Ordering.GT }
 }

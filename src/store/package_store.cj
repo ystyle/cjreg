@@ -111,4 +111,9 @@ public class PackageStore {
         doc.deletedAt = 0
         this.storm.save(doc)
     }
+
+    // 硬删除（记录从库中移除；制品文件由调用方删除——见 package_lifecycle）
+    public func hardDelete(doc: PackageDoc): Unit {
+        this.storm.delete(doc)
+    }
 }

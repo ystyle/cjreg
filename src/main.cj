@@ -152,7 +152,8 @@ func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
     let adminData = AdminDataStore(userStore.storm)
     let admin = AdminService(authSvc, upSvc, userStore, upStore,
         ResolveService(upSvc), Some(proxySvc), PublishPlanService(pkgStore),
-        PublishExecutor(pkgStore, blobStore), adminData: Some(adminData))
+        PublishExecutor(pkgStore, blobStore), adminData: Some(adminData),
+        pkgStore: Some(pkgStore), blobStore: Some(blobStore))
 
     // 同一 Tang 实例：协议路由 + cjxt 管理/公开页面（单进程共享 store）
     let app = buildServer(pkgStore, Some(admin), Some(upSvc), blobStore, config: cfg,
@@ -180,7 +181,11 @@ func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
         .configure(AppConfig(cssBundle: "/css/bundle.css?v=3"))
         .serveStatic("/css", "public/css")
         .UseComponent()
-        .state<CjregState>({ => CjregState(pkgStore, userStore, upStore, adminData, authSvc, app: Some(cjxtApp), config: cfg) })
+        .state<CjregState>({ =>
+            let st = CjregState(pkgStore, userStore, upStore, adminData, authSvc, app: Some(cjxtApp), config: cfg)
+            st.blobStore = Some(blobStore)
+            st
+        })
         .auth({ t => restoreAdminSession(authSvc, t) })
         .port(port)
         .setTang(app)
@@ -347,12 +352,18 @@ func cmdAdminUI(dataDir: String, cfg: CjregConfig): Int64 {
     let (pkgStore, userStore, upStore) = stores.getOrThrow()
     let adminData = AdminDataStore(userStore.storm)
     let authSvc = AuthService(userStore, 86400)
+    // 制品库（包硬删除清理 blob）：与 serve 相同的磁盘布局
+    let blobStore: BlobStore = DiskBlobStore(dataDir + "/blobs")
     let cjxtApp = App()
     cjxtApp
         .configure(AppConfig(cssBundle: "/css/bundle.css?v=3"))
         .serveStatic("/css", "public/css")
         .UseComponent()
-        .state<CjregState>({ => CjregState(pkgStore, userStore, upStore, adminData, authSvc, app: Some(cjxtApp), config: cfg) })
+        .state<CjregState>({ =>
+            let st = CjregState(pkgStore, userStore, upStore, adminData, authSvc, app: Some(cjxtApp), config: cfg)
+            st.blobStore = Some(blobStore)
+            st
+        })
         .auth({ t => restoreAdminSession(authSvc, t) })
         .host("0.0.0.0").port(port)
         .serverBuilder({ sb => sb.maxRequestBodySize(cfg.maxRequestBytes) })

@@ -35,6 +35,24 @@
 - 测试：`public_service_test.cj` 9 组用例（语法/分页/过滤排序/软删隐藏/统计/版本/组织计数/私有可见性/JSON 转义）、
   `tests/e2e.sh` 第 6 步双仓实测 5 个端点
 
+### Added — 包三级删除闭环（软删 / 恢复 / 硬删）
+
+- `GET /api/admin/packages`：管理端版本列表（`organization`/`name`/`includeDeleted`/`page`/`size`，
+  输出 `id`/`sha256`/`deletedAt`/`tarballSize` 等，供自动化调用删除端点）
+- `DELETE /api/admin/packages/:id`：**软删除**（`deletedAt`；索引/下载/公开 API 立即不可见，制品保留）
+- `PUT /api/admin/packages/:id/restore`：**恢复**（**校验制品仍在**：本地 blob 存在或该版本来自上游可回源；
+  制品丢失时 409 拒绝，避免恢复出下载 404 的版本）
+- `DELETE /api/admin/packages/:id/hard`：**硬删除**（仅允许对已软删版本执行，否则 409；
+  删除记录 + 制品文件，不可恢复）
+- **发布计划联动**：删除某版本时，引用它的未完成计划项标记为 `skipped`（`completed`/`failed` 保留历史；
+  重复删除不重复计数），响应返回 `skippedPlanItems`
+- 审计：`delete_package` / `restore_package` / `hard_delete_package`（detail 含 `skippedPlanItems`/`blobRemoved`/`artifactPresent`）
+- 管理端包管理页：行内与版本弹窗均按状态给出「软删除」或「恢复/硬删除」，确认弹窗文案随模式变化
+- 测试：`package_lifecycle_test.cj` 5 组用例（幂等软删、恢复校验制品/上游回源、硬删前置与制品清理、
+  计划项联动、JSON 形状）；`tests/e2e.sh` 第 8 步（软删→下载/索引/公开 API 消失→恢复→硬删→文件清理→审计）
+- 修复：`BlobStore.exists` 与 `std.fs.exists` **同名导致 `DiskBlobStore` 内部自递归**（依赖制品下载时
+  触发 `Out of memory`），接口方法更名 `has`——详见 `docs/verification.md` §4
+
 ### Added — 上游连通性测试端点
 
 - `POST /api/admin/upstreams/:id/test?name=&organization=`：诊断上游可达性与索引可用性

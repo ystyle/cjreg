@@ -29,7 +29,7 @@
 ### 关键差距项落地
 
 - A1/A2/A3（权限双路径）：M3 认证 + publishToken 基础落地；发布动态权限/覆盖裁决为简化实现
-- B1（三级删除）：PackageDoc.deletedAt 软删/恢复已实现（store 层），admin 删除端点待 M7
+- B1（三级删除）：PackageDoc.deletedAt 软删/恢复 + 三层管理端点（软删/恢复/硬删）均已实现（见 §E 之后的实现状态）
 - C（多仓）：G2 多上游 priority、J1 索引缓存、J2 优先级解析 已实现（M4/M5）
 - I（发布计划）：analyze 拓扑 + 执行引擎（M5/M6）；SSE 进度推送、六态状态机为简化
 - 🔒 可选/超集项：保留设计，未全部实现
@@ -57,7 +57,7 @@
 
 | # | 差距项 | 来源 | 状态 | 建议 |
 |---|---|---|---|---|
-| B1 | **三级删除**：软删/恢复（校验 tarball）/硬删（删记录+文件+审计） | admin.go；PROTOCOL.md | 缺失 | §5 补删除模型 + deleted_at + 索引/缓存/发布计划联动 |
+| B1 | **三级删除**：软删/恢复（校验 tarball）/硬删（删记录+文件+审计） | admin.go；PROTOCOL.md | ✅ 已实现（`src/server/package_lifecycle.cj` + 4 个管理端点；恢复校验制品、硬删删 blob、计划项联动 skipped） | — |
 | B2 | **admin 包版本列表** `GET /api/admin/packages/versions/:name` + 筛选参数（search/org/artifactType/deleted） | admin.go | 缺失 | 随包管理端点补 |
 | B3 | **下载计数** `download_count`（下载时自增） | models/package.go | 缺失 | 公开 stats 依赖 |
 | B4 | **来源标记字段化** `upstream_id/upstream_name`（回源落库写入） | upstream/sync.go | 部分覆盖 | 明确字段归属（bstorm 文档 vs 入元数据） |

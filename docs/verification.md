@@ -211,6 +211,21 @@ $ bash tests/e2e.sh
 
 ## 4. 验证过程中发现并修复的缺陷
 
+### 4.6 `BlobStore.exists` 与 `std.fs.exists` 同名 → 自递归 OOM（三级删除闭环引入）
+
+- **现象**：双仓 e2e 在「发布第 4 个包（含依赖）」时服务端抛 `Out of memory`，客户端报
+  `read response timeout`；而单独重放相同的 6 次发布会话却时好时坏。
+- **排查**：用反向代理抓全部请求（含 GET）后定位——失败的**不是发布**，而是 cjpm 为了构建依赖而发起的
+  `GET /pkg/:name/:version`（依赖制品下载）。本地 `tests/pkgs/*/target` 已存在时 cjpm 不重建 → 不下载 → 通过，
+  因此表现为「偶发」。
+- **根因**：新增的 `DiskBlobStore.exists(sha256)` 与 `std.fs.*` 的顶层 `exists(path)` **同名**，
+  方法体里的 `exists(dir + "/" + sha256)` 被解析为**调用自身** → 无限递归 → 失败（表层报 OOM）。
+- **修复**：接口方法更名 `has(sha256)`（并加注释说明该陷阱），调用点同步更新。
+- **回归**：修复后 `tests/e2e.sh` 8 步全绿（含第 8 步三级删除）；单测 175/175。
+- **教训**：与标准库同名的成员方法要警惕「体里裸调用」的解析结果；本地预热过的构建会掩盖依赖下载路径的缺陷。
+
+
+
 | # | 缺陷 | 影响 | 修复 |
 |---|---|---|---|
 | 1 | `httpGet` / `httpPostBinary` **从未设置 `Authorization` 头** | 上游 `authToken` 形同虚设：私有上游回源无法认证；发布计划推送到需认证的目标仓（官方中心仓或另一私有仓）必然 401 —— 即申报书「一键推送到官方仓」实际不可用 | 两处补 `HttpRequestBuilder().header("Authorization", token)`（裸 token，对齐官方规格与 Go 先行版） |

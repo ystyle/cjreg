@@ -6,6 +6,7 @@ import ystyle::cjreg.store.*
 import ystyle::cjreg.config.*
 import ystyle::cjreg.auth.*
 import ystyle::cjreg.auth.model.*
+import ystyle::cjreg.server.*
 import std.collection.*
 import std.convert.*
 
@@ -19,6 +20,8 @@ public class CjregState <: AppState {
     public var app: Option<App>
     // 服务端运行配置（cjreg.toml）：门户提示权限模式、门户/文档里的示例地址都取自它
     public var config: CjregConfig
+    // 制品库（包硬删除时清理 blob；None = 未注入，硬删不可用）——由 main.cj 的状态工厂注入
+    public var blobStore: ?BlobStore = None
     // 登录态
     public var currentUser: Signal<Option<User>> = Signal<Option<User>>(Option<User>.None)
     public var sessionToken: Signal<String> = Signal<String>("")

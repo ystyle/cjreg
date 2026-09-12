@@ -47,6 +47,12 @@ public enum ProxyOutcome {
 public interface BlobStore {
     func put(sha256: String, data: Array<Byte>): Unit
     func get(sha256: String): ?Array<Byte>
+    // 删除制品（硬删除时联动清理）；返回是否真的删掉了
+    func remove(sha256: String): Bool
+    // 制品是否存在（恢复时校验「tarball 仍在」）
+    // 注意：不能叫 exists——DiskBlobStore 内部要用 std.fs.exists(path)，
+    // 同名成员会让方法体里的 exists(...) 解析成自身递归（实测触发 Out of memory）
+    func has(sha256: String): Bool
 }
 
 public class MemoryBlobStore <: BlobStore {
@@ -65,6 +71,18 @@ public class MemoryBlobStore <: BlobStore {
             return Some(this.blobs.get(sha256).getOrThrow())
         }
         return None
+    }
+
+    public func remove(sha256: String): Bool {
+        if (this.blobs.contains(sha256)) {
+            this.blobs.remove(sha256)
+            return true
+        }
+        return false
+    }
+
+    public func has(sha256: String): Bool {
+        this.blobs.contains(sha256)
     }
 }
 
@@ -340,5 +358,23 @@ public class DiskBlobStore <: BlobStore {
         } catch (e: Exception) {
             return None
         }
+    }
+
+    public func remove(sha256: String): Bool {
+        let path = dir + "/" + sha256
+        if (!exists(path)) {
+            return false
+        }
+        try {
+            removeIfExists(path, recursive: false)
+            return true
+        } catch (e: Exception) {
+            println("[blob] remove failed ${sha256}: ${e.message}")
+            return false
+        }
+    }
+
+    public func has(sha256: String): Bool {
+        exists(dir + "/" + sha256)
     }
 }

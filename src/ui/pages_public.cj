@@ -93,7 +93,14 @@ func categoryLabels(strs: ArrayList<String>): ArrayList<String> {
 }
 
 // ===== 公开顶部导航 =====
-public func publicNav(active: String): IComponent {
+// sctx = 会话上下文（cjxt SessionContextState，页面 onMount 取、render 期读）：
+// 未登录 → 「登录」入口；已登录管理员 → 「管理后台」入口（登录后才显示管理入口）。
+// 注意必须在 render() 里读：令牌恢复后的就地重渲不会重跑 onMount。
+public func publicNav(active: String, sctx: Option<SessionContextState>): IComponent {
+    let isAdmin = match (sctx) {
+        case Some(s) => s.isAdmin()
+        case None => false
+    }
     let children = ArrayList<IComponent>()
     let brandGo: ActionHandler = { c => c.route.push("/"); PatchResult.ReRender }
     var brand = div([text("cjreg")], attrs: Some(HashMap<String, String>([("class", cls("public-brand"))])))
@@ -102,7 +109,11 @@ public func publicNav(active: String): IComponent {
     children.add(navLink("/", "首页", active == "/"))
     children.add(navLink("/packages", "包列表", active == "/packages"))
     children.add(navLink("/docs", "帮助文档", active == "/docs"))
-    children.add(navLink("/admin", "管理后台", false))
+    if (isAdmin) {
+        children.add(navLink("/admin", "管理后台", false))
+    } else {
+        children.add(navLink("/admin/login", "登录", false))
+    }
     div(children.toArray(), attrs: Some(HashMap<String, String>([("class", cls("public-nav"))])))
 }
 
@@ -121,9 +132,12 @@ func featureCard(icon: String, title: String, desc: String, color: String): ICom
 @Page["/"]
 class PublicHome <: Component {
     var state: Option<CjregState> = None
+    // 会话上下文（渲染期读登录态，决定导航显示「登录」还是「管理后台」）
+    var sctx: Option<SessionContextState> = None
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
+        this.sctx = Some(ctx.getState<SessionContextState>())
     }
 
     func gotoPackages(ctx: ActionContext): PatchResult {
@@ -179,7 +193,7 @@ class PublicHome <: Component {
         features.add(featureCard("edit", "版本控制", "支持多版本管理和回滚", "#F56C6C"))
 
         div([
-            publicNav("/"),
+            publicNav("/", this.sctx),
             // Hero
             div([
                 div([
@@ -223,6 +237,7 @@ class PublicHome <: Component {
 @Page["/packages"]
 class PublicPackages <: Component {
     var state: Option<CjregState> = None
+    var sctx: Option<SessionContextState> = None
     var search = Signal<String>("")
     var selectedCategories = Signal<ArrayList<String>>(ArrayList<String>())
     var currentPage = Signal<Int64>(1)
@@ -230,6 +245,7 @@ class PublicPackages <: Component {
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
+        this.sctx = Some(ctx.getState<SessionContextState>())
     }
 
     func gotoDetail(ctx: ActionContext, org: String, name: String): PatchResult {
@@ -382,7 +398,7 @@ class PublicPackages <: Component {
             .onChange(onSearch)
 
         div([
-            publicNav("/packages"),
+            publicNav("/packages", this.sctx),
             div([
                 div([
                     div([text("发现仓颉包")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
@@ -417,6 +433,7 @@ class PublicPackages <: Component {
 @Page["/packages/[name]"]
 class PublicPackageDetail <: Component {
     var state: Option<CjregState> = None
+    var sctx: Option<SessionContextState> = None
     var pkgName: String = ""
     var pkgOrg: String = ""
     var versionRows = Signal<ArrayList<PackageDoc>>(ArrayList<PackageDoc>())
@@ -425,6 +442,7 @@ class PublicPackageDetail <: Component {
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
+        this.sctx = Some(ctx.getState<SessionContextState>())
         match (ctx.route.params.get("name")) {
             case Some(n) =>
                 let (org, name) = splitPkgIdentifier(n)
@@ -595,7 +613,7 @@ class PublicPackageDetail <: Component {
         match (latestOpt) {
             case None =>
                 return div([
-                    publicNav("/packages"),
+                    publicNav("/packages", this.sctx),
                     div([emptyState("未找到该包")], attrs: Some(HashMap<String, String>([("class", cls("public-main"))]))),
                 ])
             case Some(p) => return this.renderDetail(p)
@@ -689,7 +707,7 @@ class PublicPackageDetail <: Component {
         ], attrs: Some(HashMap<String, String>([("class", cls("detail-header"))])))
 
         div([
-            publicNav("/packages"),
+            publicNav("/packages", this.sctx),
             div([
                 header,
                 div([
@@ -720,6 +738,11 @@ func linkOut(url: String, text_: String): IComponent {
 @Page["/docs", "文档"]
 class DocsPage <: Component {
     var activeDoc = Signal<String>(docsDefaultId())
+    var sctx: Option<SessionContextState> = None
+
+    public func onMount(ctx: LifecycleContext): Unit {
+        this.sctx = Some(ctx.getState<SessionContextState>())
+    }
 
     func navItem(sid: String, title: String, active: Bool): IComponent {
         let clsName = if (active) { cls("docs-nav-item") + " " + cls("docs-nav-active") } else { cls("docs-nav-item") }
@@ -738,7 +761,7 @@ class DocsPage <: Component {
         }
         let content = docContent(if (docsIdValid(active)) { active } else { docsDefaultId() })
         div([
-            publicNav("/docs"),
+            publicNav("/docs", this.sctx),
             div([
                 div(navItems.toArray(), attrs: Some(HashMap<String, String>([("class", cls("docs-nav"))]))),
                 div([

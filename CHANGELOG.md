@@ -5,6 +5,19 @@
 
 ## [Unreleased]
 
+### 计划中
+
+- **发布链路流式化**（大包稳定 + 内存 O(1)）：当前 `POST /pkg` 整包读入内存（峰值 ≈ 包体 2–3 倍），
+  受仓颉 GC 堆默认 256 MB 限制，40 MiB 以上的包在默认配置下可能 OOM —— 详见 `docs/finals-plan.md` 迭代 1
+- 组织 CRUD REST 端点（当前仅管理端界面）
+- 发布计划 item 六状态（`publishing`/`waiting_index`/`skipped`）与 SSE 进度流
+- 镜像预热/周期同步（`serve --sync-interval`）与性能基准报告
+- 团队所有者（owner 自助管理成员）——设计见 `docs/user-portal-design.md` §7.4
+
+## [0.1.0] - 2026-09-12
+
+首个可用版本：与官方中心仓协议互通的纯仓颉私有中心仓 + 多仓体系，静态单二进制交付。
+
 ### Added — 审计日志（发布 / 认证 / 管理）
 
 - **发布审计**：`POST /pkg` 的每次发布都落审计（操作者、`org/name@version`、包大小、成功/失败与原因），
@@ -66,7 +79,7 @@
 - 实测：官方上游 `cordis_core@ystyle` → 200（340 字节，样本 cordis_core/tomlcj/jsonvalue）；
   本地上游 → 200；`127.0.0.1:9` → 不可达（Connection refused）
 
-### Added — 交付形态（本版）
+### Added — 交付形态（Docker / 文档站 / CI）
 
 - **Docker / Compose 部署**：`Dockerfile`（archlinux 基础 + liburing/tzdata，宿主机构建二进制入镜像、非 root 运行）、
   `docker-compose.yml`（卷持久化 + 环境变量 + 健康检查）、`scripts/docker-deploy.sh`，CI 含镜像构建与容器冒烟
@@ -78,20 +91,6 @@
 - 发版流程文档：`docs/RELEASE.md`（tag 为两侧唯一事实来源，含前置检查/校验命令/常见问题）
 - 容器冒烟两处修复：镜像构建后 `chmod 0755`（CI artifact 往返丢执行位 → `permission denied`）；
   数据目录属主对齐容器 uid 1000（`scripts/docker-deploy.sh` 自动 chown，文档补充说明）
-
-### 计划中
-
-- **发布链路流式化**（大包稳定 + 内存 O(1)）：当前 `POST /pkg` 整包读入内存（峰值 ≈ 包体 2–3 倍），
-  受仓颉 GC 堆默认 256 MB 限制，40 MiB 以上的包在默认配置下可能 OOM —— 详见 `docs/finals-plan.md` 迭代 1
-- 包三级删除闭环（恢复/硬删入口与索引、缓存、发布计划联动）
-- 组织 CRUD REST 端点（当前仅管理端界面）
-- 发布计划 item 六状态（`publishing`/`waiting_index`/`skipped`）与 SSE 进度流
-- 镜像预热/周期同步（`serve --sync-interval`）与性能基准报告
-- 团队所有者（owner 自助管理成员）——设计见 `docs/user-portal-design.md` §7.4
-
-## [0.1.0] - 2026-09-12
-
-首个可用版本：与官方中心仓协议互通的纯仓颉私有中心仓 + 多仓体系，静态单二进制交付。
 
 ### Added — 官方协议互通（M1/M2）
 

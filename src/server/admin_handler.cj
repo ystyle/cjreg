@@ -494,6 +494,33 @@ public class AdminService {
         }
     }
 
+    // POST /api/admin/upstreams/:id/test?name=&organization=
+    // 连通性测试：指定 name（≥3 字符）测索引端点，否则测基地址；结果含状态码/耗时/正文大小/包名样本
+    public func testUpstream(ctx: TangHttpContext): Unit {
+        if (!requireAdmin(ctx)) {
+            return
+        }
+        let id = match (Int64.tryParse(ctx.param("id"))) {
+            case Some(n) => n
+            case None => 0
+        }
+        let up = match (this.upstreamStore.getById(id)) {
+            case Some(u) => u
+            case None =>
+                writeJson(ctx, 404u16, "{\"error\":\"upstream not found\"}")
+                return
+        }
+        let name = ctx.query("name") ?? ""
+        let org = ctx.query("organization") ?? ""
+        let result = probeUpstream(up, name, org)
+        let (actorId, actorName) = this.actorOf(ctx)
+        writeAudit(this.adminData, LogKind.Admin, actorId, actorName, "test_upstream",
+            if (result.reachable) { "ok" } else { "failed" }, up.name, ctx,
+            error: result.error,
+            detail: "status=${result.status} latency=${result.latencyMs}ms healthy=${result.healthy} url=${result.testedUrl}")
+        writeJson(ctx, 200u16, upstreamProbeJson(result))
+    }
+
     // ===== resolve 诊断端点 =====
     public func resolvePackage(ctx: TangHttpContext): Unit {
         if (!requireAdmin(ctx)) {

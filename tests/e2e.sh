@@ -293,4 +293,57 @@ print('  B 仓公开包列表：%d 包 ✓' % d['total'])
 "
 
 echo ""
+echo "=== 7. 上游连通性测试端点（POST /api/admin/upstreams/:id/test）==="
+# B 作为 A 的上游加入（步骤 7 放在最后，不影响前面的回源/计划路径）
+BID=$(curl -s -X POST http://localhost:$PORTA/api/admin/upstreams -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d "{\"name\":\"mirrorB\",\"url\":\"http://localhost:$PORTB\",\"priority\":\"5\"}" \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+curl -s -X POST "http://localhost:$PORTA/api/admin/upstreams/$BID/test?name=app&organization=test" \
+  -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['reachable'] and d['healthy'], d
+assert d['status'] == 200 and d['bodyBytes'] > 0, d
+assert d['upstreamName'] == 'mirrorB' and '$PORTB' in d['testedUrl'], d
+assert 'app' in d['packages'], d
+print('  可达上游：%s（%dms，%d 字节，样本 %s）✓' % (d['summary'], d['latencyMs'], d['bodyBytes'], d['packages']))
+"
+# 不存在的包：有响应（连通）但非健康
+curl -s -X POST "http://localhost:$PORTA/api/admin/upstreams/$BID/test?name=nopeXYZ" \
+  -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['reachable'] and not d['healthy'], d
+assert d['status'] == 404 and 'nopeXYZ' in d['testedUrl'], d
+print('  上游无此包：连通但非健康（404）✓')
+"
+# 不可达上游
+DEADID=$(curl -s -X POST http://localhost:$PORTA/api/admin/upstreams -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"deadUpstream","url":"http://127.0.0.1:9","priority":"9"}' \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+curl -s -X POST "http://localhost:$PORTA/api/admin/upstreams/$DEADID/test" -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert not d['reachable'] and d['status'] == 0 and d['error'], d
+print('  不可达上游：reachable=false（原因已记录）✓')
+"
+# 清理：删除刚加的两个上游，避免影响后续手工验证
+curl -s -o /dev/null -X DELETE "http://localhost:$PORTA/api/admin/upstreams/$BID" -H "Authorization: Bearer $TOKEN"
+curl -s -o /dev/null -X DELETE "http://localhost:$PORTA/api/admin/upstreams/$DEADID" -H "Authorization: Bearer $TOKEN"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://localhost:$PORTA/api/admin/upstreams/9999/test" \
+  -H "Authorization: Bearer $TOKEN")
+[ "$CODE" = "404" ] || { echo "不存在的上游应 404，实际 $CODE"; exit 1; }
+# 探测动作入审计
+curl -s "http://localhost:$PORTA/api/admin/logs/admin?keyword=test_upstream&limit=5" -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['total'] >= 3, d
+acts = {x['target']: x['status'] for x in d['items']}
+assert acts.get('mirrorB') == 'ok' and acts.get('deadUpstream') == 'failed', acts
+print('  连通性测试入审计（成功/失败分别记录）✓')
+"
+
+echo ""
 echo "=== 双仓 e2e 全部通过 ✓ ==="

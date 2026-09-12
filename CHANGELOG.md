@@ -35,6 +35,19 @@
 - 测试：`public_service_test.cj` 9 组用例（语法/分页/过滤排序/软删隐藏/统计/版本/组织计数/私有可见性/JSON 转义）、
   `tests/e2e.sh` 第 6 步双仓实测 5 个端点
 
+### Added — 上游连通性测试端点
+
+- `POST /api/admin/upstreams/:id/test?name=&organization=`：诊断上游可达性与索引可用性
+  - 指定 `name`（≥3 字符）→ 请求该上游的 NDJSON 索引端点；未指定 → 请求基地址
+  - 返回 `reachable`（是否拿到响应）/`healthy`（200 且索引非空）/`status`/`latencyMs`/`bodyBytes`/
+    `authUsed`/`packages`（索引包名样本）/`error`/`summary`（中文摘要）
+  - 语义：404 = 连通但该上游未收录此包（不算故障）；401/403 = 认证失败；无响应 = 不可达（含原因）
+  - 探测动作入审计（`test_upstream`，成功/失败分别记录，detail 含状态码与耗时）
+- 测试：`upstream_probe_test.cj` 5 组用例（索引包名扫描容错、六种结果分类、认证标记、JSON 形状、URL 归一）；
+  `tests/e2e.sh` 第 7 步（可达上游 / 上游无此包 / 不可达上游 / 不存在的上游 404 / 审计）
+- 实测：官方上游 `cordis_core@ystyle` → 200（340 字节，样本 cordis_core/tomlcj/jsonvalue）；
+  本地上游 → 200；`127.0.0.1:9` → 不可达（Connection refused）
+
 ### Added — 交付形态（本版）
 
 - **Docker / Compose 部署**：`Dockerfile`（archlinux 基础 + liburing/tzdata，宿主机构建二进制入镜像、非 root 运行）、

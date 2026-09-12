@@ -35,3 +35,32 @@ GET /api/admin/resolve?name=<包名>&organization=<组织>&require=<版本区间
 
 `authToken` 会在回源请求中作为 `Authorization` 头发送（裸 token，与官方规格一致），
 因此可以直接对接需要认证的镜像仓/私有仓。
+
+## 连通性测试
+
+管理后台「上游管理」或 API 均可测试某个上游是否可用：
+
+```bash
+# 指定包（≥3 字符）：请求该上游的 NDJSON 索引端点
+curl -s -X POST "http://127.0.0.1:8060/api/admin/upstreams/1/test?name=cordis_core&organization=ystyle" \
+  -H "Authorization: Bearer <会话 Token>"
+
+# 不指定包：只测基地址可达性
+curl -s -X POST "http://127.0.0.1:8060/api/admin/upstreams/1/test" \
+  -H "Authorization: Bearer <会话 Token>"
+```
+
+响应字段：`reachable`（是否拿到 HTTP 响应）、`healthy`（200 且索引非空）、`status`、`latencyMs`、
+`bodyBytes`、`authUsed`、`packages`（索引里的包名样本，含依赖条目）、`error`、`summary`（中文摘要）。
+
+判定语义：
+
+| 情况 | reachable | healthy | error |
+|---|---|---|---|
+| 200 且索引非空 | ✓ | ✓ | — |
+| 404（该上游未收录此包） | ✓ | ✗ | 该上游未收录此包（404） |
+| 401 / 403 | ✓ | ✗ | 认证失败（401/403） |
+| 5xx | ✓ | ✗ | 上游返回 5xx |
+| 无响应（DNS/连接/超时） | ✗ | ✗ | 具体传输错误 |
+
+探测动作会写入审计日志（`test_upstream`），可在「审计日志 → 管理」里查看历史结果。

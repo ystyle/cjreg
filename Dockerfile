@@ -26,8 +26,10 @@ RUN useradd -u 1000 -m app
 WORKDIR /app
 
 # 二进制（默认取宿主构建产物；CI 里用 --build-arg CJREG_BIN=... 指定）
+# chmod：从 CI artifact 解出的文件会丢执行位（docker: exec "/app/cjreg": permission denied）
 ARG CJREG_BIN=target/release/bin/ystyle::cjreg
 COPY ${CJREG_BIN} /app/cjreg
+RUN chmod 0755 /app/cjreg
 
 # Web 界面静态资源（cjxt 的 serveStatic("/css", "public/css") 相对运行目录）
 COPY public /app/public

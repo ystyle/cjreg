@@ -295,57 +295,235 @@ func makePublishServicePerm(): (PublishService, AuthService, AdminDataStore, Str
 
 @Test
 func testPublishForbiddenNoTeam() {
-    let (svc, authSvc, _, _) = makePublishServicePerm()
-    // 普通用户（非管理员、无任何团队）
+    let (svc, authSvc, _, adminToken) = makePublishServicePerm()
+    // 管理员先建立既有版本（有了版本才谈「新版本」权限）
+    let base = makePublishBodyConsistent("test", "demo", "1.0.0")
+    @Expect(svc.publish("test", "demo", base, adminToken).outcome == PublishOutcome.Ok, true)
+    // 普通用户（非管理员、无团队、非 publisher）发新版本 → 403
     let u = authSvc.createUser("alice", "alice123", false).getOrThrow()
-    let body = makePublishBodyConsistent("test", "demo", "1.0.0")
+    let body = makePublishBodyConsistent("test", "demo", "1.1.0")
     let r = svc.publish("test", "demo", body, u.publishToken)
     @Expect(r.outcome == PublishOutcome.Forbidden, true)
 }
 
 @Test
-func testPublishForbiddenReadTeam() {
-    let (svc, authSvc, adminData, _) = makePublishServicePerm()
-    let u = authSvc.createUser("bob", "bob12345", false).getOrThrow()
-    // 团队关联「无组织(0)」但权限只有 read
-    let teamId = adminData.createTeam("readers", 0, permission: "read")
-    adminData.setTeamOrganizations(teamId, [0], 0)
-    adminData.setTeamMembers(teamId, [u.id])
+func testPublishNewPackageClaimAllowedInTeamMode() {
+    let (svc, authSvc, _, _) = makePublishServicePerm()
+    // 自由命名空间（无团队纳管）：任意有效 token 可认领新包，首次发布者成为 publisher
+    let u = authSvc.createUser("alice", "alice123", false).getOrThrow()
     let body = makePublishBodyConsistent("test", "demo", "1.0.0")
     let r = svc.publish("test", "demo", body, u.publishToken)
+    @Expect(r.outcome == PublishOutcome.Ok, true)
+    let versions = svc.store.listVersions("test", "demo")
+    @Expect(versions.size, 1)
+    @Expect(versions[0].publisherId, u.id)
+}
+
+@Test
+func testPublishNewPackageForbiddenWhenGoverned() {
+    let (svc, authSvc, adminData, _) = makePublishServicePerm()
+    // 组织已被团队纳管（read 级）：外人不得在纳管命名空间「认领」新包
+    let orgId = adminData.createOrg("acme", "Acme", 1, 0)
+    let teamId = adminData.createTeam("acme-readers", 0, permission: "read")
+    adminData.setTeamOrganizations(teamId, [orgId], 0)
+    let u = authSvc.createUser("alice", "alice123", false).getOrThrow()
+    let r = svc.publish("acme", "lib", makePublishBodyConsistent("acme", "lib", "1.0.0"), u.publishToken)
+    @Expect(r.outcome == PublishOutcome.Forbidden, true)
+}
+
+@Test
+func testPublishNewVersionByPublisherAllowed() {
+    let (svc, authSvc, _, _) = makePublishServicePerm()
+    // 认领者后续版本走个人发布路径（publisher → write），无需团队
+    let u = authSvc.createUser("alice", "alice123", false).getOrThrow()
+    let first = svc.publish("test", "demo", makePublishBodyConsistent("test", "demo", "1.0.0"), u.publishToken)
+    @Expect(first.outcome == PublishOutcome.Ok, true)
+    let r = svc.publish("test", "demo", makePublishBodyConsistent("test", "demo", "1.1.0"), u.publishToken)
+    @Expect(r.outcome == PublishOutcome.Ok, true)
+    @Expect(svc.store.listVersions("test", "demo").size, 2)
+}
+
+@Test
+func testPublishForbiddenReadTeam() {
+    let (svc, authSvc, adminData, adminToken) = makePublishServicePerm()
+    @Expect(svc.publish("test", "demo", makePublishBodyConsistent("test", "demo", "1.0.0"), adminToken).outcome == PublishOutcome.Ok, true)
+    let u = authSvc.createUser("bob", "bob12345", false).getOrThrow()
+    // 团队关联该组织但权限只有 read → 新版本 403
+    let orgId = adminData.createOrg("test", "Test", 1, 0)
+    let teamId = adminData.createTeam("readers", 0, permission: "read")
+    adminData.setTeamOrganizations(teamId, [orgId], 0)
+    adminData.setTeamMembers(teamId, [u.id])
+    let r = svc.publish("test", "demo", makePublishBodyConsistent("test", "demo", "1.1.0"), u.publishToken)
     @Expect(r.outcome == PublishOutcome.Forbidden, true)
 }
 
 @Test
 func testPublishAllowedWriteTeam() {
-    let (svc, authSvc, adminData, _) = makePublishServicePerm()
+    let (svc, authSvc, adminData, adminToken) = makePublishServicePerm()
+    @Expect(svc.publish("test", "demo", makePublishBodyConsistent("test", "demo", "1.0.0"), adminToken).outcome == PublishOutcome.Ok, true)
     let u = authSvc.createUser("carol", "carol123", false).getOrThrow()
-    // 团队关联「无组织(0)」且权限 write → 允许
+    // 团队关联该组织且权限 write → 允许发新版本，并记录该版本的发布者
+    let orgId = adminData.createOrg("test", "Test", 1, 0)
     let teamId = adminData.createTeam("writers", 0, permission: "write")
-    adminData.setTeamOrganizations(teamId, [0], 0)
+    adminData.setTeamOrganizations(teamId, [orgId], 0)
     adminData.setTeamMembers(teamId, [u.id])
-    let body = makePublishBodyConsistent("test", "demo", "1.0.0")
-    let r = svc.publish("test", "demo", body, u.publishToken)
+    let r = svc.publish("test", "demo", makePublishBodyConsistent("test", "demo", "1.1.0"), u.publishToken)
     @Expect(r.outcome == PublishOutcome.Ok, true)
-    // 发布者已记录
-    let versions = svc.store.listVersions("test", "demo")
-    @Expect(versions[0].publisherId, u.id)
+    @Expect(svc.store.listVersions("test", "demo").size, 2)
+    @Expect(publisherOfVersion(svc.store, "test", "demo", "1.1.0"), u.id)
 }
 
 @Test
 func testPublishAllowedByTeamPackageLink() {
-    let (svc, authSvc, adminData, _) = makePublishServicePerm()
+    let (svc, authSvc, adminData, adminToken) = makePublishServicePerm()
+    @Expect(svc.publish("test", "demo", makePublishBodyConsistent("test", "demo", "1.0.0"), adminToken).outcome == PublishOutcome.Ok, true)
     let u = authSvc.createUser("dave", "dave1234", false).getOrThrow()
     // 团队只关联该包（不关联组织）且权限 write → 允许
     let teamId = adminData.createTeam("pkg-owners", 0, permission: "write")
-    // 包关联：teamId + org + name（经 setTeamPackages）
     let pairs = ArrayList<(String, String)>()
     pairs.add(("test", "demo"))
     adminData.setTeamPackages(teamId, pairs.toArray(), 0)
     adminData.setTeamMembers(teamId, [u.id])
-    let body = makePublishBodyConsistent("test", "demo", "1.0.0")
-    let r = svc.publish("test", "demo", body, u.publishToken)
+    let r = svc.publish("test", "demo", makePublishBodyConsistent("test", "demo", "1.1.0"), u.publishToken)
     @Expect(r.outcome == PublishOutcome.Ok, true)
+}
+
+// 指定版本的发布者（不存在返回 -1）
+func publisherOfVersion(store: PackageStore, org: String, name: String, version: String): Int64 {
+    for (d in store.listVersions(org, name)) {
+        if (d.version == version) {
+            return d.publisherId
+        }
+    }
+    -1
+}
+
+@Test
+func testPublishOverwriteRequiresOverwritePermission() {
+    let (svc, authSvc, adminData, _) = makePublishServicePerm()
+    let alice = authSvc.createUser("alice", "alice123", false).getOrThrow()
+    let tar1: Array<Byte> = [UInt8(31), UInt8(139), UInt8(8), UInt8(0), UInt8(1)]
+    let tar2: Array<Byte> = [UInt8(31), UInt8(139), UInt8(8), UInt8(0), UInt8(99)]
+    // 登记组织（尚未被任何团队纳管）→ alice 可认领该命名空间下的新包
+    let orgId = adminData.createOrg("test", "Test", 1, 0)
+    let first = svc.publish("test", "demo", makePublishBodyWithTar("test", "demo", "1.0.0", tar1), alice.publishToken)
+    @Expect(first.outcome == PublishOutcome.Ok, true)
+
+    // publisher 自己也没有 overwrite（覆盖属团队权限）→ 403
+    let byPublisher = svc.publish("test", "demo", makePublishBodyWithTar("test", "demo", "1.0.0", tar2), alice.publishToken)
+    @Expect(byPublisher.outcome == PublishOutcome.Forbidden, true)
+
+    // write 团队不足以覆盖 → 403
+    let writer = authSvc.createUser("bob", "bob12345", false).getOrThrow()
+    let wTeam = adminData.createTeam("writers", 0, permission: "write")
+    adminData.setTeamOrganizations(wTeam, [orgId], 0)
+    adminData.setTeamMembers(wTeam, [writer.id])
+    let byWriter = svc.publish("test", "demo", makePublishBodyWithTar("test", "demo", "1.0.0", tar2), writer.publishToken)
+    @Expect(byWriter.outcome == PublishOutcome.Forbidden, true)
+
+    // overwrite 团队 → 覆盖成功：同版本文档原地更新（不新增），包名所有权仍属首次发布者
+    let owner = authSvc.createUser("carol", "carol123", false).getOrThrow()
+    let oTeam = adminData.createTeam("overwriters", 0, permission: "overwrite")
+    adminData.setTeamOrganizations(oTeam, [orgId], 0)
+    adminData.setTeamMembers(oTeam, [owner.id])
+    let ok = svc.publish("test", "demo", makePublishBodyWithTar("test", "demo", "1.0.0", tar2), owner.publishToken)
+    @Expect(ok.outcome == PublishOutcome.Ok, true)
+    let versions = svc.store.listVersions("test", "demo")
+    @Expect(versions.size, 1)
+    @Expect(versions[0].sha256, sha256Hex(tar2))
+    @Expect(versions[0].publisherId, alice.id)
+    // 覆盖后同 sha 再发 → 幂等 Ok
+    let idem = svc.publish("test", "demo", makePublishBodyWithTar("test", "demo", "1.0.0", tar2), owner.publishToken)
+    @Expect(idem.outcome == PublishOutcome.Ok, true)
+}
+
+@Test
+func testPublishAdminBypassPermission() {
+    let (svc, _, _, adminToken) = makePublishServicePerm()
+    // 平台管理员直通：纳管命名空间/覆盖均放行
+    let tar1: Array<Byte> = [UInt8(31), UInt8(139), UInt8(8), UInt8(0), UInt8(1)]
+    let tar2: Array<Byte> = [UInt8(31), UInt8(139), UInt8(8), UInt8(0), UInt8(99)]
+    @Expect(svc.publish("ops", "tool", makePublishBodyWithTar("ops", "tool", "1.0.0", tar1), adminToken).outcome == PublishOutcome.Ok, true)
+    @Expect(svc.publish("ops", "tool", makePublishBodyWithTar("ops", "tool", "1.0.0", tar2), adminToken).outcome == PublishOutcome.Ok, true)
+    @Expect(svc.store.listVersions("ops", "tool")[0].sha256, sha256Hex(tar2))
+}
+
+@Test
+func testEffectivePermissionLevels() {
+    let (svc, authSvc, adminData, _) = makePublishServicePerm()
+    let store = svc.store
+    let alice = authSvc.createUser("alice", "alice123", false).getOrThrow()
+    let bob = authSvc.createUser("bob", "bob12345", false).getOrThrow()
+    let carol = authSvc.createUser("carol", "carol123", false).getOrThrow()
+    let admin = authSvc.store.getUserByUsername("admin").getOrThrow()
+
+    // 无任何关联 → 0；管理员 → 3（直通）
+    @Expect(effectivePermission(store, adminData, alice, "test", "demo"), 0)
+    @Expect(effectivePermission(store, adminData, admin, "test", "demo"), 3)
+
+    // 个人发布路径：任一版本 publisherId 命中 → 2
+    let d = PackageDoc()
+    d.organization = "test"
+    d.name = "demo"
+    d.version = "1.0.0"
+    d.publisherId = alice.id
+    store.save(d)
+    @Expect(effectivePermission(store, adminData, alice, "test", "demo"), 2)
+    @Expect(effectivePermission(store, adminData, bob, "test", "demo"), 0)
+
+    // 团队包级关联 read → 1
+    let t1 = adminData.createTeam("pkg-readers", 0, permission: "read")
+    let pairs = ArrayList<(String, String)>()
+    pairs.add(("test", "demo"))
+    adminData.setTeamPackages(t1, pairs.toArray(), 0)
+    adminData.setTeamMembers(t1, [bob.id])
+    @Expect(effectivePermission(store, adminData, bob, "test", "demo"), 1)
+
+    // 组织级 overwrite → 3（与包级取最高）
+    let orgId = adminData.createOrg("acme", "Acme", 1, 0)
+    let t2 = adminData.createTeam("acme-owners", 0, permission: "overwrite")
+    adminData.setTeamOrganizations(t2, [orgId], 0)
+    adminData.setTeamMembers(t2, [carol.id])
+    @Expect(effectivePermission(store, adminData, carol, "acme", "lib"), 3)
+
+    // 未知组织名 ≠ 「无组织包(0)」：关联无组织的团队不得越权到未登记组织
+    let t3 = adminData.createTeam("no-org", 0, permission: "overwrite")
+    adminData.setTeamOrganizations(t3, [0], 0)
+    adminData.setTeamMembers(t3, [carol.id])
+    @Expect(effectivePermission(store, adminData, carol, "unknown-org", "lib"), 0)
+    // 无组织包（org 空串）仍匹配 0
+    @Expect(effectivePermission(store, adminData, carol, "", "lib"), 3)
+}
+
+@Test
+func testCheckReadPermission() {
+    let (svc, authSvc, adminData, _) = makePublishServicePerm()
+    let store = svc.store
+    let alice = authSvc.createUser("alice", "alice123", false).getOrThrow()
+    let bob = authSvc.createUser("bob", "bob12345", false).getOrThrow()
+    let admin = authSvc.store.getUserByUsername("admin").getOrThrow()
+
+    // 无关联 → 拒绝；管理员 → 允许
+    @Expect(checkReadPermission(store, adminData, bob, "test", "demo"), false)
+    @Expect(checkReadPermission(store, adminData, admin, "test", "demo"), true)
+
+    // publisher（个人路径 write）→ 可读
+    let d = PackageDoc()
+    d.organization = "test"
+    d.name = "demo"
+    d.version = "1.0.0"
+    d.publisherId = alice.id
+    store.save(d)
+    @Expect(checkReadPermission(store, adminData, alice, "test", "demo"), true)
+
+    // 团队 read → 可读
+    let orgId = adminData.createOrg("test", "Test", 1, 0)
+    let teamId = adminData.createTeam("readers", 0, permission: "read")
+    adminData.setTeamOrganizations(teamId, [orgId], 0)
+    adminData.setTeamMembers(teamId, [bob.id])
+    @Expect(checkReadPermission(store, adminData, bob, "test", "demo"), true)
+    // 其他组织/包 → 拒绝
+    @Expect(checkReadPermission(store, adminData, bob, "other", "demo"), false)
 }
 
 @Test
@@ -365,4 +543,8 @@ func testPublishOpenModeAllowsNonTeamUser() {
     // 发布者仍记录
     let versions = svc.store.listVersions("test", "demo")
     @Expect(versions[0].publisherId, u.id)
+    // open 模式下同版本不同 sha 不静默覆盖，仍按冲突处理（覆盖只在 team 模式按权限执行）
+    let tar2: Array<Byte> = [UInt8(31), UInt8(139), UInt8(8), UInt8(0), UInt8(99)]
+    let conflict = svc.publish("test", "demo", makePublishBodyWithTar("test", "demo", "1.0.0", tar2), u.publishToken)
+    @Expect(conflict.outcome == PublishOutcome.Conflict, true)
 }

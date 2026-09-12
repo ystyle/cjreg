@@ -9,7 +9,7 @@ cjreg 记录**谁、何时、从哪个 IP、用什么客户端**做了**什么**
 |---|---|---|
 | `publish` | `POST /pkg/:name` 发布 | 操作者、`org/name@version`、包大小、成功/失败原因、IP、User-Agent |
 | `auth` | 管理员登录 / 注销 | 成功：用户 id + `isAdmin`；失败：尝试的用户名 + 原因（**不记口令**） |
-| `admin` | 用户、组织、团队、上游、包、发布计划、日志清理等管理动作 | 操作者、被操作对象、补充信息、失败原因 |
+| `admin` | 用户、组织、团队、上游、包、发布计划推送、日志清理等管理动作 | 操作者、被操作对象、补充信息、失败原因（推送计划含目标仓地址与 `success=N/M`，**不记 `target_token`**） |
 
 字段：`kind`（类型）、`actorId` / `actorName`（操作者）、`action`（动作，下划线风格）、`status`（`ok`/`failed`）、
 `target`（操作对象）、`detail`（补充）、`error`（失败原因）、`ipAddr`、`userAgent`、`createdAt`（毫秒时间戳）。

@@ -35,6 +35,8 @@ LogDoc {
 | `auth` | `POST /api/admin/logout` | `logout` | 仅登录态下记录 |
 | `admin` | `POST /api/admin/users` | `create_user` | 冲突记 `failed` + `user already exists` |
 | `admin` | `PUT /api/admin/users/:id/admin` | `grant_admin` / `revoke_admin` | 触碰「最后一个启用管理员」保护时记 `failed` |
+| `admin` | `POST /api/admin/upstreams` · `DELETE /api/admin/upstreams/:id` | `add_upstream` / `delete_upstream` | 目标为上游名，detail 记 url/priority；官方仓删除保护记 `failed` |
+| `admin` | `POST /api/admin/publish-plans/execute` | `execute_publish_plan` | target 为目标仓地址，detail 记 `success=N/M roots=… explicitToken=true|false`（**不落 target_token**），有错误时 `error` 记首条 |
 | `admin` | `POST /api/admin/logs/clean` | `clean_logs` | 清理动作自身入审计（target = 清理范围） |
 | `admin` | 管理端页面操作 | `create_user` `disable_user` `enable_user` `reset_publish_token` `delete_user` `create_org` `update_org` `delete_org` `create_team` `update_team` `delete_team` `set_team_orgs` `add_team_member` `remove_team_member` `add_upstream` … | 见 §5 |
 

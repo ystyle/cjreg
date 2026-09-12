@@ -1,0 +1,69 @@
+name: 部署文档
+
+# 自动部署文档站到 https://ystyle.top/cjreg/
+# 链路：GitHub Pages（本仓库 Pages，Source=GitHub Actions）→ 华为云 CDN 刷新 https://ystyle.top/cjreg/
+# 与 cjxt / xisp / refine 的文档站部署方式一致。
+#
+# 前置（仓库 Settings，一次性）：
+#   1. Pages：Build and deployment → Source = GitHub Actions
+#   2. Secrets：ACCESS_KEY_ID / SECRET_ACCESS_KEY（华为云 CDN 刷新凭证）
+#   3. 自定义域名 https://ystyle.top/cjreg/ 由 CDN 侧配置指向本仓库 Pages 源站
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:      # 允许手动重跑（例如 CDN 刷缓存失败时）
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: docs-site/pnpm-lock.yaml
+
+      - name: 构建文档
+        run: |
+          cd docs-site
+          pnpm install --frozen-lockfile
+          DOCS_BASE=/cjreg/ pnpm build
+
+      - name: 上传构建产物
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs-site/.vitepress/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 部署到 GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: 刷新华为云 CDN 缓存
+        uses: ystyle/hwcdn-cache@master
+        env:
+          ACCESS_KEY_ID: ${{ secrets.ACCESS_KEY_ID }}
+          SECRET_ACCESS_KEY: ${{ secrets.SECRET_ACCESS_KEY }}
+          TYPE: directory
+          URLS: https://ystyle.top/cjreg/

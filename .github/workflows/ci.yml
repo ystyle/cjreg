@@ -1,0 +1,141 @@
+name: CI
+
+# 触发：master 推送与所有 PR
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+env:
+  # cjxt 是 cjreg 的 path 依赖（../cjxt）；GitHub 上需可访问的同名仓库
+  # 覆盖方式：仓库 Settings → Variables 增加 CJXT_REPO=<owner>/<repo>
+  CJXT_REPO: ${{ vars.CJXT_REPO || 'ystyle/cjxt' }}
+
+jobs:
+  build-test:
+    name: 构建 · 单测 · e2e
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout cjreg
+        uses: actions/checkout@v4
+        with:
+          path: cjreg
+
+      - name: Checkout cjxt（path 依赖，需与 cjreg 同级）
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CJXT_REPO }}
+          path: cjxt
+
+      - uses: Zxilly/setup-cangjie@v3
+        with:
+          channel: sts
+          version: 1.1.3
+          components: stdx
+
+      - name: Build
+        working-directory: cjreg
+        env:
+          CANGJIE_STDX_PATH: ${{ env.CANGJIE_STDX_PATH_STATIC }}/stdx
+        run: cjpm build -j 16
+
+      - name: Unit tests
+        working-directory: cjreg
+        env:
+          CANGJIE_STDX_PATH: ${{ env.CANGJIE_STDX_PATH_STATIC }}/stdx
+        run: cjpm test -j 16 --no-progress
+
+      - name: Coverage report
+        working-directory: cjreg
+        env:
+          CANGJIE_STDX_PATH: ${{ env.CANGJIE_STDX_PATH_STATIC }}/stdx
+        run: |
+          cjpm test --coverage -j 16 --no-progress
+          cjcov --root=./ -o coverage --html-details -i "$PWD/src" -e "*_test.cj"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: cjreg/coverage
+          if-no-files-found: warn
+
+      - name: Dual-registry e2e
+        working-directory: cjreg
+        env:
+          CANGJIE_STDX_PATH: ${{ env.CANGJIE_STDX_PATH_STATIC }}/stdx
+        run: bash tests/e2e.sh
+
+      - name: Stage binary for artifact / docker job
+        run: |
+          cp "cjreg/target/release/bin/ystyle::cjreg" cjreg-bin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cjreg-linux-amd64
+          path: cjreg-bin
+
+  docs:
+    name: 文档站构建
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: docs-site/pnpm-lock.yaml
+      - working-directory: docs-site
+        run: pnpm install --frozen-lockfile
+      - working-directory: docs-site
+        run: pnpm build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docs-site
+          path: docs-site/.vitepress/dist
+      # 部署到 https://ystyle.top/cjreg/ 由 docs-deploy.yml 负责（GitHub Pages + CDN 刷新）
+
+  docker:
+    name: 镜像构建 · 容器冒烟
+    runs-on: ubuntu-26.04
+    needs: build-test
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: cjreg-linux-amd64
+          path: bin
+
+      - name: Build image
+        run: docker build --build-arg CJREG_BIN=bin/cjreg-bin -t cjreg:ci .
+
+      - name: 容器冒烟（初始化 → 启动 → 健康 → 优雅关闭 → 数据留存）
+        run: |
+          mkdir -p smoke-data
+          docker run --rm -v "$PWD/smoke-data:/data" cjreg:ci \
+            /app/cjreg init -d /data --username admin --password 'AdminPass1'
+          docker run -d --name cjreg-smoke -p 18060:8060 -v "$PWD/smoke-data:/data" cjreg:ci
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:18060/api/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18060/api/health
+          docker stop cjreg-smoke >/dev/null
+          echo "--- 优雅关闭日志 ---"
+          docker logs cjreg-smoke 2>&1 | tail -3
+          docker logs cjreg-smoke 2>&1 | grep -q "正在优雅关闭" || { echo "未走优雅关闭路径"; exit 1; }
+          docker rm cjreg-smoke >/dev/null
+          # 重启后数据仍在（卷持久化）
+          docker run -d --name cjreg-smoke2 -p 18061:8060 -v "$PWD/smoke-data:/data" cjreg:ci
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:18061/api/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS -X POST http://127.0.0.1:18061/api/admin/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"AdminPass1"}' | grep -q '"token"' \
+            && echo "重启后可用 init 创建的账号登录 ✓"
+          docker rm -f cjreg-smoke2 >/dev/null

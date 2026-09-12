@@ -3,7 +3,8 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'cjreg',
   description: '仓颉私有中心仓与多仓体系 —— 纯仓颉实现、与官方中心仓协议互通',
-  base: process.env.DOCS_BASE || '/',
+  // 部署在 https://ystyle.top/cjreg/（GitHub Pages + 华为云 CDN）；本地 pnpm dev 同样走该前缀
+  base: process.env.DOCS_BASE || '/cjreg/',
   lang: 'zh-CN',
   ignoreDeadLinks: true,
   themeConfig: {
@@ -37,6 +38,7 @@ export default defineConfig({
       '/deploy/': [
         { text: '部署', items: [
           { text: '部署指南', link: '/deploy/' },
+          { text: 'Docker 部署', link: '/deploy/docker' },
           { text: '服务端配置', link: '/deploy/env' },
         ]},
       ],

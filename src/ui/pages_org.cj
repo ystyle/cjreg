@@ -150,13 +150,14 @@ class UsersPage <: Component {
                 this.dialogVisible.set(false)
                 let role = if (u.isAdmin) { "（管理员）" } else { "" }
                 this.notify("已创建 ${u.username}${role}", true)
-                st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "create user ${u.username}", "ok", nowMs())
+                uiAudit(st, ctx, "create_user", u.username, detail: "isAdmin=${u.isAdmin}")
                 // 展示新用户发布 Token
                 this.tokenUser = u.username
                 this.tokenValue.set(u.publishToken)
                 this.tokenUserId = u.id
                 this.tokenVisible.set(true)
             case None =>
+                uiAudit(st, ctx, "create_user", uname, status: "failed", error: "user already exists")
                 this.notify("创建失败（用户已存在）", false)
         }
         PatchResult.ReRender
@@ -197,7 +198,7 @@ class UsersPage <: Component {
             case Some(t) =>
                 this.tokenValue.set(t)
                 this.notify("已重置 ${this.tokenUser} 的 Token", true)
-                st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "reset token ${this.tokenUser}", "ok", nowMs())
+                uiAudit(st, ctx, "reset_publish_token", this.tokenUser)
             case None => ()
         }
         PatchResult.ReRender
@@ -218,9 +219,11 @@ class UsersPage <: Component {
                 if (st.auth.setUserActive(u.id, !u.isActive)) {
                     let text = if (!u.isActive) { "已启用 ${u.username}" } else { "已禁用 ${u.username}" }
                     this.notify(text, true)
-                    st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "toggle user ${u.username}", "ok", nowMs())
+                    uiAudit(st, ctx, if (!u.isActive) { "enable_user" } else { "disable_user" }, u.username)
                 } else {
                     // 唯一失败原因：目标是最后一个启用管理员
+                    uiAudit(st, ctx, "disable_user", u.username, status: "failed",
+                        error: "cannot disable the last active admin")
                     this.notify("不能禁用最后一个启用管理员（否则管理端将无人可登录）", false)
                 }
             case None => ()
@@ -243,12 +246,13 @@ class UsersPage <: Component {
             case Some(u) =>
                 let target = !u.isAdmin
                 if (st.auth.setUserAdmin(u.id, target)) {
-                    let action = if (target) { "grant admin " } else { "revoke admin " }
-                    st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), action + u.username, "ok", nowMs())
+                    uiAudit(st, ctx, if (target) { "grant_admin" } else { "revoke_admin" }, u.username)
                     let text = if (target) { "已设为管理员 ${u.username}" } else { "已取消管理员 ${u.username}" }
                     this.notify(text, true)
                 } else {
                     // 唯一失败原因：目标是最后一个启用管理员
+                    uiAudit(st, ctx, "revoke_admin", u.username, status: "failed",
+                        error: "cannot revoke the last active admin")
                     this.notify("不能取消最后一个启用管理员的身份（否则管理端将无人可登录）", false)
                 }
             case None => ()
@@ -289,8 +293,9 @@ class UsersPage <: Component {
         }
         if (st.auth.deleteUser(this.pendingDeleteId)) {
             this.notify("已删除用户 ${this.pendingDeleteName}", true)
-            st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "delete user ${this.pendingDeleteName}", "ok", nowMs())
+            uiAudit(st, ctx, "delete_user", this.pendingDeleteName)
         } else {
+            uiAudit(st, ctx, "delete_user", this.pendingDeleteName, status: "failed", error: "admin protected")
             this.notify("删除失败（管理员受保护）", false)
         }
         this.confirmVisible.set(false)
@@ -541,11 +546,11 @@ class OrganizationsPage <: Component {
         if (this.dialogMode.get() == "create") {
             let id = st.adminData.createOrg(name, display, uid, nowMs(), description: desc, isDefault: isDefault)
             this.msg.set("已创建组织 #${id}")
-            st.adminData.addLog(LogKind.Admin, uid, uname, "create org ${name}", "ok", nowMs())
+            uiAuditAs(st, uid, uname, "create_org", name, detail: "isDefault=${isDefault}")
         } else {
             if (st.adminData.updateOrg(this.editingId, display, desc, isDefault, nowMs())) {
                 this.msg.set("已更新组织 ${name}")
-                st.adminData.addLog(LogKind.Admin, uid, uname, "update org ${name}", "ok", nowMs())
+                uiAuditAs(st, uid, uname, "update_org", name, detail: "isDefault=${isDefault}")
             } else {
                 this.msg.set("更新失败")
             }
@@ -587,7 +592,7 @@ class OrganizationsPage <: Component {
         }
         if (st.adminData.deleteOrg(this.pendingDeleteId, nowMs())) {
             this.msg.set("已删除组织 ${this.pendingDeleteName}")
-            st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "delete org ${this.pendingDeleteName}", "ok", nowMs())
+            uiAudit(st, ctx, "delete_org", this.pendingDeleteName)
         } else {
             this.msg.set("删除失败")
         }
@@ -821,11 +826,11 @@ class TeamsPage <: Component {
         if (this.dialogMode.get() == "create") {
             let id = st.adminData.createTeam(name, nowMs(), displayName: display, description: desc, permission: perm)
             this.msg.set("已创建团队 #${id}")
-            st.adminData.addLog(LogKind.Admin, uid, uname, "create team ${name}", "ok", nowMs())
+            uiAuditAs(st, uid, uname, "create_team", name, detail: "permission=${perm}")
         } else {
             if (st.adminData.updateTeam(this.editingId, display, desc, perm, nowMs())) {
                 this.msg.set("已更新团队 ${name}")
-                st.adminData.addLog(LogKind.Admin, uid, uname, "update team ${name}", "ok", nowMs())
+                uiAuditAs(st, uid, uname, "update_team", name, detail: "permission=${perm}")
             } else {
                 this.msg.set("更新失败")
             }
@@ -875,7 +880,7 @@ class TeamsPage <: Component {
         }
         st.adminData.setTeamOrganizations(this.editingId, ids.toArray(), nowMs())
         this.msg.set("已更新团队组织关联")
-        st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "update team orgs #${this.editingId}", "ok", nowMs())
+        uiAudit(st, ctx, "set_team_orgs", "team#${this.editingId}", detail: "count=${ids.size}")
         this.orgDialogVisible.set(false)
         PatchResult.ReRender
     }
@@ -1006,6 +1011,12 @@ class TeamsPage <: Component {
             next.add(userId)
         }
         st.adminData.setTeamMembers(this.editingId, next.toArray())
+        let memberName = match (st.userStore.getUser(userId)) {
+            case Some(u) => u.username
+            case None => "#${userId}"
+        }
+        uiAudit(st, ctx, if (!found) { "add_team_member" } else { "remove_team_member" }, memberName,
+            detail: "team#${this.editingId} members=${next.size}")
         this.msg.set(if (!found) { "已添加成员" } else { "已移除成员" })
         this.refreshMembers()
         PatchResult.ReRender
@@ -1043,7 +1054,7 @@ class TeamsPage <: Component {
         }
         if (st.adminData.deleteTeam(this.pendingDeleteId, nowMs())) {
             this.msg.set("已删除团队 ${this.pendingDeleteName}")
-            st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "delete team ${this.pendingDeleteName}", "ok", nowMs())
+            uiAudit(st, ctx, "delete_team", this.pendingDeleteName)
         } else {
             this.msg.set("删除失败")
         }

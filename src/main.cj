@@ -148,13 +148,15 @@ func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
     let upSvc = UpstreamService(upStore)
     let blobStore: BlobStore = DiskBlobStore(dataDir + "/blobs")
     let proxySvc = ProxyService(pkgStore, blobStore, upSvc)
+    // 权限/审计数据单实例：UI（CjregState）与 HTTP handler 必须共用，否则 id 计数器各自递增会撞车
+    let adminData = AdminDataStore(userStore.storm)
     let admin = AdminService(authSvc, upSvc, userStore, upStore,
         ResolveService(upSvc), Some(proxySvc), PublishPlanService(pkgStore),
-        PublishExecutor(pkgStore, blobStore))
+        PublishExecutor(pkgStore, blobStore), adminData: Some(adminData))
 
     // 同一 Tang 实例：协议路由 + cjxt 管理/公开页面（单进程共享 store）
-    let app = buildServer(pkgStore, Some(admin), Some(upSvc), blobStore, config: cfg)
-    let adminData = AdminDataStore(userStore.storm)
+    let app = buildServer(pkgStore, Some(admin), Some(upSvc), blobStore, config: cfg,
+        adminData: Some(adminData))
     // 重启恢复：执行中的计划复位为待执行（执行线程随进程退出）
     for (planDoc in adminData.listPlans()) {
         if (planDoc.status == "running" || planDoc.status == "paused") {

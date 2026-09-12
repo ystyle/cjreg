@@ -19,7 +19,8 @@ public func buildServer(
     admin: ?AdminService,
     upstreamSvc: ?UpstreamService,
     blobStore: BlobStore,
-    config!: ?CjregConfig = None
+    config!: ?CjregConfig = None,
+    adminData!: ?AdminDataStore = None
 ): Tang {
     let app = Tang().setHost("0.0.0.0")
     // 发布认证：管理服务存在时使用其 AuthService（规格 Authorization: publishToken）
@@ -34,8 +35,12 @@ public func buildServer(
     }
     let permMode = cfg.permissionMode
     let requireReadAuth = cfg.requireAuth
-    // 权限数据（团队/组织/包关联）：发布裁决与读裁决共用同一实例
-    let permData = AdminDataStore(store.storm)
+    // 权限数据（团队/组织/包关联）：发布裁决、读裁决、审计写入共用同一实例
+    // （id 计数器为实例内状态，多处 new 会导致 id 撞车互相覆盖，故由调用方注入单实例）
+    let permData = match (adminData) {
+        case Some(d) => d
+        case None => AdminDataStore(store.storm)
+    }
     let publishSvc = PublishService(store, blobStore, auth: publishAuth, adminData: Some(permData), permissionMode: permMode)
     let indexSvc = IndexService(store)
     let downloadSvc = DownloadService(store)
@@ -69,23 +74,57 @@ public func buildServer(
         let body = ctx.bodyRaw()
         // 规格：Authorization: ${publishToken}（发布用户 token；兼容 "Bearer <token>" 写法）
         let token = extractAuthToken(ctx)
+        // 审计身份：令牌有效则记真实用户，否则记为匿名（不回写令牌明文）
+        let actor: ?User = match (publishAuth) {
+            case Some(a) => a.validatePublishToken(token)
+            case None => None
+        }
+        let (actorId, actorName) = match (actor) {
+            case Some(u) => (u.id, u.username)
+            case None => (0, "")
+        }
         let result = publishSvc.publish(org, name, body, token)
+        // 审计版本：成功时从落库文档取（失败时 meta 不可信，目标只到包名）
+        var version = ""
+        if (result.outcome == PublishOutcome.Ok) {
+            match (store.getById(result.pkgId)) {
+                case Some(d) => version = d.version
+                case None => ()
+            }
+        }
+        let target = auditTarget(org, name, version)
         match (result.outcome) {
             case PublishOutcome.Ok =>
+                writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "ok", target, ctx,
+                    detail: "size=${body.size}")
                 ctx.status(200u16).writeStringWithCode(200u16, "{\"status\":\"ok\",\"id\":${result.pkgId}}")
             case PublishOutcome.InvalidFormat =>
+                writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
+                    error: "invalid data format")
                 ctx.status(400u16).writeStringWithCode(400u16, "{\"error\":\"invalid data format\"}")
             case PublishOutcome.MetaMismatch =>
+                writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
+                    error: result.message)
                 ctx.status(400u16).writeStringWithCode(400u16, "{\"error\":\"${result.message}\"}")
             case PublishOutcome.ShaMismatch =>
+                writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
+                    error: result.message)
                 ctx.status(400u16).writeStringWithCode(400u16, "{\"error\":\"${result.message}\"}")
             case PublishOutcome.Conflict =>
+                writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
+                    error: result.message)
                 ctx.status(409u16).writeStringWithCode(409u16, "{\"error\":\"conflict\",\"detail\":\"${result.message}\"}")
             case PublishOutcome.BadRequest =>
+                writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
+                    error: result.message)
                 ctx.status(400u16).writeStringWithCode(400u16, "{\"error\":\"${result.message}\"}")
             case PublishOutcome.Unauthorized =>
+                writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
+                    error: "unauthorized: ${result.message}")
                 ctx.status(401u16).writeStringWithCode(401u16, "{\"error\":\"${result.message}\"}")
             case PublishOutcome.Forbidden =>
+                writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
+                    error: "forbidden: ${result.message}")
                 ctx.status(403u16).writeStringWithCode(403u16, "{\"error\":\"${result.message}\"}")
         }
     })
@@ -174,6 +213,8 @@ public func buildServer(
             app.get("/api/admin/resolve", { ctx => adm.resolvePackage(ctx) })
             app.post("/api/admin/publish-plans/analyze", { ctx => adm.analyzePlan(ctx) })
             app.post("/api/admin/publish-plans/execute", { ctx => adm.executePlan(ctx) })
+            app.get("/api/admin/logs/:kind", { ctx => adm.queryLogs(ctx) })
+            app.post("/api/admin/logs/clean", { ctx => adm.cleanLogs(ctx) })
         case None => ()
     }
 

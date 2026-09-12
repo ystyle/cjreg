@@ -25,6 +25,9 @@ jobs:
         with:
           repository: ${{ env.CJXT_REPO }}
           path: cjxt
+      - name: 安装构建依赖（liburing：badger-cj/bstorm 链接 -luring）
+        run: sudo apt-get update && sudo apt-get install -y liburing-dev
+
       - uses: Zxilly/setup-cangjie@v3
         with:
           channel: sts
@@ -69,6 +72,9 @@ jobs:
         with:
           repository: ${{ env.CJXT_REPO }}
           path: cjxt
+
+      - name: 安装构建依赖（liburing：badger-cj/bstorm 链接 -luring）
+        run: sudo apt-get update && sudo apt-get install -y liburing-dev
 
       - uses: Zxilly/setup-cangjie@v3
         with:

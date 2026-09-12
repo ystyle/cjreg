@@ -32,6 +32,7 @@ export default defineConfig({
         { text: '运维', items: [
           { text: '服务端配置', link: '/deploy/env' },
           { text: '内存与优雅关闭', link: '/guide/memory' },
+          { text: '审计日志', link: '/guide/audit' },
           { text: '常见问题', link: '/guide/faq' },
         ]},
       ],

@@ -639,14 +639,20 @@ public func getDataDir(): String {
 }
 
 // ===== 日志页 =====
+// 审计日志：类型/结果筛选 + 关键字搜索 + 分页 + 按类型清理（清理动作自身入审计）
 @Page["/admin/logs", "日志", requireAdmin]
 class LogsPage <: Component {
     var state: Option<CjregState> = None
     var rows = Signal<ArrayList<LogDoc>>(ArrayList<LogDoc>())
     var kindFilter = Signal<String>("all")
     var statusFilter = Signal<String>("all")
+    var keyword = Signal<String>("")
+    var currentPage = Signal<Int64>(1)
+    var pageSize = Signal<Int64>(20)
+    var total = Signal<Int64>(0)
     var msg = Signal<String>("")
     var confirmVisible = Signal<Bool>(false)
+    var cleanKind = Signal<String>("all")
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
@@ -657,15 +663,19 @@ class LogsPage <: Component {
         match (this.state) {
             case Some(st) =>
                 let kind = if (this.kindFilter.get() == "all") { Option<String>.None } else { Some(this.kindFilter.get()) }
-                let logs = st.adminData.listLogs(kind, 300)
-                let data = ArrayList<LogDoc>()
-                for (l in logs) {
-                    if (this.statusFilter.get() != "all" && l.status != this.statusFilter.get()) {
-                        continue
-                    }
-                    data.add(l)
+                let status = if (this.statusFilter.get() == "all") { "" } else { this.statusFilter.get() }
+                var size = this.pageSize.get()
+                if (size <= 0) {
+                    size = 20
                 }
-                this.rows.set(data)
+                var page = this.currentPage.get()
+                if (page < 1) {
+                    page = 1
+                }
+                let (rows, total) = st.adminData.queryLogs(kind, this.keyword.get().trimAscii(), status,
+                    0, 0, (page - 1) * size, size)
+                this.rows.set(rows)
+                this.total.set(total)
             case None => ()
         }
     }
@@ -679,6 +689,13 @@ class LogsPage <: Component {
     }
 
     func doRefresh(ctx: ActionContext): PatchResult {
+        this.currentPage.set(1)
+        this.refresh()
+        PatchResult.ReRender
+    }
+
+    // 分页绑定由框架回写 currentPage/pageSize 信号，这里只需按新条件重查
+    func onPageChange(ctx: ActionContext): PatchResult {
         this.refresh()
         PatchResult.ReRender
     }
@@ -702,10 +719,16 @@ class LogsPage <: Component {
             this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
-        st.adminData.clearLogs()
-        this.msg.set("已清空日志")
-        st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "clear logs", "ok", nowMs())
+        let scope = this.cleanKind.get()
+        let kind = if (scope == "all") { Option<String>.None } else { Some(scope) }
+        let deleted = st.adminData.removeLogs(kind, 0)
+        // 清理动作自身入审计（管理类；UI 操作无 HTTP 上下文，IP/UA 记为管理端）
+        let _ = st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "clean_logs", "ok", nowMs(),
+            target: if (scope == "all") { "all" } else { scope },
+            detail: "deleted=${deleted} via=admin-ui", ipAddr: "admin-ui", userAgent: "cjxt-admin-ui")
+        this.msg.set("已清理 ${deleted} 条${if (scope == "all") { "全部" } else { this.kindLabel(scope) }}日志")
         this.confirmVisible.set(false)
+        this.currentPage.set(1)
         this.refresh()
         PatchResult.ReRender
     }
@@ -720,11 +743,25 @@ class LogsPage <: Component {
         statusOptions.add(SelectOption([text("全部结果")], "all"))
         statusOptions.add(SelectOption([text("成功")], "ok"))
         statusOptions.add(SelectOption([text("失败")], "failed"))
+        let cleanOptions = ArrayList<IComponent>()
+        cleanOptions.add(SelectOption([text("全部日志")], "all"))
+        cleanOptions.add(SelectOption([text("仅发布日志")], "publish"))
+        cleanOptions.add(SelectOption([text("仅管理日志")], "admin"))
+        cleanOptions.add(SelectOption([text("仅认证日志")], "auth"))
+        // 各控件固定宽度：日志页列多，工具栏需在一行内放下「筛选/清理」按钮
         let toolbar = div([
-            Select(kindOptions.toArray()).bind(this.kindFilter).placeholder("类型"),
-            Select(statusOptions.toArray()).bind(this.statusFilter).placeholder("结果"),
+            div([Input().bind(this.keyword).placeholder("搜索操作者/操作/对象/错误")
+                .on("input", { _ =>
+                    this.currentPage.set(1)
+                    this.refresh()
+                    PatchResult.ReRender
+                })], attrs: Some(HashMap<String, String>([("style", "width:230px;display:inline-block;")]))),
+            div([Select(kindOptions.toArray()).bind(this.kindFilter)],
+                attrs: Some(HashMap<String, String>([("style", "width:130px;display:inline-block;")]))),
+            div([Select(statusOptions.toArray()).bind(this.statusFilter)],
+                attrs: Some(HashMap<String, String>([("style", "width:130px;display:inline-block;")]))),
             Button([text("筛选")]).kind(ButtonKind.Primary).onClick(doRefresh),
-            Button([text("清空日志")]).kind(ButtonKind.Danger).onClick(askClear),
+            Button([text("清理日志")]).kind(ButtonKind.Danger).onClick(askClear),
             if (this.msg.get() != "") {
                 Tag([text(this.msg.get())]).kind(ComponentKind.Success)
             } else {
@@ -734,28 +771,47 @@ class LogsPage <: Component {
         let table = Table<LogDoc>()
             .data(this.rows)
             .stripe()
-            .add(TableColumn<LogDoc>().label("ID").accessor({ l => l.id.toString() }).width(50))
-            .add(TableColumn<LogDoc>().label("类型").width(80).render({ l, i =>
+            .add(TableColumn<LogDoc>().label("时间").width(120).render({ l, i =>
+                text(formatTimeMs(l.createdAt))
+            }))
+            .add(TableColumn<LogDoc>().label("类型").width(70).render({ l, i =>
                 text(this.kindLabel(l.kind))
             }))
             .add(TableColumn<LogDoc>().label("操作者").accessor({ l => l.actorName }).width(100))
-            .add(TableColumn<LogDoc>().label("操作").accessor({ l => l.action }).minWidth(220).showOverflowTooltip())
-            .add(TableColumn<LogDoc>().label("对象").accessor({ l => l.target }).minWidth(140))
-            .add(TableColumn<LogDoc>().label("结果").accessor({ l => l.status }).width(80))
+            .add(TableColumn<LogDoc>().label("操作").accessor({ l => l.action }).minWidth(140).showOverflowTooltip())
+            .add(TableColumn<LogDoc>().label("对象").accessor({ l => l.target }).minWidth(150).showOverflowTooltip())
+            .add(TableColumn<LogDoc>().label("结果").width(80).render({ l, i =>
+                if (l.status == "ok") {
+                    Tag([text("成功")]).kind(ComponentKind.Success)
+                } else {
+                    Tag([text("失败")]).kind(ComponentKind.Danger)
+                }
+            }))
+            .add(TableColumn<LogDoc>().label("IP").accessor({ l => l.ipAddr }).width(120))
+            .add(TableColumn<LogDoc>().label("User-Agent").accessor({ l => l.userAgent }).minWidth(130).showOverflowTooltip())
+            .add(TableColumn<LogDoc>().label("错误信息").accessor({ l => l.error }).minWidth(160).showOverflowTooltip())
+        let pager = Pagination()
+            .currentPage(this.currentPage)
+            .pageSize(this.pageSize)
+            .total(this.total.get())
+            .layout("total, prev, pager, next, sizes")
+            .onChange(onPageChange)
         let confirmDlg = Dialog([
-            div([text("确定要清空全部日志吗？此操作不可恢复。")]),
+            div([text("清理范围：")]),
+            Select(cleanOptions.toArray()).bind(this.cleanKind),
+            div([text("清理后不可恢复；清理动作本身会记入审计日志。")]),
         ])
             .visible(this.confirmVisible)
-            .title("清空确认")
-            .width("400px")
+            .title("清理审计日志")
+            .width("420px")
             .closeOnClickModal(false)
             .footer([
                 Button([text("取消")]).onClick(cancelClear),
-                Button([text("清空")]).kind(ButtonKind.Danger).onClick(confirmClear),
+                Button([text("确认清理")]).kind(ButtonKind.Danger).onClick(confirmClear),
             ])
         adminLayout("/admin/logs", [
-            div([text("日志")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
-            adminCard("操作日志", [toolbar, table, confirmDlg]),
+            div([text("审计日志")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
+            adminCard("操作日志", [toolbar, table, pager, confirmDlg]),
         ])
     }
 }

@@ -67,3 +67,21 @@ public class CjregState <: AppState {
         }
     }
 }
+
+// ===== UI 侧审计 =====
+// HTTP 侧审计见 src/server/audit.cj（writeAudit，带真实 IP/UA）；
+// 管理端页面是 WS 调用，无 HTTP 请求上下文，故 IP/UA 记为来源标记（admin-ui）。
+// action 用下划线动词（create_user/enable_user/...），与 HTTP 侧口径一致；
+// target 为被操作对象（用户名/团队名/组织名/包名），detail 放补充信息。
+public func uiAudit(st: CjregState, ctx: ActionContext, action: String, target: String,
+                    status!: String = "ok", error!: String = "", detail!: String = ""): Unit {
+    let _ = st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), action, status, nowMs(),
+        target: target, error: error, detail: detail, ipAddr: "admin-ui", userAgent: "cjxt-admin-ui")
+}
+
+// 同上：调用点已持有操作者身份（如创建组织/团队时从会话取出的 uid/uname）
+public func uiAuditAs(st: CjregState, actorId: Int64, actorName: String, action: String, target: String,
+                      status!: String = "ok", error!: String = "", detail!: String = ""): Unit {
+    let _ = st.adminData.addLog(LogKind.Admin, actorId, actorName, action, status, nowMs(),
+        target: target, error: error, detail: detail, ipAddr: "admin-ui", userAgent: "cjxt-admin-ui")
+}

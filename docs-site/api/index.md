@@ -23,6 +23,8 @@
 | `/api/admin/resolve` | GET | 多仓解析诊断（`name` / `organization` / `require` / `strict`） |
 | `/api/admin/publish-plans/analyze` | POST | 依赖拓扑 + 四分类 |
 | `/api/admin/publish-plans/execute` | POST | 按序推送到目标仓（`target_url` / `target_token`） |
+| `/api/admin/logs/:kind` | GET | 审计日志查询（`kind` = `publish`/`admin`/`auth`/`all`；`keyword`/`status`/`from`/`to`/`offset`/`limit`） |
+| `/api/admin/logs/clean` | POST | 清理审计日志（`{kind?, before?}`，返回 `{"deleted":N}`） |
 
 Header：`Authorization: Bearer <会话 Token>`。
 
@@ -44,4 +46,6 @@ Header：`Authorization: Bearer <会话 Token>`。
 ## 规划中
 
 公开只读 API（`/api/stats`、`/api/packages`、`/api/packages/:name`、`/api/organizations`）、
-审计日志查询端点（`/api/admin/logs/*`）、上游连通性测试端点等，见仓库 `docs/gap-analysis.md`。
+组织 CRUD REST 端点、上游连通性测试端点等，见仓库 `docs/gap-analysis.md`。
+
+审计日志端点的字段与用法见 [审计日志](/guide/audit)。

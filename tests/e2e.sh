@@ -426,4 +426,109 @@ print('  审计：delete_package / restore_package / hard_delete_package 均已�
 "
 
 echo ""
+echo "=== 9. 组织 CRUD REST（/api/admin/organizations）==="
+# 9.1 创建（含非法名与重名守卫）
+OID=$(curl -s -X POST "http://localhost:$PORTA/api/admin/organizations" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"e2eOrg","displayName":"E2E 组织","description":"e2e 用"}' \
+  | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['status'] == 'ok' and d['id'] > 0, d
+print(d['id'])
+")
+echo "  创建组织 e2eOrg（id=$OID）✓"
+curl -s -o /tmp/org_dup.json -w "%{http_code}" -X POST "http://localhost:$PORTA/api/admin/organizations" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"name":"e2eOrg"}' | grep -q 409 \
+  || { echo "  重名应 409"; exit 1; }
+grep -q duplicate_name /tmp/org_dup.json || { echo "  重名错误码应为 duplicate_name"; exit 1; }
+curl -s -o /tmp/org_bad.json -w "%{http_code}" -X POST "http://localhost:$PORTA/api/admin/organizations" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"name":"bad name"}' | grep -q 400 \
+  || { echo "  非法名应 400"; exit 1; }
+grep -q invalid_name /tmp/org_bad.json || { echo "  非法名错误码应为 invalid_name"; exit 1; }
+echo "  重名 409 / 非法名 400 ✓"
+
+# 9.2 列表 / 详情（含包/版本计数）
+curl -s "http://localhost:$PORTA/api/admin/organizations" -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+orgs = {o['name']: o for o in d['items']}
+assert 'e2eOrg' in orgs and orgs['e2eOrg']['id'] == $OID, d
+assert orgs['e2eOrg']['displayName'] == 'E2E 组织', orgs['e2eOrg']
+assert orgs['e2eOrg']['packageCount'] == 0 and orgs['e2eOrg']['teamCount'] == 0, orgs['e2eOrg']
+print('  列表：%d 个组织（e2eOrg 计数为 0）✓' % d['total'])
+"
+# 已登记且有包的 test 组织（包是直接发布的，组织由发布侧隐式存在）
+curl -s -X POST "http://localhost:$PORTA/api/admin/organizations" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"name":"test","displayName":"测试组织"}' | grep -q '"status":"ok"' \
+  || { echo "  登记 test 组织失败"; exit 1; }
+TID=$(curl -s "http://localhost:$PORTA/api/admin/organizations" -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json;d=json.load(sys.stdin);print([o['id'] for o in d['items'] if o['name']=='test'][0])")
+curl -s "http://localhost:$PORTA/api/admin/organizations/$TID" -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['name'] == 'test', d
+assert d['packageCount'] >= 5 and d['versionCount'] >= 5, d   # 第 8 步硬删了一个版本，剩 5 个包
+print('  详情：test 组织 %d 包 / %d 版本 ✓' % (d['packageCount'], d['versionCount']))
+"
+
+# 9.3 更新（改显示名 + 设默认）与改名守卫
+curl -s -X PUT "http://localhost:$PORTA/api/admin/organizations/$OID" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"displayName":"改后显示名","isDefault":true}' | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['status'] == 'ok', d
+print('  更新显示名 + 设为默认 ✓')
+"
+curl -s "http://localhost:$PORTA/api/admin/organizations/$OID" -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['displayName'] == '改后显示名' and d['isDefault'], d
+print('  更新已生效 ✓')
+"
+curl -s -o /tmp/org_rename.json -w "%{http_code}" -X PUT "http://localhost:$PORTA/api/admin/organizations/$TID" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"name":"testRenamed"}' | grep -q 409 \
+  || { echo "  有包的组织改名应 409"; exit 1; }
+grep -q rename_with_packages /tmp/org_rename.json || { echo "  改名守卫错误码应为 rename_with_packages"; exit 1; }
+curl -s -X PUT "http://localhost:$PORTA/api/admin/organizations/$TID" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"description":"仅改描述"}' | grep -q '"status":"ok"' \
+  || { echo "  无改名时更新应成功"; exit 1; }
+echo "  有包禁改名 409 / 仅改描述成功 ✓"
+
+# 9.4 删除守卫与删除
+curl -s -o /tmp/org_del.json -w "%{http_code}" -X DELETE "http://localhost:$PORTA/api/admin/organizations/$TID" \
+  -H "Authorization: Bearer $TOKEN" | grep -q 409 || { echo "  有包的组织删除应 409"; exit 1; }
+grep -q has_packages /tmp/org_del.json || { echo "  删除守卫错误码应为 has_packages"; exit 1; }
+curl -s -X DELETE "http://localhost:$PORTA/api/admin/organizations/$OID" -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['status'] == 'ok', d
+print('  有包 409 / 无包删除成功 ✓')
+"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "http://localhost:$PORTA/api/admin/organizations/$OID" \
+  -H "Authorization: Bearer $TOKEN")
+[ "$CODE" = "404" ] || { echo "  重复删除应 404，实际 $CODE"; exit 1; }
+echo "  重复删除 404 ✓"
+
+# 9.5 公开组织列表同步 + 审计
+curl -s "http://localhost:$PORTA/api/organizations" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+names = {o['name'] for o in d['items']}
+assert 'test' in names, d
+assert 'e2eOrg' not in names, d   # 已删除
+print('  公开 /api/organizations 与登记状态一致（%d 个）✓' % d['total'])
+"
+curl -s "http://localhost:$PORTA/api/admin/logs/admin?limit=50" -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+actions = {x['action'] for x in d['items']}
+for a in ('create_org', 'update_org', 'delete_org'):
+    assert a in actions, (a, sorted(actions))
+fails = [x for x in d['items'] if x['action'] == 'delete_org' and x['status'] == 'failed']
+assert fails, d
+print('  审计：create/update/delete_org 已记录（含守卫失败）✓')
+"
+
+echo ""
 echo "=== 双仓 e2e 全部通过 ✓ ==="

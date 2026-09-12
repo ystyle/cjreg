@@ -26,6 +26,8 @@
 | `/api/admin/publish-plans/execute` | POST | 按序推送到目标仓（`target_url` / `target_token`） |
 | `/api/admin/logs/:kind` | GET | 审计日志查询（`kind` = `publish`/`admin`/`auth`/`all`；`keyword`/`status`/`from`/`to`/`offset`/`limit`） |
 | `/api/admin/logs/clean` | POST | 清理审计日志（`{kind?, before?}`，返回 `{"deleted":N}`） |
+| `/api/admin/organizations` | GET / POST | 组织列表（含包/版本/团队计数）/ 创建（`{name, displayName?, description?, isDefault?}`） |
+| `/api/admin/organizations/:id` | GET / PUT / DELETE | 组织详情 / 更新（未传字段保持原值；`name` 变化即改名，有包时 409）/ 删除（有包或仍被团队关联 → 409） |
 | `/api/admin/packages` | GET | 版本列表（`organization`/`name`/`includeDeleted`/`page`/`size`；含 `id`/`sha256`/`deletedAt`） |
 | `/api/admin/packages/:id` | DELETE | **软删除**该版本（索引/下载/公开 API 立即不可见，制品保留，可恢复） |
 | `/api/admin/packages/:id/restore` | PUT | **恢复**（校验制品仍在：本地 blob 或上游可回源；丢失则 409） |

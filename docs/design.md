@@ -228,7 +228,7 @@ GET /api/admin/resolve?name={module}&org={org}&require={版本需求}&strict={tr
 pkg 文档 { ...meta-data.json 15 字段（organization/name/version/cjc-version/description/
           artifact-type/executable/authors/repository/homepage/documentation/tag/category/
           license/index/meta-version）,
-          publisherId,        // 发布者用户 ID（A1 个人发布路径）
+          publisherId,        // 版本级发布者用户 ID（事实记录，逐版本累加；不直接授权——见 §5.3.6 包名所有者）
           downloadCount,      // 下载计数（下载时自增）
           upstreamId,         // 来源上游 ID（回源落库时写入）
           upstreamName,       // 来源上游名
@@ -326,7 +326,9 @@ POST /api/admin/login {username, password}
 请求（发布/下载/索引）→ 提取 token → 获取用户（裸 token 与 "Bearer <token>" 均接受）
   1. 超级管理员（isAdmin）→ 有效权限级别 = overwrite（直接放行）
   2. 计算用户对 (org, name) 的**有效权限级别** = max(个人发布路径, 团队路径)：
-     个人发布路径：该用户是该包任一版本的 publisher（含软删版本）→ write(2)
+     个人发布路径：该用户是**包名所有者**（owner）→ write(2)
+        owner 派生规则：该 (org, name) **最早一条版本记录**（id 最小，含软删）的 publisherId
+        版本级 publisherId 仍逐版本累加记录（谁发的这一版，供审计/展示），但**不参与权限判定**
      团队路径：用户是该团队成员 && （TeamPackage 关联该包 || TeamOrganization 关联该组织）→ 团队 permission，取所有命中团队的**最高**值
   3. 按操作要求判定：发布新包/新版本需 write(2) 及以上；覆盖已存在版本需 overwrite(3)；下载/索引（requireAuth）需 read(1) 及以上
   4. 不满足 → 403；未认证（requireAuth）→ 401
@@ -368,11 +370,13 @@ TeamMember        { id, teamId, userId }
 
 #### 5.4.3 权限语义（已实现，见 §5.3.6 裁决细节）
 
-- 用户对包的操作权限级别 = `max(个人发布路径 = write, 团队对该包/该组织的 permission)`；`isAdmin` = overwrite
+- 用户对包的操作权限级别 = `max(个人发布路径 = owner 的 write, 团队对该包/该组织的 permission)`；`isAdmin` = overwrite
 - `read(1)`：可下载/查看；`write(2)`：可发布新版本；`overwrite(3)`：可覆盖已存在版本
 - 团队路径：`TeamPackage`（包级）与 `TeamOrganization`（组织级）**都参与裁决并取最高**——不用「包级优先命中即止」，避免多团队并存时因遍历顺序误拒
-- 实现位置：`src/server/publish_service.cj`（`effectivePermission` / `checkPublishPermission` / `checkReadPermission` / `isNamespaceGoverned`）
-- 已知边界：团队成员一旦发布过该包即成为该包 publisher（个人路径 write），退出团队后仍保留 write —— 与 cjrepo 的 per-version `PublisherID` 语义一致；如需收紧（仅首次发布者为 owner）作为后续决策项
+- 实现位置：`src/server/publish_service.cj`（`effectivePermission` / `packageOwner` / `checkPublishPermission` / `checkReadPermission` / `isNamespaceGoverned`）
+- **包名所有者（owner）唯一**：取该包最早一条版本记录的 `publisherId`；团队协作发版只让新版本记录到协作者的 `publisherId`（事实累加），**授予 write 的只有 owner**
+- 所有权转移路径：硬删最早那条版本记录后，owner 顺延到次早记录（admin 操作，间接转让）；覆盖**不转移**所有权（`publisherId` 保持原值，覆盖者信息应由发布日志承载，E1 待补）
+- 边界：非 owner 的协作者离开团队后不再拥有该包任何权限（含 read）——「离开团队即失去该组织包访问权」是有意为之；若将来需要「贡献者只读」需单独引入该语义
 
 ### 5.5 发布计划（对齐 cjrepo，分析能力复用 cjdep）
 

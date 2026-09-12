@@ -94,8 +94,8 @@
 
 | # | 差距项 | 来源 | 状态 | 建议 |
 |---|---|---|---|---|
-| F1 | 组织 CRUD（列表/创建/更新/删除，含成员数/包数统计） | organization.go | 缺失（有 org 集合无 API） | 补（团队引用 organizationId 需闭环） |
-| F2 | 默认组织（CJREPO_DEFAULT_ORGANIZATION 自动创建置默认） | organization.go；main.go | 缺失 | 可选（单组织场景可省） |
+| F1 | 组织 CRUD（列表/创建/更新/删除，含成员数/包数统计） | organization.go | ✅ 已实现（5 个 REST 端点 + 名称校验/重名/改名守卫/删除守卫，团队引用闭环；见 `docs-site/guide/teams.md`） | — |
+| F2 | 默认组织（CJREPO_DEFAULT_ORGANIZATION 自动创建置默认） | organization.go；main.go | 部分（`isDefault` 标记 + 唯一化已实现；无环境变量自动创建） | 可选（单组织场景可省） |
 
 ## G. 发布计划细节
 
@@ -145,8 +145,8 @@
 
 ## 筛选建议（待用户确认后补入 design.md）
 
-- **必补（课题/私有化刚需）**：A1 publisher_id、A2 requireAuth、A3 权限检查顺序、B1 三级删除、F1 组织 CRUD、G2 重启恢复、I1 官方 URL 定死
-  （E1/E2 审计日志、C1–C5 公开只读 API 已完成）
+- **必补（课题/私有化刚需）**：A1 publisher_id、A2 requireAuth、A3 权限检查顺序、G2 重启恢复、I1 官方 URL 定死
+  （E1/E2 审计日志、C1–C5 公开只读 API、B1 三级删除、F1 组织 CRUD 均已完成）
 - **建议补（管理面闭环）**：C1-C5 公开 API、D1-D3 用户管理端点、B2 版本列表、A4 用户-团队查询
 - **细节明确**：G1 状态枚举、G3/G4/G5/G6 发布计划细节、H1/H2 字段级处理、I2/I3/I4/I5 协议细节
 - **可选**：B5 README、D4 email、E3 日志清理、F2 默认组织、I6 关键字/分类、J4/J5/J7/J8

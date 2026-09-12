@@ -5,11 +5,23 @@
 
 ## [Unreleased]
 
+### Added — 组织 CRUD REST（管理 API）
+
+- `GET /api/admin/organizations`：组织列表（含 `packageCount`/`versionCount`/`teamCount`）
+- `GET /api/admin/organizations/:id`：组织详情
+- `POST /api/admin/organizations`：创建（`{name, displayName?, description?, isDefault?}`）
+  —— 名称格式校验（1–64 字符，`[A-Za-z0-9_-]`）、重名 409、非法名 400；`isDefault=true` 时清除其它组织的默认标记
+- `PUT /api/admin/organizations/:id`：更新（未传字段保持原值）；`name` 变化视为**改名**，
+  该组织下仍有包时 409（避免孤儿包），无包时校验格式与重名
+- `DELETE /api/admin/organizations/:id`：软删；组织下仍有包 409、仍被团队关联 409（错误消息列出团队名）
+- 审计：`create_org` / `update_org` / `delete_org`（detail 记 id 与 affected；守卫失败记 failed + 原因）
+- 测试：`org_service_test.cj` 4 组（名称校验与 JSON 形状、创建与默认唯一化、改名与更新守卫、删除守卫与统计）；
+  `tests/e2e.sh` 第 9 步（创建/重名/非法名/列表/详情/更新/改名守卫/删除守卫/重复删除/公开列表一致/审计）
+
 ### 计划中
 
 - **发布链路流式化**（大包稳定 + 内存 O(1)）：当前 `POST /pkg` 整包读入内存（峰值 ≈ 包体 2–3 倍），
   受仓颉 GC 堆默认 256 MB 限制，40 MiB 以上的包在默认配置下可能 OOM —— 详见 `docs/finals-plan.md` 迭代 1
-- 组织 CRUD REST 端点（当前仅管理端界面）
 - 发布计划 item 六状态（`publishing`/`waiting_index`/`skipped`）与 SSE 进度流
 - 镜像预热/周期同步（`serve --sync-interval`）与性能基准报告
 - 团队所有者（owner 自助管理成员）——设计见 `docs/user-portal-design.md` §7.4

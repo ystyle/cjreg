@@ -37,3 +37,42 @@ TeamMember        { teamId, userId }
 - 团队协作发版不会产生新的 owner（见[权限模型](/guide/permission)）；
 - 成员退出团队后即失去该包的权限（owner 除外）；
 - 平台管理员始终是超集，可直接管理所有团队与包。
+
+## 组织管理（REST）
+
+管理后台可视化操作之外，组织也提供 REST 端点（需管理员会话 Token）：
+
+| 端点 | 方法 | 说明 |
+|---|---|---|
+| `/api/admin/organizations` | GET | 列表（含 `packageCount`/`versionCount`/`teamCount`） |
+| `/api/admin/organizations` | POST | 创建：`{name, displayName?, description?, isDefault?}` |
+| `/api/admin/organizations/:id` | GET | 详情 |
+| `/api/admin/organizations/:id` | PUT | 更新：传哪个字段改哪个（`name` 变化即改名） |
+| `/api/admin/organizations/:id` | DELETE | 软删除 |
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:8060/api/admin/login -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"<口令>"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+
+curl -s -X POST http://127.0.0.1:8060/api/admin/organizations \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"myorg","displayName":"我的组织","isDefault":true}'
+
+curl -s http://127.0.0.1:8060/api/admin/organizations -H "Authorization: Bearer $TOKEN"
+
+curl -s -X PUT http://127.0.0.1:8060/api/admin/organizations/1 \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"displayName":"改个名"}'
+```
+
+约定与守卫：
+
+| 规则 | 行为 |
+|---|---|
+| 名称格式 | 1–64 字符，仅字母/数字/`_`/`-`（会出现在 URL 的 `organization=` 与包键里）→ 否则 `400 invalid_name` |
+| 重名 | 组织名已被占用 → `409 duplicate_name`（组织软删后名称可复用） |
+| 默认组织 | 同一时间只有一个：`isDefault=true` 会清除其它组织的默认标记（响应 `affected` 为被清除数） |
+| 改名 | 该组织下**仍有包**时禁止改名（会造成孤儿包）→ `409 rename_with_packages`；无包时可改并校验重名 |
+| 删除 | 组织下仍有包 → `409 has_packages`；仍被团队关联 → `409 referenced_by_teams`（错误消息列出团队名） |
+| 审计 | `create_org` / `update_org` / `delete_org`，含守卫失败 |
+| 公开视图 | `GET /api/organizations`（公开只读）会带上组织显示名；有包但未登记的组织以 `id=0` 出现 |

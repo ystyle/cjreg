@@ -212,9 +212,14 @@ public class AdminDataStore {
         return d.id
     }
 
-    public func updateOrg(id: Int64, displayName: String, description: String, isDefault: Bool, now: Int64): Bool {
+    /// 更新组织；`newName` 非空时同时改名（调用方负责唯一性与「有包不可改名」的校验）
+    public func updateOrg(id: Int64, displayName: String, description: String, isDefault: Bool, now: Int64,
+                          newName!: String = ""): Bool {
         match (this.storm.get<OrgDoc>(id)) {
             case Some(d) =>
+                if (!newName.isEmpty()) {
+                    d.name = newName
+                }
                 d.displayName = displayName
                 d.description = description
                 d.isDefault = isDefault

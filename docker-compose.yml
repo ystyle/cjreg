@@ -25,6 +25,8 @@ services:
     ports:
       - "${CJREG_PORT:-8060}:8060"
 
+    # 数据目录：容器以 uid 1000 运行，宿主 ./data 属主须为 1000
+    # （首次部署：sudo chown -R 1000:1000 ./data，或 bash scripts/docker-deploy.sh 自动处理）
     volumes:
       # 数据 + 配置：备份/迁移 = 拷这个目录
       - ./data:/data

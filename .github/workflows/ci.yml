@@ -117,7 +117,9 @@ jobs:
 
       - name: 容器冒烟（初始化 → 启动 → 健康 → 优雅关闭 → 数据留存）
         run: |
+          # 容器以 uid 1000 运行；runner 创建的目录属 runner(1001)，需改属主否则 init 无法写 /data
           mkdir -p smoke-data
+          sudo chown -R 1000:1000 smoke-data
           docker run --rm -v "$PWD/smoke-data:/data" cjreg:ci \
             /app/cjreg init -d /data --username admin --password 'AdminPass1'
           docker run -d --name cjreg-smoke -p 18060:8060 -v "$PWD/smoke-data:/data" cjreg:ci

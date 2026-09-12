@@ -30,6 +30,8 @@
 - **VitePress 文档站**：`docs-site/`（指南/API/部署/关于，local search，`base=/cjreg/`），
   `docs-deploy.yml` 自动发布到 GitHub Pages + 华为云 CDN 刷新（`https://ystyle.top/cjreg/`）
 - **CI / Release**：`ci.yml`（构建 + 单测 + 覆盖率 + 双仓 e2e + 文档站 + 镜像）、`release.yml`（linux-amd64 二进制 + ghcr 镜像）
+- 容器冒烟两处修复：镜像构建后 `chmod 0755`（CI artifact 往返丢执行位 → `permission denied`）；
+  数据目录属主对齐容器 uid 1000（`scripts/docker-deploy.sh` 自动 chown，文档补充说明）
 
 ### 计划中
 

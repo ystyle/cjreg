@@ -41,6 +41,28 @@ for i in $(seq 1 20); do
   sleep 0.5
 done
 
+# 1.5 取两端发布 token：A 仓写入各测试包 cangjie-repo.toml；B 仓作为推送目标鉴权
+ATOKEN=$(curl -s -X POST http://localhost:$PORTA/api/admin/login \
+  -H 'Content-Type: application/json' -d "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}" \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+PUBTOKEN=$(curl -s http://localhost:$PORTA/api/admin/me -H "Authorization: Bearer $ATOKEN" \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['publishToken'])")
+BTOKEN_SESS=$(curl -s -X POST http://localhost:$PORTB/api/admin/login \
+  -H 'Content-Type: application/json' -d "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}" \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+BPUBTOKEN=$(curl -s http://localhost:$PORTB/api/admin/me -H "Authorization: Bearer $BTOKEN_SESS" \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['publishToken'])")
+for p in mathUtils strUtils netUtils encryptUtils dataUtils app; do
+  cat > tests/pkgs/$p/cangjie-repo.toml <<EOF
+[repository.cache]
+    path = "./.cache"
+
+[repository.home]
+    registry = "http://localhost:$PORTA"
+    token = "$PUBTOKEN"
+EOF
+done
+
 echo "=== 1. 按依赖顺序发布 6 包到 A ==="
 for p in mathUtils strUtils netUtils encryptUtils dataUtils app; do
   (cd tests/pkgs/$p && cjpm publish >/dev/null 2>&1)
@@ -71,7 +93,7 @@ print(f'  拓扑正确: {names}')
 echo "=== 3. 执行发布计划 A → B ==="
 RES=$(curl -s --max-time 60 -X POST http://localhost:$PORTA/api/admin/publish-plans/execute \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d "{\"packages\":[{\"organization\":\"test\",\"name\":\"app\",\"version\":\"1.0.0\"}],\"target_url\":\"http://localhost:$PORTB\"}")
+  -d "{\"packages\":[{\"organization\":\"test\",\"name\":\"app\",\"version\":\"1.0.0\"}],\"target_url\":\"http://localhost:$PORTB\",\"target_token\":\"$BPUBTOKEN\"}")
 echo "$RES" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)

@@ -206,7 +206,7 @@ public func httpGet(url: String, token: String): ?Array<Byte> {
     while (hops < 5) {
         let client = buildHttpClient(currentUrl)
         try {
-            let resp = client.get(currentUrl)
+            let resp = client.send(buildGetRequest(currentUrl, token))
             if (resp.status == HttpStatusCode.STATUS_OK) {
                 // 循环读 InputStream（制品是二进制，不能用 StringReader）
                 let bytes = readStreamToBytes(resp.body)
@@ -270,7 +270,9 @@ public func readStreamToBytes(stream: InputStream): Array<Byte> {
 public func httpPostBinary(url: String, body: Array<Byte>, token: String): (Bool, Int64) {
     let client = buildHttpClient(url)
     try {
-        let resp = client.post(url, body)
+        // 目标仓（官方中心仓 / 另一个私有仓）按官方规格校验 Authorization: {token}
+        // ——此前这里漏带头，向需认证的目标仓推送必然 401
+        let resp = client.send(buildPostRequest(url, body, token))
         let code = Int64(resp.status)
         client.close()
         return (code >= 200 && code < 300, code)
@@ -282,6 +284,24 @@ public func httpPostBinary(url: String, body: Array<Byte>, token: String): (Bool
         }
         return (false, 0)
     }
+}
+
+// GET 请求构造：token 非空时带 Authorization（裸 token，对齐官方规格与 Go 先行版）
+func buildGetRequest(url: String, token: String): HttpRequest {
+    var b = HttpRequestBuilder().get().url(url)
+    if (!token.isEmpty()) {
+        b = b.header("Authorization", token)
+    }
+    b.build()
+}
+
+// POST 请求构造：同上
+func buildPostRequest(url: String, body: Array<Byte>, token: String): HttpRequest {
+    var b = HttpRequestBuilder().post().url(url)
+    if (!token.isEmpty()) {
+        b = b.header("Authorization", token)
+    }
+    b.body(body).build()
 }
 
 // 磁盘制品存储（持久化到 dataDir/blobs/{sha256}）

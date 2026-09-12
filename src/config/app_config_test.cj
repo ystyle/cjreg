@@ -66,6 +66,20 @@ public_url = "http://registry.internal"
     }
 
     @TestCase
+    public func testMaxRequestBytesDefaultsAndOverride(): Unit {
+        // 默认 500MiB（对齐官方单段 ≤ 500MB；stdx 默认 2MB 会让大包发布 413）
+        @Expect(resolveConfig("/tmp/cjreg-config-test/absent.toml", None).maxRequestBytes, 500 * 1024 * 1024)
+        let path = writeTempConfig("maxbody.toml", """
+[server]
+max_request_bytes = -1
+""")
+        match (loadConfigFile(path)) {
+            case Some(c) => @Expect(c.maxRequestBytes, -1)
+            case None => @Fail("配置文件应能解析")
+        }
+    }
+
+    @TestCase
     public func testPermissionModeNormalizedOrFallsBack(): Unit {
         // 未知模式（含大小写不符）一律降级 open，避免拼错就静默变严格
         let path = writeTempConfig("badmode.toml", """

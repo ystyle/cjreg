@@ -4,3 +4,6 @@ target
 *.lock
 data
 .smoke/
+*.gcda
+*.gcno
+cov_output/

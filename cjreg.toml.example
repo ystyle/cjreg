@@ -21,3 +21,9 @@ permission_mode = "open"
 
 # 下载 / 索引是否需要有效 token + read 权限（私有仓建议 true）
 require_auth = false
+
+# HTTP 请求体上限（字节）。stdx 默认仅 2MB，会让大包发布被拒；
+# 默认 500MiB 对齐官方「单段 ≤ 500MB」；-1 = 不限制。
+# 注意：发布大包还需提高仓颉 GC 堆上限（默认 256MB）：
+#   export cjHeapSize=2GB cjGCThreshold=1GB cjGCInterval=100ms
+max_request_bytes = 524288000

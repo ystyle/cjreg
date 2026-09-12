@@ -22,6 +22,9 @@ public class CjregConfig {
     public var permissionMode: String = "open"
     // 下载/索引是否需要认证 + read 权限（私有仓）
     public var requireAuth: Bool = false
+    // HTTP 请求体上限（字节）：stdx 默认仅 2MB，会让大包发布被拒（413/连接重置）
+    // 默认 500MiB（对齐官方「单段 ≤ 500MB」规格）；≤0 表示不限制（私有仓可按需调整）
+    public var maxRequestBytes: Int64 = 500 * 1024 * 1024
     // 实际加载到的配置文件路径（空 = 未使用配置文件，全默认值）
     public var configPath: String = ""
 
@@ -66,6 +69,8 @@ public func loadConfigFile(path: String): ?CjregConfig {
             cfg.permissionMode = normalizeMode(mode)
         }
         cfg.requireAuth = readBool(server, "require_auth", false)
+        let mrb = readInt(server, "max_request_bytes", cfg.maxRequestBytes)
+        cfg.maxRequestBytes = mrb
         let p = readInt(server, "port", 0)
         if (p > 0 && p <= 65535) {
             cfg.port = UInt16(p)
@@ -107,6 +112,12 @@ public func configTemplate(port: UInt16): String {
     + "\n"
     + "# 下载/索引是否需要有效 token + read 权限（私有仓建议 true）\n"
     + "require_auth = false\n"
+    + "\n"
+    + "# HTTP 请求体上限（字节）。stdx 默认仅 2MB，会让大包发布被拒（413/连接重置）；\n"
+    + "# 默认 500MiB 对齐官方「单段 ≤ 500MB」规格；-1 = 不限制（按需调整）\n"
+    + "# 注意：该上限还受仓颉 GC 堆限制（默认 256MB）——发布 30MB 以上的包前请设置环境变量\n"
+    + "#   export cjHeapSize=2GB cjGCThreshold=1GB cjGCInterval=100ms\n"
+    + "max_request_bytes = 524288000\n"
 }
 
 // ===== TOML 读取辅助（对齐 cjdep 的容错风格：类型不符取默认值）=====

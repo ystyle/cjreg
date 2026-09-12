@@ -1,6 +1,8 @@
 // 管理 API handler 单元测试：JSON body 解析（创建用户 / 角色变更）
 package ystyle::cjreg.server
 
+import ystyle::cjreg.config.*
+import std.collection.*
 import std.unittest.testmacro.*
 
 func toBytes(s: String): Array<Byte> {
@@ -81,4 +83,22 @@ func testParseJsonBodyRejectsBadInput() {
     @Expect(parseJsonBody<CreateUserRequest>(toBytes("{\"isAdmin\":\"yes\"}"), { r => CreateUserRequest.fromJson(r) }).isNone(), true)
     // 截断的 JSON
     @Expect(parseJsonBody<CreateUserRequest>(toBytes("{\"username\":\"alice\""), { r => CreateUserRequest.fromJson(r) }).isNone(), true)
+}
+
+// ===== 目标仓发布 token 解析（发布计划推送到需认证的目标仓）=====
+
+@Test
+func testResolveTargetToken() {
+    let ups = ArrayList<Upstream>()
+    ups.add(Upstream(1, "official", "https://pkg.cangjie-lang.cn/registry", true, 86400, "official-token", true, 0, 0))
+    ups.add(Upstream(2, "backup", "http://localhost:18070/", true, 0, "backup-token", false, 1, 0))
+
+    // 显式 target_token 优先
+    @Expect(resolveTargetToken("explicit", "http://localhost:18070", ups), "explicit")
+    // 未显式：按 URL 匹配上游（含尾部斜杠归一）
+    @Expect(resolveTargetToken("", "http://localhost:18070", ups), "backup-token")
+    @Expect(resolveTargetToken("", "http://localhost:18070/", ups), "backup-token")
+    @Expect(resolveTargetToken("", "https://pkg.cangjie-lang.cn/registry", ups), "official-token")
+    // 未匹配到上游：返回空（目标仓若不需认证则可直接推）
+    @Expect(resolveTargetToken("", "http://unknown.example.com", ups), "")
 }

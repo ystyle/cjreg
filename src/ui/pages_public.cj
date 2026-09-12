@@ -93,12 +93,12 @@ func categoryLabels(strs: ArrayList<String>): ArrayList<String> {
 }
 
 // ===== 公开顶部导航 =====
-// sctx = 会话上下文（cjxt SessionContextState，页面 onMount 取、render 期读）：
+// sctx = 会话上下文（cjxt SessionContext 接口，页面 onMount 取、render 期读）：
 // 未登录 → 「登录」入口；已登录管理员 → 「管理后台」入口（登录后才显示管理入口）。
 // 注意必须在 render() 里读：令牌恢复后的就地重渲不会重跑 onMount。
-public func publicNav(active: String, sctx: Option<SessionContextState>): IComponent {
+public func publicNav(active: String, sctx: Option<SessionContext>): IComponent {
     let isAdmin = match (sctx) {
-        case Some(s) => s.isAdmin()
+        case Some(s) => s.isAdmin
         case None => false
     }
     let children = ArrayList<IComponent>()
@@ -133,11 +133,11 @@ func featureCard(icon: String, title: String, desc: String, color: String): ICom
 class PublicHome <: Component {
     var state: Option<CjregState> = None
     // 会话上下文（渲染期读登录态，决定导航显示「登录」还是「管理后台」）
-    var sctx: Option<SessionContextState> = None
+    var sctx: Option<SessionContext> = None
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
-        this.sctx = Some(ctx.getState<SessionContextState>())
+        this.sctx = ctx.getSessionContext()
     }
 
     func gotoPackages(ctx: ActionContext): PatchResult {
@@ -237,7 +237,7 @@ class PublicHome <: Component {
 @Page["/packages"]
 class PublicPackages <: Component {
     var state: Option<CjregState> = None
-    var sctx: Option<SessionContextState> = None
+    var sctx: Option<SessionContext> = None
     var search = Signal<String>("")
     var selectedCategories = Signal<ArrayList<String>>(ArrayList<String>())
     var currentPage = Signal<Int64>(1)
@@ -245,7 +245,7 @@ class PublicPackages <: Component {
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
-        this.sctx = Some(ctx.getState<SessionContextState>())
+        this.sctx = ctx.getSessionContext()
     }
 
     func gotoDetail(ctx: ActionContext, org: String, name: String): PatchResult {
@@ -433,7 +433,7 @@ class PublicPackages <: Component {
 @Page["/packages/[name]"]
 class PublicPackageDetail <: Component {
     var state: Option<CjregState> = None
-    var sctx: Option<SessionContextState> = None
+    var sctx: Option<SessionContext> = None
     var pkgName: String = ""
     var pkgOrg: String = ""
     var versionRows = Signal<ArrayList<PackageDoc>>(ArrayList<PackageDoc>())
@@ -442,7 +442,7 @@ class PublicPackageDetail <: Component {
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
-        this.sctx = Some(ctx.getState<SessionContextState>())
+        this.sctx = ctx.getSessionContext()
         match (ctx.route.params.get("name")) {
             case Some(n) =>
                 let (org, name) = splitPkgIdentifier(n)
@@ -738,10 +738,10 @@ func linkOut(url: String, text_: String): IComponent {
 @Page["/docs", "文档"]
 class DocsPage <: Component {
     var activeDoc = Signal<String>(docsDefaultId())
-    var sctx: Option<SessionContextState> = None
+    var sctx: Option<SessionContext> = None
 
     public func onMount(ctx: LifecycleContext): Unit {
-        this.sctx = Some(ctx.getState<SessionContextState>())
+        this.sctx = ctx.getSessionContext()
     }
 
     func navItem(sid: String, title: String, active: Bool): IComponent {

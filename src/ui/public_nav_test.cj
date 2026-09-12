@@ -1,6 +1,6 @@
 // 公开导航登录态单元测试（cjreg Q2「登录后才显示管理入口」）
 //
-// 入口由会话上下文（cjxt SessionContextState）在渲染期决定：
+// 入口由会话上下文（cjxt SessionContext 接口）在渲染期决定：
 // 未登录 → 「登录」入口（/admin/login）；已登录管理员 → 「管理后台」入口（/admin）。
 package ystyle::cjreg.ui
 
@@ -43,7 +43,7 @@ public class PublicNavEntryTest {
     }
 }
 
-func contextOf(pairs: Array<(String, String)>): SessionContextState {
+func contextOf(pairs: Array<(String, String)>): SessionContext {
     let m = HashMap<String, String>()
     for ((k, v) in pairs) {
         m[k] = v
@@ -51,6 +51,6 @@ func contextOf(pairs: Array<(String, String)>): SessionContextState {
     SessionContextState(m)
 }
 
-func navJson(sctx: Option<SessionContextState>): String {
+func navJson(sctx: Option<SessionContext>): String {
     serializeSubtree(publicNav("/", sctx), HashMap<String, ActionHandler>())
 }

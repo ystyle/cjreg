@@ -116,12 +116,19 @@ CJREG_DEMO_PORT=18080 CJREG_DEMO_RESET=1 bash scripts/demo-data.sh
 - **操作**：
   1. **组织管理**：展示 `demo` 组织（默认标记），新增一个 `tools` 组织演示创建/校验；
   2. **团队管理**：新建团队 `demo-writers`，权限选 `write`，关联组织 `demo`，成员加 `bob`；
-  3. 终端演示越权被拒（bob 无权限时）→ 授予后成功：
+  3. 终端演示越权被拒 → 加入团队后成功：
      ```bash
-     # bob 的发布 Token 在门户 /me 领取；未授权时发布返回 403
-     cd .demo/pkgs/strUtils && cjpm publish    # 403 no permission（把 token 换成 bob 的）
+     # bob 的发布 Token 在门户 /me 领取（或用 POST /api/user/me/publish-token 重置）
+     # 注意：必须发一个「新版本」（如 1.0.1）——同版本同 sha 是幂等的，不会触发权限检查
+     cp -r .demo/pkgs/strUtils /tmp/bob-pkg && cd /tmp/bob-pkg
+     sed -i 's/version = "1.0.0"/version = "1.0.1"/' cjpm.toml
+     sed -i "s/^    token = .*/    token = \"<bob 的发布 Token>\"/" cangjie-repo.toml
+     cjpm publish
+     # 预期输出（实测）：
+     #   Error: strUtils-1.0.1 to organization 'demo' publish failed with status 403: permission denied
      ```
-     （时间紧可只演示「未授权 403 → 加入团队 → 再发布成功」这条主线）
+  4. 切回管理后台 **审计日志 → 发布**：能看到 `bob / demo/strUtils / 失败 / forbidden: no permission to publish`；
+     再把 bob 加入 `demo-writers`（write）团队后重试同一命令 → `cjpm publish success`，审计多一条成功记录。
 - **解说**：
   > 「发布权限走双路径裁决：包的所有者（首个发布者）默认有写权限；
   > 其他人必须通过团队授权，团队可以关联到组织或具体包，权限分 read、write、overwrite 三级。

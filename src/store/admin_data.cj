@@ -418,7 +418,7 @@ public class AdminDataStore {
     }
 
     // ===== 日志 =====
-    public func addLog(kind: LogKind, actorId: Int64, actorName: String, action: String, status: String, now: Int64, target!: String = "", error!: String = "", ipAddr!: String = "", userAgent!: String = ""): Int64 {
+    public func addLog(kind: LogKind, actorId: Int64, actorName: String, action: String, status: String, now: Int64, target!: String = "", error!: String = "", ipAddr!: String = "", userAgent!: String = "", detail!: String = ""): Int64 {
         let d = LogDoc()
         d.id = this.nextLog
         this.nextLog++
@@ -432,6 +432,7 @@ public class AdminDataStore {
         d.action = action
         d.status = status
         d.target = target
+        d.detail = detail
         d.error = error
         d.ipAddr = ipAddr
         d.userAgent = userAgent
@@ -441,17 +442,56 @@ public class AdminDataStore {
     }
 
     public func listLogs(kind: ?String, limit: Int64): ArrayList<LogDoc> {
-        let r = ArrayList<LogDoc>()
-        let all = this.storm.all<LogDoc>()
-        var i = all.size - 1
-        while (i >= 0 && r.size < limit) {
-            let d = all[i]
-            if (kind.isNone() || d.kind == kind.getOrThrow()) {
-                r.add(d)
-            }
-            i--
+        let (rows, _) = this.queryLogs(kind, "", "", 0, 0, 0, limit)
+        rows
+    }
+
+    /// 审计日志查询（管理 API 用）：按 kind/关键字/状态/时间范围过滤 + 分页
+    /// - keyword 命中 操作/目标/操作者/错误/详情 任一字段
+    /// - status/kind 为空串/None 表示不过滤；from/to 为 0 表示不限
+    /// - 返回 (rows, 命中总数)，rows 按时间倒序（最新在前）
+    public func queryLogs(kind: ?String, keyword: String, status: String,
+                          from: Int64, to: Int64, offset: Int64, limit: Int64): (ArrayList<LogDoc>, Int64) {
+        let matched = ArrayList<LogDoc>()
+        for (d in this.storm.all<LogDoc>()) {
+            if (kind.isSome() && d.kind != kind.getOrThrow()) { continue }
+            if (!status.isEmpty() && d.status != status) { continue }
+            if (from > 0 && d.createdAt < from) { continue }
+            if (to > 0 && d.createdAt > to) { continue }
+            if (!keyword.isEmpty() && !logMatches(d, keyword)) { continue }
+            matched.add(d)
         }
-        return r
+        // 时间倒序（同一毫秒按 id 倒序），不依赖底层扫描顺序
+        sort(matched, by: logAscCmp, descending: true)
+        let total = matched.size
+        let rows = ArrayList<LogDoc>()
+        var idx = if (offset < 0) { 0 } else { offset }
+        let safeLimit = if (limit < 0) { 0 } else { limit }
+        let end = if (idx + safeLimit > total) { total } else { idx + safeLimit }
+        while (idx < end) {
+            rows.add(matched[idx])
+            idx++
+        }
+        (rows, total)
+    }
+
+    /// 删除日志：kind 为空则全清；before > 0 时只删该时间戳之前的
+    /// 返回删除条数
+    public func removeLogs(kind: ?String, before: Int64): Int64 {
+        var n: Int64 = 0
+        for (d in this.storm.all<LogDoc>()) {
+            if (kind.isSome() && d.kind != kind.getOrThrow()) { continue }
+            if (before > 0 && d.createdAt >= before) { continue }
+            this.storm.delete(d)
+            n++
+        }
+        n
+    }
+
+    /// 关键字匹配（操作/目标/操作者/错误/详情 任一字段包含即命中）
+    func logMatches(d: LogDoc, kw: String): Bool {
+        d.action.contains(kw) || d.target.contains(kw) || d.actorName.contains(kw) ||
+        d.error.contains(kw) || d.detail.contains(kw)
     }
 
     /// 清理日志（全部删除）
@@ -579,4 +619,15 @@ public class AdminDataStore {
             case None => return false
         }
     }
+}
+
+// 日志升序比较（时间 → id），配合 sort(..., descending!: true) 得到「最新在前」
+func logAscCmp(a: LogDoc, b: LogDoc): Ordering {
+    if (a.createdAt != b.createdAt) {
+        return if (a.createdAt < b.createdAt) { Ordering.LT } else { Ordering.GT }
+    }
+    if (a.id != b.id) {
+        return if (a.id < b.id) { Ordering.LT } else { Ordering.GT }
+    }
+    return Ordering.EQ
 }

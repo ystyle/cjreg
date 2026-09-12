@@ -6,6 +6,7 @@ import ystyle::cjreg.auth.*
 import ystyle::cjreg.auth.model.*
 import ystyle::cjreg.auth.util.*
 import ystyle::cjreg.config.*
+import ystyle::cjreg.store.*
 import stdx.encoding.json.stream.*
 import std.collection.*
 import std.io.*
@@ -92,11 +93,14 @@ public class AdminService {
     public var proxySvc: ?ProxyService
     public var planSvc: PublishPlanService
     public var executor: PublishExecutor
+    // 审计日志存储（None = 不记审计；与 buildServer 注入同一实例，避免 id 撞车）
+    public var adminData: ?AdminDataStore
 
     public init(auth: AuthService, upstreamSvc: UpstreamService,
                 userStore: UserStore, upstreamStore: UpstreamStore,
                 resolveSvc: ResolveService, proxySvc: ?ProxyService,
-                planSvc: PublishPlanService, executor: PublishExecutor) {
+                planSvc: PublishPlanService, executor: PublishExecutor,
+                adminData!: ?AdminDataStore = None) {
         this.auth = auth
         this.upstreamSvc = upstreamSvc
         this.userStore = userStore
@@ -105,6 +109,7 @@ public class AdminService {
         this.proxySvc = proxySvc
         this.planSvc = planSvc
         this.executor = executor
+        this.adminData = adminData
     }
 
     // 从 Authorization 头取 token
@@ -134,16 +139,22 @@ public class AdminService {
         match (req) {
             case Some(lr) =>
                 if (lr.username.isEmpty() || lr.password.isEmpty()) {
+                    writeAudit(this.adminData, LogKind.Auth, 0, lr.username, "login", "failed", lr.username, ctx,
+                        error: "username and password required")
                     writeJson(ctx, 400u16, "{\"error\":\"username and password required\"}")
                     return
                 }
                 match (this.auth.login(lr.username, lr.password)) {
                     case Some((user, token)) =>
+                        writeAudit(this.adminData, LogKind.Auth, user.id, user.username, "login", "ok", user.username, ctx,
+                            detail: "isAdmin=${user.isAdmin}")
                         writeJson(ctx, 200u16,
                             "{\"id\":${user.id},\"username\":\"${user.username}\"," +
                             "\"isAdmin\":${user.isAdmin},\"token\":\"${token.token}\"," +
                             "\"expiresAt\":${token.expiresAt}}")
                     case None =>
+                        writeAudit(this.adminData, LogKind.Auth, 0, lr.username, "login", "failed", lr.username, ctx,
+                            error: "invalid username or password")
                         writeJson(ctx, 401u16, "{\"error\":\"invalid username or password\"}")
                 }
             case None =>
@@ -164,9 +175,15 @@ public class AdminService {
     }
 
     public func logout(ctx: TangHttpContext): Unit {
+        let actor = this.currentUser(ctx)
         let token = this.extractToken(ctx)
         if (token.isSome()) {
             this.auth.logout(token.getOrThrow())
+        }
+        match (actor) {
+            case Some(u) =>
+                writeAudit(this.adminData, LogKind.Auth, u.id, u.username, "logout", "ok", u.username, ctx)
+            case None => ()
         }
         writeJson(ctx, 200u16, "{\"status\":\"ok\"}")
     }
@@ -203,11 +220,16 @@ public class AdminService {
                     writeJson(ctx, 400u16, "{\"error\":\"username and password required\"}")
                     return
                 }
+                let (actorId, actorName) = this.actorOf(ctx)
                 match (this.auth.createUser(r.username, r.password, r.isAdmin, email: r.email)) {
                     case Some(u) =>
+                        writeAudit(this.adminData, LogKind.Admin, actorId, actorName, "create_user", "ok", u.username, ctx,
+                            detail: "isAdmin=${u.isAdmin} email=${r.email}")
                         writeJson(ctx, 200u16,
                             "{\"id\":${u.id},\"username\":\"${u.username}\",\"isAdmin\":${u.isAdmin}}")
                     case None =>
+                        writeAudit(this.adminData, LogKind.Admin, actorId, actorName, "create_user", "failed", r.username, ctx,
+                            error: "user already exists")
                         writeJson(ctx, 409u16, "{\"error\":\"user already exists\"}")
                 }
             case None =>
@@ -252,13 +274,128 @@ public class AdminService {
                 return
             case Some(_) => ()
         }
+        let (actorId, actorName) = this.actorOf(ctx)
+        let action = if (target) { "grant_admin" } else { "revoke_admin" }
         if (!this.auth.setUserAdmin(uid, target)) {
+            let name = match (this.userStore.getUser(uid)) {
+                case Some(x) => x.username
+                case None => "#${uid}"
+            }
+            writeAudit(this.adminData, LogKind.Admin, actorId, actorName, action, "failed", name, ctx,
+                error: "cannot revoke the last active admin")
             writeJson(ctx, 409u16, "{\"error\":\"cannot revoke the last active admin\"}")
             return
         }
         let u = this.userStore.getUser(uid).getOrThrow()
+        writeAudit(this.adminData, LogKind.Admin, actorId, actorName, action, "ok", u.username, ctx,
+            detail: "isAdmin=${u.isAdmin}")
         writeJson(ctx, 200u16,
             "{\"id\":${u.id},\"username\":\"${u.username}\",\"isAdmin\":${u.isAdmin}}")
+    }
+
+    // 当前操作者（requireAdmin 通过后必然存在；解析失败按匿名记）
+    func actorOf(ctx: TangHttpContext): (Int64, String) {
+        match (this.currentUser(ctx)) {
+            case Some(u) => (u.id, u.username)
+            case None => (0, "")
+        }
+    }
+
+    // ===== 审计日志查询/清理 =====
+    // GET /api/admin/logs/:kind?keyword=&status=&from=&to=&offset=&limit=
+    // kind: publish|admin|auth|all（未知值按 all）；from/to 为毫秒时间戳（0 = 不限）
+    public func queryLogs(ctx: TangHttpContext): Unit {
+        if (!requireAdmin(ctx)) {
+            return
+        }
+        let kind = parseAuditKind(ctx.param("kind"))
+        let keyword = ctx.query("keyword") ?? ""
+        let status = ctx.query("status") ?? ""
+        let from = parseI64(ctx.query("from"))
+        let to = parseI64(ctx.query("to"))
+        var offset = parseI64(ctx.query("offset"))
+        if (offset < 0) {
+            offset = 0
+        }
+        var limit = parseI64(ctx.query("limit"))
+        if (limit <= 0) {
+            limit = 50
+        }
+        if (limit > 500) {
+            limit = 500
+        }
+        let (rows, total) = match (this.adminData) {
+            case Some(ad) => ad.queryLogs(kind, keyword, status, from, to, offset, limit)
+            case None => (ArrayList<LogDoc>(), 0)
+        }
+        let sb = StringBuilder()
+        sb.append("{\"total\":${total},\"offset\":${offset},\"limit\":${limit},\"items\":[")
+        for (i in 0..rows.size) {
+            if (i > 0) {
+                sb.append(",")
+            }
+            let d = rows[i]
+            sb.append("{\"id\":${d.id},\"kind\":\"${d.kind}\",\"actorId\":${d.actorId}," +
+                "\"actorName\":\"${escapeJsonStr(d.actorName)}\",\"action\":\"${escapeJsonStr(d.action)}\"," +
+                "\"status\":\"${escapeJsonStr(d.status)}\",\"target\":\"${escapeJsonStr(d.target)}\"," +
+                "\"detail\":\"${escapeJsonStr(d.detail)}\",\"error\":\"${escapeJsonStr(d.error)}\"," +
+                "\"ipAddr\":\"${escapeJsonStr(d.ipAddr)}\",\"userAgent\":\"${escapeJsonStr(d.userAgent)}\"," +
+                "\"createdAt\":${d.createdAt}}")
+        }
+        sb.append("]}")
+        writeJson(ctx, 200u16, sb.toString())
+    }
+
+    // POST /api/admin/logs/clean  body {kind?: publish|admin|auth|all, before?: 毫秒}
+    // 无 body 时清空全部；返回 {"deleted":N}
+    public func cleanLogs(ctx: TangHttpContext): Unit {
+        if (!requireAdmin(ctx)) {
+            return
+        }
+        let body = String.fromUtf8(ctx.bodyRaw())
+        var kindRaw = ""
+        var before: Int64 = 0
+        if (!body.trimAscii().isEmpty()) {
+            let bb = ByteBuffer()
+            bb.write(body.toArray())
+            let r = JsonReader(bb)
+            try {
+                r.startObject()
+                while (r.peek() != EndObject) {
+                    let n = r.readName()
+                    match (n) {
+                        case "kind" => kindRaw = r.readValue<String>()
+                        case "before" => before = r.readValue<Int64>()
+                        case _ => r.skip()
+                    }
+                }
+                r.endObject()
+            } catch (e: Exception) {
+                writeJson(ctx, 400u16, "{\"error\":\"invalid JSON body\"}")
+                return
+            }
+        }
+        let kind = parseAuditKind(kindRaw)
+        let (actorId, actorName) = this.actorOf(ctx)
+        let deleted = match (this.adminData) {
+            case Some(ad) => ad.removeLogs(kind, before)
+            case None => 0
+        }
+        writeAudit(this.adminData, LogKind.Admin, actorId, actorName, "clean_logs", "ok",
+            if (kindRaw.isEmpty()) { "all" } else { kindRaw }, ctx,
+            detail: "deleted=${deleted} before=${before}")
+        writeJson(ctx, 200u16, "{\"deleted\":${deleted}}")
+    }
+
+    // 查询参数转 Int64（缺失/非法 → 0）
+    func parseI64(v: ?String): Int64 {
+        match (v) {
+            case Some(s) => match (Int64.tryParse(s.trimAscii())) {
+                case Some(n) => n
+                case None => 0
+            }
+            case None => 0
+        }
     }
 
     // ===== 上游管理 =====

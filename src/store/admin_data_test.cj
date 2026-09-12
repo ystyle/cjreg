@@ -91,6 +91,70 @@ func testLogsStructured() {
 }
 
 @Test
+func testQueryLogsFilterPagingAndOrder() {
+    let store = makeAdminStore()
+    // 时间乱序写入：验证按时间倒序而非写入顺序
+    store.addLog(LogKind.Publish, 1, "admin", "publish demo@1.0.0", "ok", 1000, target: "test/demo@1.0.0")
+    store.addLog(LogKind.Auth, 1, "admin", "login", "ok", 1500, target: "admin", ipAddr: "10.0.0.1")
+    store.addLog(LogKind.Publish, 2, "user2", "publish lib@2.0.0", "failed", 1200,
+        target: "test/lib@2.0.0", error: "sha256 mismatch", ipAddr: "10.0.0.2", userAgent: "cjpm/1.1")
+    store.addLog(LogKind.Publish, 2, "user2", "publish lib@2.0.1", "ok", 1300, target: "test/lib@2.0.1")
+
+    // 全量：时间倒序
+    let (all, totalAll) = store.queryLogs(None, "", "", 0, 0, 0, 10)
+    @Expect(totalAll, 4)
+    @Expect(all[0].action, "login")
+    @Expect(all[1].action, "publish lib@2.0.1")
+    @Expect(all[3].action, "publish demo@1.0.0")
+
+    // kind 过滤
+    let (pub, totalPub) = store.queryLogs(Some("publish"), "", "", 0, 0, 0, 10)
+    @Expect(totalPub, 3)
+    @Expect(pub.size, 3)
+
+    // status 过滤
+    let (failed, totalFailed) = store.queryLogs(None, "", "failed", 0, 0, 0, 10)
+    @Expect(totalFailed, 1)
+    @Expect(failed[0].error, "sha256 mismatch")
+
+    // 关键字（命中目标字段）
+    let (kw, totalKw) = store.queryLogs(None, "lib@2.0.1", "", 0, 0, 0, 10)
+    @Expect(totalKw, 1)
+    @Expect(kw[0].actorName, "user2")
+
+    // 关键字（命中 error 字段）
+    let (kw2, _) = store.queryLogs(None, "mismatch", "", 0, 0, 0, 10)
+    @Expect(kw2.size, 1)
+
+    // 时间范围（含边界）
+    let (ranged, totalRanged) = store.queryLogs(None, "", "", 1200, 1300, 0, 10)
+    @Expect(totalRanged, 2)
+    @Expect(ranged[0].createdAt, 1300)
+    @Expect(ranged[1].createdAt, 1200)
+
+    // 分页：total 为命中总数而非本页条数
+    let (page2, totalPage) = store.queryLogs(None, "", "", 0, 0, 2, 2)
+    @Expect(totalPage, 4)
+    @Expect(page2.size, 2)
+    // 全序：login(1500) > lib@2.0.1(1300) > lib@2.0.0(1200) > demo@1.0.0(1000)
+    @Expect(page2[0].action, "publish lib@2.0.0")
+    @Expect(page2[1].action, "publish demo@1.0.0")
+    // 越界页返回空、总数不变
+    let (page9, _) = store.queryLogs(None, "", "", 0, 0, 9, 2)
+    @Expect(page9.size, 0)
+
+    // 清理：按 kind 删除
+    @Expect(store.removeLogs(Some("publish"), 0), 3)
+    @Expect(store.queryLogs(Some("publish"), "", "", 0, 0, 0, 10)[1], 0)
+    @Expect(store.queryLogs(None, "", "", 0, 0, 0, 10)[1], 1)
+    // 清理：按时间（before）——只剩 login(1500)，阈值 1400 不命中、1600 命中
+    @Expect(store.removeLogs(None, 1400), 0)
+    @Expect(store.queryLogs(None, "", "", 0, 0, 0, 10)[1], 1)
+    @Expect(store.removeLogs(None, 1600), 1)
+    @Expect(store.queryLogs(None, "", "", 0, 0, 0, 10)[1], 0)
+}
+
+@Test
 func testPlanLifecycleWithItems() {
     let store = makeAdminStore()
     let id = store.createPlan("plan1", 3, 60, 600, 1000)

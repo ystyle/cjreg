@@ -5,17 +5,40 @@
 
 ## [Unreleased]
 
+### Added — 审计日志（发布 / 认证 / 管理）
+
+- **发布审计**：`POST /pkg` 的每次发布都落审计（操作者、`org/name@version`、包大小、成功/失败与原因），
+  令牌无效时记为匿名 `failed`，**不记录令牌明文**
+- **IP / User-Agent**：`X-Forwarded-For` 首个 → `X-Real-IP` → TCP 对端；UA 截断 200 字节
+- **认证与管理审计**：登录成功/失败（含尝试的用户名与原因）、注销、创建用户、提升/取消管理员（含「最后一个启用管理员」失败记录）、
+  管理端页面的用户/组织/团队/成员/上游/包/计划写入（UI 侧无 HTTP 上下文，IP/UA 记为 `admin-ui`）
+- **查询与清理端点**：`GET /api/admin/logs/:kind`（关键字/结果/时间范围/分页，`total` 为命中总数）、
+  `POST /api/admin/logs/clean`（按类型或时间清理，清理动作自身入审计）
+- **管理端审计日志页**：时间/类型/操作者/操作/IP/UA/错误信息 列 + 关键字与筛选 + 分页 + 分范围清理弹窗
+- **单实例审计存储**：`AdminDataStore` 由 `main.cj` 单实例注入 HTTP handler 与 cjxt 状态，
+  修复原先两处 `new` 导致的自增 id 相互覆盖（日志/团队 id 撞车）
+- 文档：`docs/audit-log.md`（模型/动作词表/端点/边界）、文档站「审计日志」页与 API 表
+- 测试：`admin_data_test.cj` 过滤/排序/分页/清理用例、`audit_test.cj` 辅助函数用例、
+  `tests/e2e.sh` 第 5 步审计端到端（发布登记 / 失败记录 / 登录审计 / 过滤 / 分页 / 清理 / 401）
+
+### Added — 交付形态（本版）
+
+- **Docker / Compose 部署**：`Dockerfile`（archlinux 基础 + liburing/tzdata，宿主机构建二进制入镜像、非 root 运行）、
+  `docker-compose.yml`（卷持久化 + 环境变量 + 健康检查）、`scripts/docker-deploy.sh`，CI 含镜像构建与容器冒烟
+  （初始化 → 启动 → 健康 → 优雅关闭 → 重启后数据留存）
+- **VitePress 文档站**：`docs-site/`（指南/API/部署/关于，local search，`base=/cjreg/`），
+  `docs-deploy.yml` 自动发布到 GitHub Pages + 华为云 CDN 刷新（`https://ystyle.top/cjreg/`）
+- **CI / Release**：`ci.yml`（构建 + 单测 + 覆盖率 + 双仓 e2e + 文档站 + 镜像）、`release.yml`（linux-amd64 二进制 + ghcr 镜像）
+
 ### 计划中
 
 - **发布链路流式化**（大包稳定 + 内存 O(1)）：当前 `POST /pkg` 整包读入内存（峰值 ≈ 包体 2–3 倍），
   受仓颉 GC 堆默认 256 MB 限制，40 MiB 以上的包在默认配置下可能 OOM —— 详见 `docs/finals-plan.md` 迭代 1
-- 发布日志/管理日志的查询端点与 IP/UA 记录（`GET /api/admin/logs/*`）
 - 包三级删除闭环（恢复/硬删入口与索引、缓存、发布计划联动）
 - 公开只读 API（`/api/stats`、`/api/packages`、`/api/packages/:name`、`/api/organizations`）
 - 组织 CRUD REST 端点（当前仅管理端界面）
 - 发布计划 item 六状态（`publishing`/`waiting_index`/`skipped`）与 SSE 进度流
-- 镜像预热/周期同步（`serve --sync-interval`）与 Docker 化部署（Dockerfile / docker-compose）
-- VitePress 文档站、CI（构建 + 单测 + e2e）、性能基准报告
+- 镜像预热/周期同步（`serve --sync-interval`）与性能基准报告
 - 团队所有者（owner 自助管理成员）——设计见 `docs/user-portal-design.md` §7.4
 
 ## [0.1.0] - 2026-09-12

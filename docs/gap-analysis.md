@@ -86,9 +86,9 @@
 
 | # | 差距项 | 来源 | 状态 | 建议 |
 |---|---|---|---|---|
-| E1 | 发布日志 PublishLog（org/name/version/status/error/IP/UA）+ `GET /api/admin/logs/publish` | models；admin.go | 部分覆盖（有 log 集合名） | 补字段/写入时机/查询端点 |
-| E2 | 管理操作日志 AdminLog（action/target/details/IP/UA）+ `GET /api/admin/logs/admin` | admin_log.go | 缺失 | 补（课题强调安全） |
-| E3 | 日志清理 `POST /api/admin/logs/clean` | admin.go | 缺失 | 可选 |
+| E1 | 发布日志 PublishLog（org/name/version/status/error/IP/UA）+ `GET /api/admin/logs/publish` | models；admin.go | ✅ 已实现（`log` 集合 + IP/UA + 查询端点 + 分页/过滤，见 `docs/audit-log.md`） | — |
+| E2 | 管理操作日志 AdminLog（action/target/details/IP/UA）+ `GET /api/admin/logs/admin` | admin_log.go | ✅ 已实现（HTTP 管理 API 与 cjxt 管理页写入；认证日志单独一类 `auth`） | — |
+| E3 | 日志清理 `POST /api/admin/logs/clean` | admin.go | ✅ 已实现（按 kind / before 清理，清理动作自身入审计） | — |
 
 ## F. 组织管理
 

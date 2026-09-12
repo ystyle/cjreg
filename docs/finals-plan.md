@@ -155,7 +155,7 @@ git push origin v0.1.0-submission     # 决赛写差异说明时以此 tag 为�
 
 | 项 | 关联评分 | 状态 |
 |---|---|---|
-| 审计日志：发布日志写入（IP/UA/详情）+ 管理日志查询端点 | 安全 / 完成度 | 进行中 |
+| 审计日志：发布日志写入（IP/UA/详情）+ 管理日志查询/清理端点 + 管理端日志页 | 安全 / 完成度 | ✅ 已完成（`docs/audit-log.md`，单测 + e2e 第 5 步） |
 | 公开只读 API：`/api/stats`、`/api/packages`、`/api/packages/:name`、`/api/packages/:name/:version`、`/api/organizations` | 完成度 / 实用性 | 待做 |
 | 组织 CRUD REST、上游连通性测试端点 `POST /api/admin/upstreams/:id/test` | 完成度 | 待做 |
 | 包三级删除闭环（恢复 / 硬删入口 + 审计） | 完成度 | 待做 |

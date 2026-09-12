@@ -125,4 +125,95 @@ print('  B 底层包索引 ✓')
 "
 
 echo ""
+echo "=== 5. 审计日志（发布登记 + IP/UA + 查询/清理）==="
+# 5.1 A 仓 6 次发布均登记成功日志（操作者/目标含版本/IP/UA）
+curl -s "http://localhost:$PORTA/api/admin/logs/publish?limit=100" -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['total'] >= 6, d
+ok = [x for x in d['items'] if x['status'] == 'ok']
+assert len(ok) >= 6, [(x['target'], x['status']) for x in d['items']]
+for x in ok[:6]:
+    assert x['kind'] == 'publish', x
+    assert x['actorName'] == 'admin', x
+    assert '@1.0.0' in x['target'], x
+    assert x['ipAddr'], x
+    assert 'cjpm' in x['userAgent'] or x['userAgent'], x
+print('  发布审计 %d 条（操作者/版本/IP/UA 齐全）✓' % d['total'])
+"
+# 5.2 非法令牌发布 → 记 failed（匿名操作者 + 错误原因 + 自定义 UA）
+curl -s -o /dev/null -X POST "http://localhost:$PORTA/pkg/hackPkg?organization=test" \
+  -H 'Authorization: bad-token' -H 'Content-Type: application/octet-stream' \
+  -H 'User-Agent: audit-e2e/1.0' --data-binary 'not-a-cangjie-package'
+curl -s "http://localhost:$PORTA/api/admin/logs/publish?status=failed&keyword=hackPkg" -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['total'] == 1, d
+x = d['items'][0]
+assert x['status'] == 'failed' and x['actorName'] == '' and x['actorId'] == 0, x
+assert x['error'], x
+assert x['userAgent'] == 'audit-e2e/1.0', x
+assert x['ipAddr'], x
+print('  失败发布审计（匿名 + 原因 + UA）✓')
+"
+# 5.3 登录审计：auth 类记录 + 自定义 UA 命中
+curl -s -o /dev/null -X POST http://localhost:$PORTA/api/admin/login \
+  -H 'Content-Type: application/json' -H 'User-Agent: audit-login/9' \
+  -d "{\"username\":\"$ADMIN_USER\",\"password\":\"wrong-pass\"}"
+curl -s -o /dev/null -X POST http://localhost:$PORTA/api/admin/login \
+  -H 'Content-Type: application/json' -H 'User-Agent: audit-login/9' \
+  -d "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}"
+curl -s "http://localhost:$PORTA/api/admin/logs/auth?limit=50" -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+fail = [x for x in d['items'] if x['status'] == 'failed' and x['userAgent'] == 'audit-login/9']
+ok = [x for x in d['items'] if x['status'] == 'ok' and x['action'] == 'login' and x['userAgent'] == 'audit-login/9']
+assert fail, d
+assert all(x['error'] for x in fail), fail   # 失败必须带原因
+assert ok and all(x['actorName'] == 'admin' for x in ok), d
+assert all(x['ipAddr'] for x in fail + ok), d
+print('  登录审计：%d 次成功 / %d 次失败（含原因 + IP）✓' % (len(ok), len(fail)))
+"
+# 关键字命中操作者字段
+curl -s "http://localhost:$PORTA/api/admin/logs/auth?keyword=$ADMIN_USER&limit=5" -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['total'] >= 1 and all('admin' in (x['actorName'] + x['target'] + x['action'] + x['error'] + x['detail']) for x in d['items']), d
+print('  关键字过滤命中 %d 条 ✓' % d['total'])
+"
+# 5.4 分页 + 清理（清理动作本身也入审计）
+P1=$(curl -s "http://localhost:$PORTA/api/admin/logs/all?limit=2&offset=0" -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['total'],len(d['items']))")
+python3 -c "
+import sys
+total, n = '$P1'.split()
+assert int(total) >= 8 and int(n) == 2, ('$P1',)
+print('  分页：total=%s 本页 %s 条 ✓' % (total, n))
+"
+DEL=$(curl -s -X POST "http://localhost:$PORTA/api/admin/logs/clean" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"kind":"publish"}')
+echo "$DEL" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['deleted'] >= 7, d
+print('  清理 publish 日志 %d 条 ✓' % d['deleted'])
+"
+curl -s "http://localhost:$PORTA/api/admin/logs/publish" -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d['total'] == 0 and d['items'] == [], d
+print('  清理后 publish 日志为空 ✓')
+"
+curl -s "http://localhost:$PORTA/api/admin/logs/admin" -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert any(x['action'] == 'clean_logs' for x in d['items']), d
+print('  清理动作自身入审计 ✓')
+"
+# 5.5 未鉴权访问日志端点 → 401
+CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$PORTA/api/admin/logs/all")
+[ "$CODE" = "401" ] || { echo "未鉴权应 401，实际 $CODE"; exit 1; }
+echo "  未鉴权查询日志被拒（401）✓"
+
+echo ""
 echo "=== 双仓 e2e 全部通过 ✓ ==="

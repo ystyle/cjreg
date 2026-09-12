@@ -239,8 +239,9 @@ $ bash tests/e2e.sh
 - 演示/冒烟数据目录位于 `.smoke/`（已 gitignore），不进仓库。
 - 发布计划 item 状态目前为 `pending/running/completed/failed` 四态（设计中的 `publishing`/`waiting_index`/`skipped` 与 SSE 进度流未实现，
   现以 `App.pushUpdate` 推送进度）；`analyze` 响应暂未输出 `dependency_range/local_versions/remote_versions/recommended_version`。
-- 公开只读 API（`/api/stats`、`/api/packages*`、`/api/organizations`）与包三级删除的「恢复/硬删」入口、审计日志查询端点尚未实现
-  （清单与优先级见 `docs/gap-analysis.md`）。
+- 公开只读 API（`/api/stats`、`/api/packages*`、`/api/organizations`）与包三级删除的「恢复/硬删」入口尚未实现
+  （清单与优先级见 `docs/gap-analysis.md`）；审计日志（发布/认证/管理三类 + IP/UA + 查询/清理端点 + 管理端页面）
+  已实现并纳入 `tests/e2e.sh` 第 5 步与单元测试，详见 `docs/audit-log.md`。
 - 性能数据为单机冒烟测量，非正式基准。
 
 ## 6. 结论
@@ -249,5 +250,5 @@ $ bash tests/e2e.sh
   均已实现并通过单元测试 + 双仓 e2e + 权限矩阵 + 浏览器端到端验证；
 - 本次验证额外定位并修复了 4 个**影响核心可用性**的缺陷（上游/目标仓认证头缺失、e2e 无法复现、目标仓 token 硬编码、请求体 2 MB 上限），
   其中「推送到需认证的目标仓」与「大包发布」直接决定私有仓/官方仓转发链路是否可用；
-- 优雅关闭（SIGINT/SIGTERM）、bstorm 1.4.8、请求体上限与堆内存说明已补齐；遗留项集中在「超大包流式处理」「公开只读 API」「审计日志查询」「三级删除闭环」「发布计划六态 + SSE」五处，
+- 优雅关闭（SIGINT/SIGTERM）、bstorm 1.4.8、请求体上限与堆内存说明已补齐；遗留项集中在「超大包流式处理」「公开只读 API」「三级删除闭环」「组织 CRUD REST」「发布计划六态 + SSE」五处，
   不影响当前协议互通与权限主链路的正确性。

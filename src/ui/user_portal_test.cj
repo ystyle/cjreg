@@ -142,7 +142,7 @@ public class UserPortalRenderTest {
         @Expect(json.contains("当前登录：bob"), true)
     }
 
-    // 登录页：用户门户入口（提示普通用户与管理员均可登录）
+    // 登录页：用户门户入口（提示普通用户与管理员均可登录）+ 登录中遮罩（Loading 组件）
     @TestCase
     public func testUserLoginPageRenders(): Unit {
         let state = makePortalState("open")
@@ -153,5 +153,57 @@ public class UserPortalRenderTest {
         @Expect(json.contains("用户名"), true)
         @Expect(json.contains("密码"), true)
         @Expect(json.contains("管理员登录入口"), true)
+        // cjxt Loading 组件：遮罩常驻渲染（隐藏时 display:none），busy 时显示
+        @Expect(json.contains("el-loading-mask"), true)
+        @Expect(json.contains("登录中..."), true)
+        @Expect(json.contains("display:none"), true)
     }
+
+    // 登录收尾（异步路径）：成功写会话上下文 + 跳 /me；失败复位 busy 并提示
+    @TestCase
+    public func testLoginFinishSetsContextAndRedirects(): Unit {
+        let state = makePortalState("open")
+        let user = state.auth.createUser("alice", "AlicePass1", false).getOrThrow()
+        let page = UserLoginPage()
+        page.onMount(mountCtx(state, HashMap<String, String>()))
+
+        let (actx, sessionCtx, nav) = actionCtxOf(state)
+        page.finishLogin(actx, "alice", "AlicePass1")
+        @Expect(sessionCtx.get("uid").getOrThrow(), user.id.toString())
+        @Expect(sessionCtx.get("username").getOrThrow(), "alice")
+        @Expect(sessionCtx.get("isAdmin").getOrThrow(), "0")
+        @Expect(sessionCtx.get("token").getOrThrow().startsWith("sess-"), true)
+        @Expect(nav.size, 1)
+        @Expect(nav[0], "/me")
+
+        // 密码错误：不写上下文、不出错跳转
+        let (actx2, sessionCtx2, nav2) = actionCtxOf(state)
+        page.finishLogin(actx2, "alice", "WrongPass")
+        @Expect(sessionCtx2.contains("uid"), false)
+        @Expect(nav2.size, 0)
+    }
+
+    // 管理员从门户登录：isAdmin=1（登录后可进管理后台）
+    @TestCase
+    public func testPortalLoginAsAdminMarksAdmin(): Unit {
+        let state = makePortalState("open")
+        let admin = state.auth.createUser("admin2", "AdminPass1", true).getOrThrow()
+        let page = UserLoginPage()
+        page.onMount(mountCtx(state, HashMap<String, String>()))
+        let (actx, sessionCtx, nav) = actionCtxOf(state)
+        page.finishLogin(actx, "admin2", "AdminPass1")
+        @Expect(sessionCtx.get("isAdmin").getOrThrow(), "1")
+        @Expect(nav[0], "/me")
+    }
+}
+
+// 构造一个可观测的 ActionContext：session 上下文可事后断言、导航被记录
+func actionCtxOf(state: CjregState): (ActionContext, HashMap<String, String>, ArrayList<String>) {
+    let sessionCtx = HashMap<String, String>()
+    let nav = ArrayList<String>()
+    let router = Router("sid-test", { p => nav.add(p) })
+    let states = HashMap<String, AppState>()
+    states.add(TypeInfo.of<CjregState>().qualifiedName, state)
+    let actx = ActionContext("sid-test", sessionCtx, HashMap<String, String>(), router, sessionStates: states)
+    (actx, sessionCtx, nav)
 }

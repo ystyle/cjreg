@@ -79,6 +79,8 @@ class UserLoginPage <: Component {
                 div([
                     Button([text("管理员登录入口")]).size(ButtonSize.Small).onClick(toAdmin),
                 ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))]))),
+                // 登录中遮罩（cjxt Loading 组件；卡片 position:relative 见 admin.css）
+                Loading().bind(this.busy).label("登录中..."),
             ], attrs: Some(HashMap<String, String>([("class", cls("login-card"))]))),
         ], attrs: Some(HashMap<String, String>([("class", cls("login-container"))])))
     }
@@ -95,23 +97,35 @@ class UserLoginPage <: Component {
         PatchResult.ReRender
     }
 
+    // 登录：先置 busy 并立即返回（前端先收到 loading 补丁），密码校验放后台线程，
+    // 完成后经 App.pushUpdate 回到会话串行上下文收尾（共用 runLoginAsync，见 login.cj）
     func doLogin(ctx: ActionContext): PatchResult {
         if (this.busy.get()) {
             return PatchResult.ReRender
         }
-        this.busy.set(true)
         let s = match (this.state) {
             case Some(x) => x
-            case None =>
-                this.busy.set(false)
-                return PatchResult.ReRender
+            case None => return PatchResult.ReRender
         }
         if (!this.loginForm.validate()) {
-            this.busy.set(false)
             return PatchResult.ReRender
         }
         let u = this.username.get()
         let p = this.password.get()
+        this.errorMsg.set("")
+        this.busy.set(true)
+        if (runLoginAsync(s, ctx.getSessionId(), u, p, { actx, name, pass => this.finishLogin(actx, name, pass) })) {
+            return PatchResult.ReRender
+        }
+        this.finishLogin(ctx, u, p)
+    }
+
+    // 登录结果收尾（在 pushUpdate 的串行上下文里执行）
+    func finishLogin(ctx: ActionContext, u: String, p: String): PatchResult {
+        let s = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
         match (s.auth.login(u, p)) {
             case Some((user, token)) =>
                 // 所有启用用户都可登录；isAdmin 从用户对象取（不再硬编码），

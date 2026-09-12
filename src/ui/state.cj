@@ -17,8 +17,8 @@ public class CjregState <: AppState {
     public var auth: AuthService
     // cjxt App 实例（异步执行时服务端推送进度用）
     public var app: Option<App>
-    // 发布权限模式（open/team）：门户用来提示「是否需要团队授权」
-    public var permissionMode: String
+    // 服务端运行配置（cjreg.toml）：门户提示权限模式、门户/文档里的示例地址都取自它
+    public var config: CjregConfig
     // 登录态
     public var currentUser: Signal<Option<User>> = Signal<Option<User>>(Option<User>.None)
     public var sessionToken: Signal<String> = Signal<String>("")
@@ -29,14 +29,14 @@ public class CjregState <: AppState {
 
     public init(pkgStore: PackageStore, userStore: BstormUserStore,
                 upStore: BstormUpstreamStore, adminData: AdminDataStore, auth: AuthService,
-                app!: Option<App> = None, permissionMode!: String = "open") {
+                app!: Option<App> = None, config!: CjregConfig = CjregConfig()) {
         this.pkgStore = pkgStore
         this.userStore = userStore
         this.upStore = upStore
         this.adminData = adminData
         this.auth = auth
         this.app = app
-        this.permissionMode = permissionMode
+        this.config = config
     }
 
     /// 操作级用户校验：已登录且用户仍存在、启用（不要求管理员）——用户门户动作用

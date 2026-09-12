@@ -18,7 +18,8 @@ public func buildServer(
     store: PackageStore,
     admin: ?AdminService,
     upstreamSvc: ?UpstreamService,
-    blobStore: BlobStore
+    blobStore: BlobStore,
+    config!: ?CjregConfig = None
 ): Tang {
     let app = Tang().setHost("0.0.0.0")
     // 发布认证：管理服务存在时使用其 AuthService（规格 Authorization: publishToken）
@@ -26,13 +27,13 @@ public func buildServer(
         case Some(adm) => Some(adm.auth)
         case None => None
     }
-    // 权限模式：CJREG_PERMISSION_MODE=team 启用团队严格校验；默认 open（内部先用着，有效 token 即发布）
-    let permMode = permissionModeFromEnv()
-    // 读鉴权开关（私有仓）：CJREG_REQUIRE_AUTH=1/true → 下载/索引需有效 token + 团队/个人 read 权限
-    let requireReadAuth = match (getVariable("CJREG_REQUIRE_AUTH")) {
-        case Some(v) => v == "1" || v == "true"
-        case None => false
+    // 运行配置（配置文件；未提供时用默认值：open + 下载/索引公开）
+    let cfg = match (config) {
+        case Some(c) => c
+        case None => CjregConfig()
     }
+    let permMode = cfg.permissionMode
+    let requireReadAuth = cfg.requireAuth
     // 权限数据（团队/组织/包关联）：发布裁决与读裁决共用同一实例
     let permData = AdminDataStore(store.storm)
     let publishSvc = PublishService(store, blobStore, auth: publishAuth, adminData: Some(permData), permissionMode: permMode)
@@ -211,15 +212,6 @@ func guardReadAccess(ctx: TangHttpContext, authSvc: AuthService, adminData: Admi
         case None =>
             ctx.status(401u16).writeStringWithCode(401u16, "{\"error\":\"invalid token\"}")
             return false
-    }
-}
-
-// 发布权限模式（环境变量 CJREG_PERMISSION_MODE）：team = 团队严格校验；默认 open
-// 服务端（buildServer）与 UI 状态（main.cj 注入 CjregState）共用，避免两处口径漂移
-public func permissionModeFromEnv(): String {
-    match (getVariable("CJREG_PERMISSION_MODE")) {
-        case Some(v) => if (v == "team") { "team" } else { "open" }
-        case None => "open"
     }
 }
 

@@ -2,6 +2,7 @@
 package ystyle::cjreg.ui
 
 import std.collection.*
+import ystyle::cjreg.config.*
 
 // 章节列表：(id, title)
 public func docsSections(): ArrayList<(String, String)> {
@@ -26,19 +27,24 @@ public func docsIdValid(id: String): Bool {
 }
 
 // 各章节 markdown 内容
-public func docContent(id: String): String {
+// cfg = 服务端配置（cjreg.toml）：文档里的服务地址、registry 示例与配置片段一律显示实际配置值，
+// 避免「文档说 A、服务在 B」。
+public func docContent(id: String, cfg: CjregConfig): String {
     match (id) {
-        case "quickstart" => return docQuickstart()
-        case "client-config" => return docClientConfig()
+        case "quickstart" => return docQuickstart(cfg)
+        case "client-config" => return docClientConfig(cfg.publicUrl)
         case "publish" => return docPublish()
         case "multi-repo" => return docMultiRepo()
         case "publish-plan" => return docPublishPlan()
-        case "permission" => return docPermission()
-        case _ => return docQuickstart()
+        case "permission" => return docPermission(cfg.publicUrl)
+        case _ => return docQuickstart(cfg)
     }
 }
 
-func docQuickstart(): String {
+func docQuickstart(cfg: CjregConfig): String {
+    let publicUrl = cfg.publicUrl
+    let port = cfg.port
+    let modeText = if (cfg.permissionMode == "team") { "team" } else { "open" }
     "# 快速开始\n\n"
     + "**cjreg** 是仓颉私有中心仓与多仓工具，提供包发布 / 下载 / 索引 / 依赖解析 / 上游代理与一键部署能力。\n\n"
     + "## 1. 初始化数据目录\n\n"
@@ -48,16 +54,28 @@ func docQuickstart(): String {
     + "```\n\n"
     + "## 2. 启动服务\n\n"
     + "```shell\n"
-    + "cjreg serve -d ./data -p 8060\n"
+    + "cjreg serve -d ./data -p ${port}\n"
     + "```\n\n"
-    + "服务启动后，浏览器访问管理后台：\n\n"
-    + "- 管理后台：`http://localhost:8060/admin`\n"
-    + "- 公开首页：`http://localhost:8060/`\n\n"
-    + "## 3. 体验\n\n"
-    + "管理后台可用 `admin` / 初始化密码登录，查看仪表盘、包管理、上游管理、发布计划等。"
+    + "服务启动后，浏览器访问（地址取自配置文件 `server.public_url`）：\n\n"
+    + "- 用户门户：`${publicUrl}/`（登录后 `/me` 领取发布 Token）\n"
+    + "- 管理后台：`${publicUrl}/admin`\n\n"
+    + "## 3. 服务端配置（可选）\n\n"
+    + "数据目录下的 `cjreg.toml`（`cjreg init` 已生成模板；`-c/--config` 可指定其它路径）：\n\n"
+    + "```toml\n"
+    + "[server]\n"
+    + "public_url = \"${publicUrl}\"      # 对外地址：本文档里的地址与 registry 示例都用它\n"
+    + "port = ${port}\n"
+    + "permission_mode = \"${modeText}\"          # open = 有效 token 即可发布；team = 双路径裁决\n"
+    + "require_auth = ${cfg.requireAuth}                # 下载/索引是否需 token + read 权限\n"
+    + "```\n\n"
+    + "- 优先级：命令行（`-p`）> 配置文件 > 默认值；配置文件不存在时全走默认值。\n"
+    + "- 没有环境变量配置项（唯一的 `CJREG_SEED_DEMO=1` 是开发调试开关）。\n\n"
+    + "## 4. 体验\n\n"
+    + "管理后台可用 `admin` / 初始化密码登录，查看仪表盘、包管理、上游管理、发布计划等；"
+    + "普通用户从 `${publicUrl}/` 登录后进入「我的」门户领取发布 Token。"
 }
 
-func docClientConfig(): String {
+func docClientConfig(publicUrl: String): String {
     "# 客户端配置\n\n"
     + "## cjpm.toml 依赖\n\n"
     + "在项目 `cjpm.toml` 的 `[dependencies]` 中配置来自本仓的依赖（registry 指向本服务）：\n\n"
@@ -73,7 +91,7 @@ func docClientConfig(): String {
     + "发布时需要配置 registry 地址与发布 Token（登录后到「我的」门户页获取 / 重置）：\n\n"
     + "```toml\n"
     + "[repository.home]\n"
-    + "registry = \"http://localhost:8060\"\n"
+    + "registry = \"${publicUrl}\"\n"
     + "token = \"<发布 Token>\"\n"
     + "```"
 }
@@ -114,7 +132,7 @@ func docPublishPlan(): String {
     + "4. 详情页可查看每个包的执行状态与错误信息，支持暂停 / 恢复。"
 }
 
-func docPermission(): String {
+func docPermission(publicUrl: String): String {
     "# 访问控制\n\n"
     + "cjreg 提供两种发布权限模式，通过环境变量 `CJREG_PERMISSION_MODE` 切换；"
     + "下载/索引的读鉴权由 `CJREG_REQUIRE_AUTH=1` 单独开启（默认公开）。\n\n"
@@ -133,6 +151,9 @@ func docPermission(): String {
     + "- **新版本**：需 write（owner 天然具备）。\n"
     + "- **覆盖已存在版本**（同版本、内容不同）：需 overwrite；owner 自身没有覆盖权，覆盖也不转移 owner。\n"
     + "- 团队成员退出团队后即失去该包的权限（owner 除外）。\n\n"
+    + "## 发布 Token\n\n"
+    + "- 登录用户门户（`${publicUrl}/me`）即可查看 / 重置自己的发布 Token。\n"
+    + "- 重置后旧 Token 立即失效，正在使用它的 CI 需要同步更新。\n\n"
     + "## 权限矩阵\n\n"
     + "| 场景 | open | team |\n"
     + "| --- | --- | --- |\n"

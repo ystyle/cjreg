@@ -90,12 +90,20 @@ GET   /index/:mo/:du/:name          索引 NDJSON（本地无则回源上游）
 GET   /api/health                   健康检查
 ```
 
-### 权限开关（环境变量）
+### 服务端配置（`cjreg.toml`）
 
-| 变量 | 默认 | 说明 |
-|---|---|---|
-| `CJREG_PERMISSION_MODE` | `open` | `open`：有效发布 token 即可发布；`team`：启用双路径裁决（见下） |
-| `CJREG_REQUIRE_AUTH` | 关 | `1`/`true`：下载/索引也需有效 token + `read` 权限（私有仓） |
+配置只有一处来源：数据目录下的 **`cjreg.toml`**（`cjreg init` 会自动生成一份带注释的模板，完整示例见 `cjreg.toml.example`），也可用 `-c/--config <file>` 指定其它路径；文件不存在时全部走默认值。
+
+```toml
+[server]
+public_url = "https://pkg.example.com"   # 对外地址：用户门户与帮助文档里的示例用它
+port = 8060                              # 监听端口（命令行 -p 优先）
+permission_mode = "open"                 # open = 有效 token 即可发布；team = 双路径裁决
+require_auth = false                     # 下载/索引是否需有效 token + read 权限
+```
+
+- 优先级：**命令行 > 配置文件 > 默认值**（目前只有 `-p` 会覆盖 `port`）
+- 没有环境变量配置项；唯一保留的环境变量是 `CJREG_SEED_DEMO=1`（开发调试：往空库注入演示包）
 
 **team 模式双路径裁决**（`docs/design.md` §5.4.3）：
 

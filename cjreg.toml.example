@@ -1,0 +1,23 @@
+# cjreg 服务端配置示例
+#
+# 用法：复制到数据目录（默认 ./data/cjreg.toml），或用 `cjreg serve -c <path>` 指定。
+# `cjreg init -d ./data` 会自动在数据目录生成一份带注释的同款模板。
+#
+# 单一配置来源：配置只来自本文件（没有环境变量配置项）。
+# 例外：CJREG_SEED_DEMO=1 是开发调试开关（往空库注入演示包），不属于部署配置。
+
+[server]
+# 对外访问地址（含协议与端口）——用户门户与帮助文档里的 registry 示例用它
+# 生产部署填真实域名，例如 https://pkg.example.com
+public_url = "http://localhost:8060"
+
+# 监听端口（命令行 -p/--port 优先）
+port = 8060
+
+# 发布权限模式
+#   open = 有效发布 token 即可发布（默认，适合内部先用）
+#   team = 双路径裁决：包名所有者 / 团队成员 + read|write|overwrite
+permission_mode = "open"
+
+# 下载 / 索引是否需要有效 token + read 权限（私有仓建议 true）
+require_auth = false

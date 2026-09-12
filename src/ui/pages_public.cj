@@ -747,9 +747,12 @@ func linkOut(url: String, text_: String): IComponent {
 class DocsPage <: Component {
     var activeDoc = Signal<String>(docsDefaultId())
     var sctx: Option<SessionContext> = None
+    // 服务配置（对外地址/端口）：文档里的地址与 registry 示例显示配置值
+    var state: Option<CjregState> = None
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.sctx = ctx.getSessionContext()
+        this.state = Some(ctx.getState<CjregState>())
     }
 
     func navItem(sid: String, title: String, active: Bool): IComponent {
@@ -767,7 +770,11 @@ class DocsPage <: Component {
         for ((sid, title) in sections) {
             navItems.add(this.navItem(sid, title, sid == active))
         }
-        let content = docContent(if (docsIdValid(active)) { active } else { docsDefaultId() })
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return div()
+        }
+        let content = docContent(if (docsIdValid(active)) { active } else { docsDefaultId() }, st.config)
         div([
             publicNav("/docs", this.sctx),
             div([

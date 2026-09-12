@@ -6,6 +6,7 @@ import cjxt.macros.*
 import cjxt.components.*
 import ystyle::cjreg.store.*
 import ystyle::cjreg.config.*
+import ystyle::cjreg.server.*
 import std.collection.*
 import std.convert.*
 import std.time.*
@@ -476,10 +477,11 @@ class PackagesPage <: Component {
     var verDialogVisible = Signal<Bool>(false)
     var verRows = Signal<ArrayList<PackageDoc>>(ArrayList<PackageDoc>())
     var verTitle = Signal<String>("")
-    // 删除确认
+    // 删除确认（mode: soft = 软删可恢复；hard = 硬删不可恢复）
     var confirmVisible = Signal<Bool>(false)
     var pendingDeleteId: Int64 = 0
     var pendingDeleteName: String = ""
+    var pendingMode = Signal<String>("soft")
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
@@ -545,11 +547,54 @@ class PackagesPage <: Component {
         PatchResult.ReRender
     }
 
-    // ===== 删除 =====
+    // ===== 三级删除：软删 / 恢复 / 硬删 =====
     func askDelete(ctx: ActionContext, id: Int64, name: String, version: String): PatchResult {
         this.pendingDeleteId = id
         this.pendingDeleteName = "${name}@${version}"
+        this.pendingMode.set("soft")
         this.confirmVisible.set(true)
+        PatchResult.ReRender
+    }
+
+    func askHardDelete(ctx: ActionContext, id: Int64, name: String, version: String): PatchResult {
+        this.pendingDeleteId = id
+        this.pendingDeleteName = "${name}@${version}"
+        this.pendingMode.set("hard")
+        this.confirmVisible.set(true)
+        PatchResult.ReRender
+    }
+
+    // 恢复（校验制品仍在）：无需二次确认，直接执行并提示
+    func doRestore(ctx: ActionContext, id: Int64, name: String, version: String): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
+        }
+        let doc = match (st.pkgStore.getById(id)) {
+            case Some(d) => d
+            case None =>
+                this.msg.set("版本不存在")
+                return PatchResult.ReRender
+        }
+        let blobs: BlobStore = match (st.blobStore) {
+            case Some(b) => b
+            case None => MemoryBlobStore()
+        }
+        let r = restoreVersion(st.pkgStore, blobs, doc)
+        let target = "${name}@${version}"
+        if (r.outcome == LifecycleOutcome.Ok) {
+            this.msg.set("已恢复 ${target}")
+            uiAudit(st, ctx, "restore_package", target, detail: "artifactPresent=${r.artifactPresent}")
+        } else {
+            this.msg.set("恢复失败：${r.message}")
+            uiAudit(st, ctx, "restore_package", target, status: "failed", error: r.message)
+        }
+        this.refreshVersions(st)
+        refresh()
         PatchResult.ReRender
     }
 
@@ -567,17 +612,66 @@ class PackagesPage <: Component {
             this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
-        match (st.pkgStore.getById(this.pendingDeleteId)) {
-            case Some(doc) =>
-                st.pkgStore.softDelete(doc, nowMs())
-                this.msg.set("已删除 ${this.pendingDeleteName}")
-                st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "delete package ${this.pendingDeleteName}", "ok", nowMs())
-            case None => ()
+        let doc = match (st.pkgStore.getById(this.pendingDeleteId)) {
+            case Some(d) => d
+            case None =>
+                this.confirmVisible.set(false)
+                this.pendingDeleteId = 0
+                this.msg.set("版本不存在")
+                return PatchResult.ReRender
+        }
+        let now = nowMs()
+        let hard = this.pendingMode.get() == "hard"
+        var r: LifecycleResult
+        var action = "delete_package"
+        if (hard) {
+            match (st.blobStore) {
+                case Some(blobs) =>
+                    action = "hard_delete_package"
+                    r = hardDeleteVersion(st.pkgStore, blobs, Some(st.adminData), doc, now)
+                case None =>
+                    // 未注入制品库时拒绝硬删，避免删了记录却留下孤儿制品
+                    this.confirmVisible.set(false)
+                    this.pendingDeleteId = 0
+                    this.msg.set("硬删除不可用：该进程未注入制品库")
+                    return PatchResult.ReRender
+            }
+        } else {
+            r = softDeleteVersion(st.pkgStore, Some(st.adminData), doc, now)
+        }
+        let target = this.pendingDeleteName
+        let detail = "skippedPlanItems=${r.skippedPlanItems} blobRemoved=${r.blobRemoved}"
+        if (r.outcome == LifecycleOutcome.Ok || r.outcome == LifecycleOutcome.AlreadyDeleted) {
+            this.msg.set("${if (hard) { "已硬删除" } else { "已软删除（可恢复）" }} ${target}")
+            uiAudit(st, ctx, action, target, detail: detail)
+        } else {
+            this.msg.set("删除失败：${r.message}")
+            uiAudit(st, ctx, action, target, status: "failed", error: r.message, detail: detail)
         }
         this.confirmVisible.set(false)
         this.pendingDeleteId = 0
+        this.refreshVersions(st)
         refresh()
         PatchResult.ReRender
+    }
+
+    // 刷新版本对话框数据（软删/恢复/硬删后保持对话框同步）
+    func refreshVersions(st: CjregState): Unit {
+        if (!this.verDialogVisible.get()) {
+            return
+        }
+        let cur = this.verRows.get()
+        if (cur.size == 0) {
+            return
+        }
+        let org = cur[0].organization
+        let name = cur[0].name
+        let data = ArrayList<PackageDoc>()
+        for (d in st.pkgStore.listVersions(org, name)) {
+            data.add(d)
+        }
+        this.verRows.set(data)
+        this.verTitle.set("${name} 版本列表（${data.size}）")
     }
 
     // ===== 渲染 =====
@@ -600,17 +694,28 @@ class PackagesPage <: Component {
                     Tag([text("正常")]).kind(ComponentKind.Success)
                 }
             }))
-            .add(TableColumn<PackageDoc>().label("操作").minWidth(180).render({ d, i =>
+            .add(TableColumn<PackageDoc>().label("操作").minWidth(240).render({ d, i =>
                 let org = d.organization
                 let name = d.name
                 let version = d.version
                 let id = d.id
+                let deleted = d.deletedAt != 0
                 let versionsH: ActionHandler = { c => this.showVersions(c, org, name) }
                 let deleteH: ActionHandler = { c => this.askDelete(c, id, name, version) }
-                div([
-                    Button([text("版本")]).size(ButtonSize.Small).onClick(versionsH),
-                    Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteH),
-                ])
+                let restoreH: ActionHandler = { c => this.doRestore(c, id, name, version) }
+                let hardH: ActionHandler = { c => this.askHardDelete(c, id, name, version) }
+                if (deleted) {
+                    // 已软删：恢复（校验制品仍在）或硬删（记录 + 制品，不可恢复）
+                    div([
+                        Button([text("恢复")]).size(ButtonSize.Small).kind(ButtonKind.Success).onClick(restoreH),
+                        Button([text("硬删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(hardH),
+                    ])
+                } else {
+                    div([
+                        Button([text("版本")]).size(ButtonSize.Small).onClick(versionsH),
+                        Button([text("软删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteH),
+                    ])
+                }
             }))
     }
 
@@ -628,12 +733,29 @@ class PackagesPage <: Component {
                     Tag([text("正常")]).kind(ComponentKind.Success)
                 }
             }))
+            .add(TableColumn<PackageDoc>().label("操作").minWidth(150).render({ d, i =>
+                let name = d.name
+                let version = d.version
+                let id = d.id
+                let restoreH: ActionHandler = { c => this.doRestore(c, id, name, version) }
+                let hardH: ActionHandler = { c => this.askHardDelete(c, id, name, version) }
+                let deleteH: ActionHandler = { c => this.askDelete(c, id, name, version) }
+                if (d.deletedAt != 0) {
+                    div([
+                        Button([text("恢复")]).size(ButtonSize.Small).kind(ButtonKind.Success).onClick(restoreH),
+                        Button([text("硬删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(hardH),
+                    ])
+                } else {
+                    Button([text("软删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteH)
+                }
+            }))
         let dlg = Dialog([
             table,
+            div([text("软删除：可在列表恢复（恢复时校验制品仍在）；硬删除：删除记录 + 制品文件，不可恢复。")]),
         ])
             .visible(this.verDialogVisible)
             .title(this.verTitle.get())
-            .width("520px")
+            .width("700px")
             .closeOnClickModal(false)
             .footer([
                 Button([text("关闭")]).onClick(closeVersions),
@@ -642,16 +764,26 @@ class PackagesPage <: Component {
     }
 
     func renderConfirmDialog(): IComponent {
-        let dlg = Dialog([
-            div([text("确定要删除包「${this.pendingDeleteName}」吗？此操作不可恢复。")]),
-        ])
+        let hard = this.pendingMode.get() == "hard"
+        let body = if (hard) {
+            div([
+                div([text("确定要硬删除「${this.pendingDeleteName}」吗？")]),
+                div([text("将同时删除制品文件，且不可恢复——请确认该版本已软删且无人依赖。")]),
+            ])
+        } else {
+            div([
+                div([text("确定要软删除「${this.pendingDeleteName}」吗？")]),
+                div([text("索引/下载/公开 API 立即不可见，可在包列表随时恢复。")]),
+            ])
+        }
+        let dlg = Dialog([body])
             .visible(this.confirmVisible)
-            .title("删除确认")
-            .width("400px")
+            .title(if (hard) { "硬删除确认" } else { "软删除确认" })
+            .width("460px")
             .closeOnClickModal(false)
             .footer([
                 Button([text("取消")]).onClick(cancelDelete),
-                Button([text("删除")]).kind(ButtonKind.Danger).onClick(confirmDelete),
+                Button([text(if (hard) { "硬删除" } else { "软删除" })]).kind(ButtonKind.Danger).onClick(confirmDelete),
             ])
         dlg
     }

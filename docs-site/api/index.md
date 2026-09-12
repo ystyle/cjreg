@@ -26,6 +26,10 @@
 | `/api/admin/publish-plans/execute` | POST | 按序推送到目标仓（`target_url` / `target_token`） |
 | `/api/admin/logs/:kind` | GET | 审计日志查询（`kind` = `publish`/`admin`/`auth`/`all`；`keyword`/`status`/`from`/`to`/`offset`/`limit`） |
 | `/api/admin/logs/clean` | POST | 清理审计日志（`{kind?, before?}`，返回 `{"deleted":N}`） |
+| `/api/admin/packages` | GET | 版本列表（`organization`/`name`/`includeDeleted`/`page`/`size`；含 `id`/`sha256`/`deletedAt`） |
+| `/api/admin/packages/:id` | DELETE | **软删除**该版本（索引/下载/公开 API 立即不可见，制品保留，可恢复） |
+| `/api/admin/packages/:id/restore` | PUT | **恢复**（校验制品仍在：本地 blob 或上游可回源；丢失则 409） |
+| `/api/admin/packages/:id/hard` | DELETE | **硬删除**（需先软删，否则 409；删除记录 + 制品文件，不可恢复） |
 
 Header：`Authorization: Bearer <会话 Token>`；审计日志字段见 [审计日志](/guide/audit)。
 

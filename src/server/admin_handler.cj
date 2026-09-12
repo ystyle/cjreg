@@ -11,6 +11,7 @@ import stdx.encoding.json.stream.*
 import std.collection.*
 import std.io.*
 import std.convert.*
+import std.sort.*
 
 // 登录请求
 public class LoginRequest <: JsonDeserializable<LoginRequest> {
@@ -95,12 +96,17 @@ public class AdminService {
     public var executor: PublishExecutor
     // 审计日志存储（None = 不记审计；与 buildServer 注入同一实例，避免 id 撞车）
     public var adminData: ?AdminDataStore
+    // 包库与制品库（三级删除闭环用：软删/恢复/硬删 + 制品清理）
+    public var pkgStore: ?PackageStore
+    public var blobStore: ?BlobStore
 
     public init(auth: AuthService, upstreamSvc: UpstreamService,
                 userStore: UserStore, upstreamStore: UpstreamStore,
                 resolveSvc: ResolveService, proxySvc: ?ProxyService,
                 planSvc: PublishPlanService, executor: PublishExecutor,
-                adminData!: ?AdminDataStore = None) {
+                adminData!: ?AdminDataStore = None,
+                pkgStore!: ?PackageStore = None,
+                blobStore!: ?BlobStore = None) {
         this.auth = auth
         this.upstreamSvc = upstreamSvc
         this.userStore = userStore
@@ -110,6 +116,8 @@ public class AdminService {
         this.planSvc = planSvc
         this.executor = executor
         this.adminData = adminData
+        this.pkgStore = pkgStore
+        this.blobStore = blobStore
     }
 
     // 从 Authorization 头取 token
@@ -396,6 +404,140 @@ public class AdminService {
             }
             case None => 0
         }
+    }
+
+    // GET /api/admin/packages?organization=&name=&includeDeleted=1&page=&size=
+    // 版本列表（管理端自动化用：拿到 id 才能调三级删除端点）
+    public func listPackages(ctx: TangHttpContext): Unit {
+        if (!requireAdmin(ctx)) {
+            return
+        }
+        let store = match (this.pkgStore) {
+            case Some(s) => s
+            case None =>
+                writeJson(ctx, 500u16, "{\"error\":\"package store unavailable\"}")
+                return
+        }
+        let org = ctx.query("organization") ?? ""
+        let name = ctx.query("name") ?? ""
+        let includeDeleted = (ctx.query("includeDeleted") ?? "") == "1"
+        let hits = ArrayList<PackageDoc>()
+        for (d in store.storm.all<PackageDoc>()) {
+            if (!org.isEmpty() && d.organization != org) {
+                continue
+            }
+            if (!name.isEmpty() && d.name != name) {
+                continue
+            }
+            if (!includeDeleted && d.deletedAt != 0) {
+                continue
+            }
+            hits.add(d)
+        }
+        sort(hits, by: adminPkgAsc)
+        let page = parseI64(ctx.query("page"))
+        let size = parseI64(ctx.query("size"))
+        let (start, end) = pageWindow(hits.size, if (page <= 0) { 1 } else { page },
+            if (size <= 0) { 50 } else { size })
+        let sb = StringBuilder()
+        sb.append("{\"total\":${hits.size},\"items\":[")
+        var i = start
+        while (i < end) {
+            if (i > start) {
+                sb.append(",")
+            }
+            let d = hits[i]
+            sb.append("{\"id\":${d.id},\"organization\":\"${escapeJsonStr(d.organization)}\",")
+            sb.append("\"name\":\"${escapeJsonStr(d.name)}\",\"version\":\"${escapeJsonStr(d.version)}\",")
+            sb.append("\"deletedAt\":${d.deletedAt},\"sha256\":\"${escapeJsonStr(d.sha256)}\",")
+            sb.append("\"tarballSize\":${d.tarballSize},\"downloads\":${d.downloadCount},")
+            sb.append("\"publisherId\":${d.publisherId},\"upstreamId\":${d.upstreamId},")
+            sb.append("\"createdAt\":${d.createdAt},\"updatedAt\":${d.updatedAt}}")
+            i++
+        }
+        sb.append("]}")
+        writeJson(ctx, 200u16, sb.toString())
+    }
+
+    // ===== 包三级删除闭环 =====
+    // DELETE /api/admin/packages/:id → 软删除（deletedAt；索引/下载/公开 API 立即不可见）
+    public func deletePackage(ctx: TangHttpContext): Unit {
+        this.lifecycleEntry(ctx, "soft")
+    }
+
+    // DELETE /api/admin/packages/:id/hard → 硬删除（需先软删；删记录 + 制品）
+    public func hardDeletePackage(ctx: TangHttpContext): Unit {
+        this.lifecycleEntry(ctx, "hard")
+    }
+
+    // PUT /api/admin/packages/:id/restore → 恢复（校验制品仍在）
+    public func restorePackage(ctx: TangHttpContext): Unit {
+        this.lifecycleEntry(ctx, "restore")
+    }
+
+    // 三种操作的公共入口：解析 id → 取版本 → 调用生命周期 → 审计 + JSON
+    func lifecycleEntry(ctx: TangHttpContext, mode: String): Unit {
+        if (!requireAdmin(ctx)) {
+            return
+        }
+        let id = match (Int64.tryParse(ctx.param("id"))) {
+            case Some(n) => n
+            case None => 0
+        }
+        if (id <= 0) {
+            writeJson(ctx, 400u16, "{\"error\":\"invalid package id\"}")
+            return
+        }
+        let store = match (this.pkgStore) {
+            case Some(s) => s
+            case None =>
+                writeJson(ctx, 500u16, "{\"error\":\"package store unavailable\"}")
+                return
+        }
+        let doc = match (store.getById(id)) {
+            case Some(d) => d
+            case None =>
+                writeJson(ctx, 404u16, "{\"error\":\"package version not found\"}")
+                return
+        }
+        let blobs: BlobStore = match (this.blobStore) {
+            case Some(b) => b
+            case None => MemoryBlobStore()
+        }
+        let now = auditNowMs()
+        var action = "delete_package"
+        var result: LifecycleResult
+        match (mode) {
+            case "hard" =>
+                action = "hard_delete_package"
+                result = hardDeleteVersion(store, blobs, this.adminData, doc, now)
+            case "restore" =>
+                action = "restore_package"
+                result = restoreVersion(store, blobs, doc)
+            case _ =>
+                result = softDeleteVersion(store, this.adminData, doc, now)
+        }
+        let target = auditTarget(doc.organization, doc.name, doc.version)
+        let status = match (result.outcome) {
+            case LifecycleOutcome.Ok => "ok"
+            case LifecycleOutcome.AlreadyDeleted => "ok"      // 幂等：语义上已是目标状态
+            case _ => "failed"
+        }
+        let (actorId, actorName) = this.actorOf(ctx)
+        writeAudit(this.adminData, LogKind.Admin, actorId, actorName, action, status, target, ctx,
+            error: if (status == "ok") { "" } else { result.message },
+            detail: "skippedPlanItems=${result.skippedPlanItems} blobRemoved=${result.blobRemoved} " +
+                "artifactPresent=${result.artifactPresent} id=${id}")
+        // 结果码：NotDeleted/ArtifactMissing → 409（语义冲突，非参数错误）
+        var code = 200u16
+        match (result.outcome) {
+            case LifecycleOutcome.NotFound => code = 404u16
+            case LifecycleOutcome.NotDeleted => code = 409u16
+            case LifecycleOutcome.ArtifactMissing => code = 409u16
+            case LifecycleOutcome.Failed => code = 500u16
+            case _ => code = 200u16
+        }
+        writeJson(ctx, code, lifecycleJson(result))
     }
 
     // ===== 上游管理 =====
@@ -746,4 +888,18 @@ public func parseJsonBody<T>(body: Array<Byte>, f: (JsonReader) -> T): ?T {
     } catch (e: Exception) {
         return None
     }
+}
+
+// 管理端包列表排序：组织 → 包名 → 版本（升序）
+func adminPkgAsc(a: PackageDoc, b: PackageDoc): Ordering {
+    if (a.organization != b.organization) {
+        return if (a.organization < b.organization) { Ordering.LT } else { Ordering.GT }
+    }
+    if (a.name != b.name) {
+        return if (a.name < b.name) { Ordering.LT } else { Ordering.GT }
+    }
+    if (a.version == b.version) {
+        return Ordering.EQ
+    }
+    return if (a.version < b.version) { Ordering.LT } else { Ordering.GT }
 }

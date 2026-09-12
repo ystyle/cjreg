@@ -179,6 +179,9 @@ app ──→ encryptUtils ──→ mathUtils, strUtils
 - **在线文档站**：<https://ystyle.top/cjreg/>（VitePress，源码在 `docs-site/`，
   由 `.github/workflows/docs-deploy.yml` 自动部署到 GitHub Pages + 华为云 CDN 刷新）
 
+- 发版流程（tag 驱动：二进制产物 + GitHub Release + ghcr 镜像）：[docs/RELEASE.md](docs/RELEASE.md)
+- 审计日志：[docs/audit-log.md](docs/audit-log.md)
+- 公开只读 API：[docs/public-api.md](docs/public-api.md)
 - 设计：[docs/design.md](docs/design.md)
 - 差距与实施对照：[docs/gap-analysis.md](docs/gap-analysis.md)
 - **验证报告**（环境/方法/实测数据/复现步骤/已知限制）：[docs/verification.md](docs/verification.md)

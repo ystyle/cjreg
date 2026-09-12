@@ -1,10 +1,16 @@
 name: Release
 
-# 触发：在 GitHub 发布 Release（tag）时构建产物并上传
-# 主仓库在 AtomGit，本工作流供 GitHub 镜像/发布使用
+# 触发：推送版本 tag（v*）时构建产物 + 推送容器镜像
+#
+# 为什么用 tag 而不是「GitHub 上发 Release」：
+#   主仓库在 AtomGit，tag 是两侧唯一事实来源——`git tag vX.Y.Z && git push origin vX.Y.Z`
+#   会把同一个 tag 同步到 GitHub，工作流据此构建产物、自动生成 GitHub Release 并推送镜像，
+#   不会出现「只在 GitHub 发版、AtomGit 侧没有对应 tag」的两边不一致。
+#
+# 发版步骤：见 docs/RELEASE.md
 on:
-  release:
-    types: [published]
+  push:
+    tags: ['v*']
 
 env:
   CJXT_REPO: ${{ vars.CJXT_REPO || 'ystyle/cjxt' }}
@@ -48,10 +54,12 @@ jobs:
           tar -czf "dist/cjreg_${VERSION}_public.tar.gz" -C . public
           ls -lh dist
 
-      - name: Upload release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload ${{ github.ref_name }} cjreg/dist/* --repo ${{ github.repository }} --clobber
+      - name: 创建/更新 GitHub Release 并上传产物
+        uses: softprops/action-gh-release@v2
+        with:
+          files: cjreg/dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
 
   container:
     name: 容器镜像（ghcr.io）

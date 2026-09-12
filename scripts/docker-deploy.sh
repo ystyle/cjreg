@@ -27,6 +27,17 @@ BIN="target/release/bin/ystyle::cjreg"
 
 echo "==> 2/5 首次初始化数据目录（$DATA_DIR）"
 mkdir -p "$DATA_DIR"
+# 容器内以 uid 1000 运行：宿主目录属主不是 1000 时 init/写入会 Permission denied
+if [ "$(id -u)" != "1000" ]; then
+  if command -v sudo >/dev/null 2>&1; then
+    sudo chown -R 1000:1000 "$DATA_DIR" 2>/dev/null || true
+  else
+    chown -R 1000:1000 "$DATA_DIR" 2>/dev/null || true
+  fi
+  if [ "$(stat -c %u "$DATA_DIR" 2>/dev/null || echo 0)" != "1000" ]; then
+    echo "    ⚠ 数据目录属主非 1000，容器可能无法写入；请执行：sudo chown -R 1000:1000 \"$DATA_DIR\""
+  fi
+fi
 if [ ! -f "$DATA_DIR/cjreg.db" ] && [ ! -d "$DATA_DIR/blobs" ]; then
   if [ -z "$ADMIN_PASS" ]; then
     echo "首次部署需要管理员口令：ADMIN_PASS='<强口令>' bash scripts/docker-deploy.sh"

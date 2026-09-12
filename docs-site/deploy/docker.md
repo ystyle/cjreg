@@ -111,8 +111,9 @@ services:
 |---|---|
 | 基础镜像 | `archlinux:latest`（与宿主编译环境 glibc 一致，避免 GLIBC 符号缺失） |
 | 预装 | `liburing`（badger-cj io_uring）、`tzdata`、`ca-certificates`、`curl`（健康检查） |
-| 运行用户 | 非 root，uid 1000（挂卷后可写） |
+| 运行用户 | 非 root，uid 1000；**挂载的数据目录属主须为 1000**（否则 `init`/写入报 Permission denied） |
 | 体积 | 约 500 MB（与同系列仓颉项目一致；主要为 archlinux 底座） |
+| 数据目录属主 | `sudo chown -R 1000:1000 ./data`（`scripts/docker-deploy.sh` 会自动处理；CI 冒烟同样处理） |
 | 入口 | `/app/cjreg serve -d /data` |
 
 > 需要更小体积可考虑：把底座换成带 `liburing2` 的 `debian:slim`，或用工具链镜像做多阶段自构建

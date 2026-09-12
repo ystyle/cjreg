@@ -185,7 +185,7 @@ func testPublicStatsModel() {
     @Expect(s.versions, 4)
     @Expect(s.downloads, 16)
     @Expect(s.storageBytes, 370)
-    @Expect(s.organizations, 1)
+    @Expect(s.organizations, 2)   // 已登记的 test + 有包但未登记的 other（与 /api/organizations 口径一致）
     @Expect(s.teams, 1)
     @Expect(s.users, 2)
     @Expect(s.serverVersion, CJREG_SERVER_VERSION)

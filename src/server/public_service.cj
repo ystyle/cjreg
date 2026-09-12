@@ -57,6 +57,11 @@ public func publicStatsModel(pkgStore: PackageStore, adminData: AdminDataStore, 
     var downloads: Int64 = 0
     var storage: Int64 = 0
     let keys = HashMap<String, Bool>()
+    // 组织数 = 已登记组织 ∪ 有包的组织（与 /api/organizations 的口径一致：发布不要求先建组织）
+    let orgs = HashMap<String, Bool>()
+    for (o in adminData.listOrgs()) {
+        orgs[o.name] = true
+    }
     for (d in pkgStore.storm.all<PackageDoc>()) {
         if (d.deletedAt != 0) {
             continue
@@ -67,9 +72,12 @@ public func publicStatsModel(pkgStore: PackageStore, adminData: AdminDataStore, 
             storage += d.tarballSize
         }
         keys[d.organization + "::" + d.name] = true
+        if (!d.organization.isEmpty()) {
+            orgs[d.organization] = true
+        }
     }
     let uptime = if (now > startedAt && startedAt > 0) { (now - startedAt) / 1000 } else { 0 }
-    PublicStats(keys.size, versions, downloads, adminData.listOrgs().size, adminData.listTeams().size,
+    PublicStats(keys.size, versions, downloads, orgs.size, adminData.listTeams().size,
         userCount, storage, CJREG_SERVER_VERSION, startedAt, uptime)
 }
 

@@ -7,7 +7,7 @@
 
 | 端点 | 说明 |
 |---|---|
-| `GET /api/stats` | 包/版本/下载/组织/团队/用户数、存储字节、服务端版本、启动时间与运行时长 |
+| `GET /api/stats` | 包/版本/下载/组织/团队/用户数、存储字节、服务端版本、启动时间与运行时长（组织数与 `/api/organizations` 同口径） |
 | `GET /api/packages` | 包列表：`q`（名称/描述/组织，支持 `org::name` 语法）、`organization`、`category`（逗号分隔多值 OR）、`sort`（`updated`\|`downloads`\|`name`）、`page`/`size`（默认 20，上限 100） |
 | `GET /api/packages/:name` | 包详情：全部版本 + 聚合（版本数/最新版本/总下载）+ 最新版本 README（`?organization=`） |
 | `GET /api/packages/:name/:version` | 版本详情：meta 全字段 + `sha256` + 制品字节 + 下载数 + 发布者 + 时间 |

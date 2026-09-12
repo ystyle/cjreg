@@ -180,6 +180,7 @@ app ──→ encryptUtils ──→ mathUtils, strUtils
   由 `.github/workflows/docs-deploy.yml` 自动部署到 GitHub Pages + 华为云 CDN 刷新）
 
 - 发版流程（tag 驱动：二进制产物 + GitHub Release + ghcr 镜像）：[docs/RELEASE.md](docs/RELEASE.md)
+- 演示视频脚本（分镜/解说词/复现说明）：[docs/demo-video.md](docs/demo-video.md)（演示环境：`bash scripts/demo-data.sh`）
 - 审计日志：[docs/audit-log.md](docs/audit-log.md)
 - 公开只读 API：[docs/public-api.md](docs/public-api.md)
 - 设计：[docs/design.md](docs/design.md)

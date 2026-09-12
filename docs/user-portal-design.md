@@ -52,7 +52,7 @@
 ## 6. 与已落地改动的关系
 
 - 发布 401/403 校验已在服务端（上轮）；门户只是让用户**看得到** Token 与"我能发什么"
-- `CJREG_PERMISSION_MODE=team` 时门户第 3 区块提示"需 write 权限"；open 时提示"内部开放模式"
+- 配置文件（`cjreg.toml`）`permission_mode = "team"` 时门户第 3 区块提示"需 write 权限"；`open` 时提示"内部开放模式"
 
 ## 7. 团队管理：决策与 backlog（owner / 多管理员）
 
@@ -125,4 +125,19 @@
 
 - 区块「我的包」= **我发布过版本的包**（含协作发版），并标注其中我是 **owner**（最早一条版本记录的发布者）的包
 - 区块「我的团队与权限」**只读**（沿用管理员统配，owner 自助仍在 §7.4 backlog）
-- 提示行按 `CJREG_PERMISSION_MODE` 显示 open / team 文案
+- 提示行按配置文件的 `permission_mode` 显示 open / team 文案
+
+### 8.3 服务配置（新增）
+
+配置统一走数据目录下的 `cjreg.toml`（`cjreg init` 生成模板；`-c/--config` 可指定路径）：
+
+```toml
+[server]
+public_url = "https://pkg.example.com"   # 对外地址：门户/文档示例用它
+port = 8060
+permission_mode = "open"                 # open | team
+require_auth = false
+```
+
+- 门户的 `cangjie-repo.toml` 示例、帮助文档里的服务地址与 registry 示例，**都读配置值**（不再写死 `localhost:8060`）
+- 单一配置来源：除 `CJREG_SEED_DEMO=1`（开发调试开关）外没有环境变量配置项

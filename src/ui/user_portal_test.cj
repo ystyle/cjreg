@@ -9,12 +9,17 @@ import ystyle::cjreg.store.*
 import ystyle::cjreg.auth.*
 import ystyle::cjreg.auth.util.*
 import ystyle::cjreg.auth.model.*
+import ystyle::cjreg.config.*
 import std.collection.*
 import std.reflect.*
 import std.unittest.*
 import std.unittest.testmacro.*
 
-func makePortalState(mode: String): CjregState {
+func makePortalState(mode: String, publicUrl!: String = "http://localhost:8060", port!: UInt16 = 8060): CjregState {
+    let cfg = CjregConfig()
+    cfg.publicUrl = publicUrl
+    cfg.port = port
+    cfg.permissionMode = mode
     PasswordHash.ITERATIONS = 1000  // 测试提速
     let storm = Storm.inMemory()
     let pkgStore = PackageStore(storm)
@@ -22,7 +27,7 @@ func makePortalState(mode: String): CjregState {
     let upStore = BstormUpstreamStore(storm)
     let authSvc = AuthService(userStore, 3600)
     let adminData = AdminDataStore(storm)
-    CjregState(pkgStore, userStore, upStore, adminData, authSvc, permissionMode: mode)
+    CjregState(pkgStore, userStore, upStore, adminData, authSvc, config: cfg)
 }
 
 // 组装页面挂载所需的 LifecycleContext（states + 会话上下文）
@@ -81,6 +86,21 @@ public class UserPortalRenderTest {
         // 门户展示完整 Token（否则用户无法配置 cjpm）
         @Expect(json.contains(alice.publishToken), true)
         @Expect(json.contains("当前登录：alice"), true)
+        // registry 示例用配置的对外地址（cjreg.toml server.public_url）
+        @Expect(json.contains("http://localhost:8060"), true)
+        @Expect(json.contains("http://<cjreg 地址>"), false)
+    }
+
+    // 配置了域名时，门户示例显示域名（而不是 localhost 兜底）
+    @TestCase
+    public func testPortalExampleUsesConfiguredPublicUrl(): Unit {
+        let state = makePortalState("team", publicUrl: "https://pkg.example.com", port: 8064)
+        let alice = state.auth.createUser("alice", "AlicePass1", false).getOrThrow()
+        let page = UserPortalPage()
+        page.onMount(mountCtx(state, userCtxMap(alice.id, "alice", false)))
+        let json = serializeSubtree(page.render(), HashMap<String, ActionHandler>())
+        @Expect(json.contains("https://pkg.example.com"), true)
+        @Expect(json.contains("http://localhost:8060"), false)
     }
 
     // 没有包/团队时给空态引导，而不是空白区块

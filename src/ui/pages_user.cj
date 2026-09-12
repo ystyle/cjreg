@@ -292,8 +292,13 @@ class UserPortalPage <: Component {
     // 区块一：我的发布 Token（完整值 + 重置；重置后旧 Token 立即失效）
     func renderTokenSection(): IComponent {
         let resetH: ActionHandler = { c => this.askResetToken(c) }
+        // registry 示例用配置的对外地址（cjreg.toml 的 server.public_url）
+        let base = match (this.state) {
+            case Some(st) => if (st.config.publicUrl.isEmpty()) { "http://<cjreg 地址>" } else { st.config.publicUrl }
+            case None => "http://<cjreg 地址>"
+        }
         let example = "[repository.home]\n" +
-            "registry = \"http://<cjreg 地址>\"\n" +
+            "registry = \"${base}\"\n" +
             "token = \"${this.tokenValue.get()}\""
         div([
             div([text("我的发布 Token")], attrs: Some(HashMap<String, String>([("class", cls("portal-section-title"))]))),
@@ -303,7 +308,7 @@ class UserPortalPage <: Component {
                 Input().readonly().bind(this.tokenValue),
                 Button([text("重置 Token")]).kind(ButtonKind.Warning).onClick(resetH),
             ], attrs: Some(HashMap<String, String>([("class", cls("portal-token-row"))]))),
-            div([text("cangjie-repo.toml 示例（registry 换成你的服务地址）")],
+            div([text("cangjie-repo.toml 示例（registry 取自服务配置，可直接复制）")],
                 attrs: Some(HashMap<String, String>([("class", cls("portal-hint"))]))),
             div([text(example)], attrs: Some(HashMap<String, String>([("class", cls("code-block"))]))),
         ], attrs: Some(HashMap<String, String>([("class", cls("portal-section"))])))
@@ -377,7 +382,7 @@ class UserPortalPage <: Component {
     // 区块三：我的团队与权限（只读）+ 发布权限模式提示
     func renderTeamsSection(): IComponent {
         let mode = match (this.state) {
-            case Some(st) => st.permissionMode
+            case Some(st) => st.config.permissionMode
             case None => "open"
         }
         let table = Table<MyTeamRow>()

@@ -15,6 +15,7 @@ import ystyle::cjreg.ui.*
 import cjxt.*
 import cjxt.components.*
 import std.collection.*
+import std.fs.*
 
 func printUsage(): Unit {
     println("cjreg - 仓颉私有中心仓与多仓工具")
@@ -27,15 +28,21 @@ func printUsage(): Unit {
     println("  admin   应急管理（reset-password --username <u> --password <p>）")
     println()
     println("选项:")
-    println("  -d, --data <dir>   数据目录（默认 ./data）")
-    println("  -p, --port <n>     serve 端口（默认 8060）")
-    println("  -h, --help         帮助")
+    println("  -d, --data <dir>     数据目录（默认 ./data）")
+    println("  -p, --port <n>       serve 端口（默认 8060；优先于配置文件）")
+    println("  -c, --config <file>  配置文件（默认 <数据目录>/cjreg.toml）")
+    println("  -h, --help           帮助")
+    println()
+    println("配置文件（可选，TOML）：")
+    println("  [server] public_url / port / permission_mode / require_auth")
+    println("  init 会在数据目录生成一份带注释的 cjreg.toml 模板")
 }
 
 main(args: Array<String>): Int64 {
     let specs = [
         Full("data", r'd', RequiredValue),
         Full("port", r'p', RequiredValue),
+        Full("config", r'c', RequiredValue),
         Long("username", RequiredValue),
         Long("password", RequiredValue),
         Full("help", r'h', NoValue)
@@ -75,22 +82,32 @@ main(args: Array<String>): Int64 {
         case Some(v) => password = v
         case None => ()
     }
-    var port: UInt16 = 8060
+    // 端口：命令行显式传入才记录（否则让配置文件/默认值决定）
+    var cliPort: ?UInt16 = None
     match (result.options.get("port")) {
         case Some(v) =>
-            let n = UInt16.tryParse(v)
-            match (n) {
-                case Some(p) => port = p
+            match (UInt16.tryParse(v)) {
+                case Some(p) => cliPort = Some(p)
                 case None => ()
             }
         case None => ()
     }
+    // 配置来源：-c/--config 指定，或数据目录下的 cjreg.toml（单一来源，无环境变量配置）
+    var configPath = dataDir + "/cjreg.toml"
+    match (result.options.get("config")) {
+        case Some(v) => if (!v.isEmpty()) {
+            configPath = v
+        }
+        case None => ()
+    }
+    let cfg = resolveConfig(configPath, cliPort)
+    let port = cfg.port
 
     match (command) {
         case "serve" =>
-            return cmdServe(dataDir, port)
+            return cmdServe(dataDir, cfg)
         case "init" =>
-            return cmdInit(dataDir, username, password)
+            return cmdInit(dataDir, username, password, cfg.port)
         case "admin" =>
             var sub = ""
             if (result.nonOptions.size >= 2) {
@@ -98,7 +115,7 @@ main(args: Array<String>): Int64 {
             }
             return cmdAdmin(dataDir, sub, username, password)
         case "admin-ui" =>
-            return cmdAdminUI(dataDir, port)
+            return cmdAdminUI(dataDir, cfg)
         case _ =>
             println("cjreg: 未知命令 ${command}")
             printUsage()
@@ -119,7 +136,8 @@ func openStores(dataDir: String): ?(PackageStore, BstormUserStore, BstormUpstrea
 }
 
 // serve：启动 HTTP 服务（含管理 API）
-func cmdServe(dataDir: String, port: UInt16): Int64 {
+func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
+    let port = cfg.port
     let stores = openStores(dataDir)
     if (stores.isNone()) {
         return 1
@@ -134,7 +152,7 @@ func cmdServe(dataDir: String, port: UInt16): Int64 {
         PublishExecutor(pkgStore, blobStore))
 
     // 同一 Tang 实例：协议路由 + cjxt 管理/公开页面（单进程共享 store）
-    let app = buildServer(pkgStore, Some(admin), Some(upSvc), blobStore)
+    let app = buildServer(pkgStore, Some(admin), Some(upSvc), blobStore, config: cfg)
     let adminData = AdminDataStore(userStore.storm)
     // 重启恢复：执行中的计划复位为待执行（执行线程随进程退出）
     for (planDoc in adminData.listPlans()) {
@@ -159,7 +177,7 @@ func cmdServe(dataDir: String, port: UInt16): Int64 {
         .configure(AppConfig(cssBundle: "/css/bundle.css?v=3"))
         .serveStatic("/css", "public/css")
         .UseComponent()
-        .state<CjregState>({ => CjregState(pkgStore, userStore, upStore, adminData, authSvc, app: Some(cjxtApp), permissionMode: permissionModeFromEnv()) })
+        .state<CjregState>({ => CjregState(pkgStore, userStore, upStore, adminData, authSvc, app: Some(cjxtApp), config: cfg) })
         .auth({ t => restoreAdminSession(authSvc, t) })
         .port(port)
         .setTang(app)
@@ -207,7 +225,7 @@ func seedDemoPackages(pkgStore: PackageStore): Unit {
 }
 
 // init：空数据目录创建首个管理员 + 默认官方上游
-func cmdInit(dataDir: String, username: String, password: String): Int64 {
+func cmdInit(dataDir: String, username: String, password: String, port: UInt16): Int64 {
     var storm: Storm
     try {
         storm = Storm.open(dataDir + "/cjreg.db", syncWrites: true)
@@ -242,8 +260,22 @@ func cmdInit(dataDir: String, username: String, password: String): Int64 {
     let upSvc = UpstreamService(upStore)
     upSvc.add("official", "https://pkg.cangjie-lang.cn/registry", 0, "", 0)
 
+    // 生成配置文件模板（已存在则不覆盖，避免抹掉用户配置）
+    let cfgPath = dataDir + "/cjreg.toml"
+    if (!exists(cfgPath)) {
+        try {
+            let f = File(cfgPath, Write)
+            f.write(configTemplate(port).toArray())
+            f.close()
+            println("cjreg: 已生成配置文件 ${cfgPath}（按需修改 public_url / permission_mode 等）")
+        } catch (e: Exception) {
+            println("cjreg: 配置文件生成失败（可忽略，默认值即可运行）: ${e.message}")
+        }
+    }
+
     println("cjreg: 初始化完成")
     println("  数据目录: ${dataDir}")
+    println("  配置文件: ${cfgPath}")
     println("  官方上游: official (https://pkg.cangjie-lang.cn/registry)")
     storm.close()  // 必须 close 才落盘（badger flush）
     return 0
@@ -285,7 +317,8 @@ func cmdAdmin(dataDir: String, sub: String, username: String, password: String):
 }
 
 // admin-ui：启动 cjxt 管理界面（直接访问同进程 store/service）
-func cmdAdminUI(dataDir: String, port: UInt16): Int64 {
+func cmdAdminUI(dataDir: String, cfg: CjregConfig): Int64 {
+    let port = cfg.port
     let stores = openStores(dataDir)
     if (stores.isNone()) {
         return 1
@@ -298,7 +331,7 @@ func cmdAdminUI(dataDir: String, port: UInt16): Int64 {
         .configure(AppConfig(cssBundle: "/css/bundle.css?v=3"))
         .serveStatic("/css", "public/css")
         .UseComponent()
-        .state<CjregState>({ => CjregState(pkgStore, userStore, upStore, adminData, authSvc, app: Some(cjxtApp), permissionMode: permissionModeFromEnv()) })
+        .state<CjregState>({ => CjregState(pkgStore, userStore, upStore, adminData, authSvc, app: Some(cjxtApp), config: cfg) })
         .auth({ t => restoreAdminSession(authSvc, t) })
         .host("0.0.0.0").port(port)
         .serve()

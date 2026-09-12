@@ -53,10 +53,15 @@ cjreg <command> [options]
 
 选项：
   -d, --data <dir>      数据目录（默认 ./data）
-  -p, --port <n>        serve 端口（默认 8060）
+  -p, --port <n>        serve 端口（默认 8060；优先于配置文件）
+  -c, --config <file>   配置文件（默认 <数据目录>/cjreg.toml）
   -j, --json            JSON 输出
   -h, --help
 ```
+
+**服务端配置（`cjreg.toml`，单一来源）**：`[server] public_url / port / permission_mode / require_auth`；
+`cjreg init` 生成带注释的模板，示例见仓库根 `cjreg.toml.example`。优先级：命令行 > 配置文件 > 默认值。
+除 `CJREG_SEED_DEMO=1`（开发调试开关）外**没有环境变量配置项**，避免文件/环境两套口径。
 
 > **命令收敛说明**：私有仓的运维能力（上游表、发布计划、团队、解析诊断、镜像/同步）全部为**服务端能力**——serve 内置 + 管理 API，**发布计划/解析诊断等为 Web 界面功能**（配管理前端），不设独立 CLI 子命令；CLI 只保留部署/应急三件套（serve / init / admin）。
 
@@ -204,9 +209,9 @@ GET /api/admin/resolve?name={module}&org={org}&require={版本需求}&strict={tr
 - **覆盖 vs 409 语义**：同版本重复发布时——有 `overwrite` 权限 → 覆盖（先删旧记录再入库，200）；无 `overwrite` 权限 → 403（无权限）；与已有制品 sha256 完全一致 → 幂等 200 或 409（按配置）
 
 **本地仓读写鉴权开关（requireAuth，私有化必需，已实现）**：
-- `CJREG_REQUIRE_AUTH` 未设置/`0`（默认）：`GET /pkg`、`GET /index` 公开（无需认证）；`POST /pkg` 仍需发布 token
-- `CJREG_REQUIRE_AUTH=1`（或 `true`）：下载/索引也需有效 token（session 或 publish token，裸 token 与 `Bearer <token>` 均可），且做 `read` 权限检查（管理员直通、publisher 可读自己的包）——私有仓部署建议开启
-- 权限模式由 `CJREG_PERMISSION_MODE` 控制：`open`（默认）/ `team`
+- `cjreg.toml` 的 `[server] require_auth = false`（默认）：`GET /pkg`、`GET /index` 公开（无需认证）；`POST /pkg` 仍需发布 token
+- `require_auth = true`：下载/索引也需有效 token（session 或 publish token，裸 token 与 `Bearer <token>` 均可），且做 `read` 权限检查（管理员直通、owner 可读自己的包）——私有仓部署建议开启
+- 权限模式由同一文件的 `permission_mode` 控制：`open`（默认）/ `team`
 
 **下载响应头**：`Content-Type: application/x-gzip` + `Content-Disposition: attachment; filename="{name}-{version}.cjp"`
 
@@ -345,7 +350,7 @@ POST /api/admin/login {username, password}
 - **覆盖已存在版本**（同版本、sha 不同）：需团队 `overwrite`；**publisher 自身没有覆盖权**（覆盖属团队权限）。覆盖为**原地更新**同一文档（保持 `id`/`createdAt`、刷新 `updatedAt`），且**不转移包名所有权**（`publisherId` 保持首次发布者）；同 sha 重复发布仍为幂等 200
 - **open 模式**（默认）：有效 token 即发布；同版本不同 sha **不静默覆盖**，仍返回 409
 
-**读鉴权开关（`CJREG_REQUIRE_AUTH=1/true`，已实现）**：`GET /pkg`、`GET /index` 需有效 token（session 或 publish token）+ 对资源的 `read` 权限（管理员直通、publisher 可读自己的包）；未开启时两个端点公开。
+**读鉴权开关（`cjreg.toml` 的 `require_auth = true`，已实现）**：`GET /pkg`、`GET /index` 需有效 token（session 或 publish token）+ 对资源的 `read` 权限（管理员直通、publisher 可读自己的包）；未开启时两个端点公开。
 
 ### 5.4 团队管理（对齐 cjrepo）
 

@@ -19,6 +19,9 @@ cjpm build -j 16
 CJREG_SEED_DEMO=1 ./target/release/bin/ystyle::cjreg serve -d .smoke/auth-data -p 18062
 ```
 
+服务配置走 `<数据目录>/cjreg.toml`（或 `-c/--config`）：`[server] public_url / port / permission_mode / require_auth`；
+权限模式与对外地址都改这个文件（没有环境变量配置项，`CJREG_SEED_DEMO` 只是开发调试开关）。
+
 ## agent-browser 在沙箱的使用说明
 
 本工作区（DSH sandbox）里 `$HOME` 只读，agent-browser 有几个坑必须绕过。以下均来自实测。

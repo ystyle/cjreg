@@ -49,7 +49,7 @@
 | # | 差距项 | 来源 | 状态 | 建议 |
 |---|---|---|---|---|
 | A1 | **publisher_id 个人发布路径**：无组织包"谁发布谁可更新"——任意有效 token 可发新包并成为 publisher；新版本自动获得 write；覆盖拒绝（走团队路径） | permission-refinement.md「双路径权限模型」；#22 | **已实现** | `effectivePermission`（max 双路径）+ `isPackagePublisher`；覆盖为原地更新且不转移所有权（design.md §5.3.6） |
-| A2 | **requireAuth 公开/私有开关**：索引/下载是否需认证可配置（私有化部署必需） | permission-refinement.md 权限矩阵；#26 | **已实现** | `CJREG_REQUIRE_AUTH=1` + `guardReadAccess`（401/403 分支，accept session/publish token） |
+| A2 | **requireAuth 公开/私有开关**：索引/下载是否需认证可配置（私有化部署必需） | permission-refinement.md 权限矩阵；#26 | **已实现** | `cjreg.toml` 的 `require_auth = true` + `guardReadAccess`（401/403 分支，accept session/publish token） |
 | A3 | **权限检查流程细节**：超管直通 → 包级 TeamPackage → 组织级 TeamOrganization；发布动态权限（新包=任意有效 token / 新版本=write / 覆盖=overwrite） | team-permission-design.md；publish.go；#14/#27 | **已实现** | 包级/组织级取 max（非"命中即止"）；纳管命名空间不开放认领；组织 ID 0/-1 语义收紧；见 design.md §5.3.6 |
 | A4 | **用户-团队查询端点** `GET /api/admin/users/:id/teams` | team-permission-design.md | 缺失（小） | §5.4.2 补 |
 

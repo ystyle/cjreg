@@ -13,6 +13,7 @@ import stdx.encoding.json.stream.*
 import std.io.*
 import std.collection.*
 import std.convert.*
+import std.time.*
 
 // 发布结果
 public enum PublishOutcome {
@@ -125,23 +126,7 @@ public class PublishService {
             case None => ()
         }
 
-        // 0.5 发布权限（模式 team：团队/组织/包关联 + write；open（默认，内部先用着）仅需有效 token；
-        //     后续需要转团队管理时配置 CJREG_PERMISSION_MODE=team 切换，无需改代码）
-        let authorized = match (publisher) {
-            case Some(u) =>
-                if (this.permissionMode == "team") {
-                    match (this.adminData) {
-                        case Some(ad) => checkPublishPermission(ad, u, urlOrg, urlName)
-                        case None => true
-                    }
-                } else {
-                    true
-                }
-            case None => true
-        }
-        if (!authorized) {
-            return PublishResult(PublishOutcome.Forbidden, 0, "no permission to publish")
-        }
+        // 0.5 发布权限裁决已移至 meta 解析之后（覆盖判定需要 version 信息，见步骤 5）
 
         // 1. 解析官方二进制
         let data = parsePublishData(body)
@@ -170,48 +155,77 @@ public class PublishService {
                 "sha256 mismatch: meta=${metaInfo.sha256sum} actual=${actualSha}")
         }
 
-        // 5. 查同版本是否已存在（冲突/覆盖判定）
+        // 5. 同版本已存在判定 + 权限裁决（必须在 meta 解析之后：覆盖判定需要 version）
+        //    open 模式：有效 token 即发布（现状保留；同版本不同 sha 仍返回 409，不静默覆盖）
+        //    team 模式：双路径裁决（对齐 design.md §5.3.6 / §5.4.3）——
+        //      新包且命名空间未被团队纳管 → 任意有效 token 可认领（首次发布者成为 publisher）
+        //      已被纳管 或 已有版本 → 需 write；覆盖同版本（sha 不同）→ 需 overwrite
         let versions = this.store.listVersions(metaInfo.org, metaInfo.name)
+        var existing: ?PackageDoc = None
         for (d in versions) {
             if (d.version == metaInfo.version && d.deletedAt == 0) {
-                if (d.indexJson.contains(metaInfo.sha256sum)) {
-                    // 同 sha → 幂等（视为已存在，仍可覆盖写入）
-                    return PublishResult(PublishOutcome.Ok, d.id, "already exists (same sha)")
-                }
-                return PublishResult(PublishOutcome.Conflict, d.id,
-                    "version exists with different sha, need overwrite")
+                existing = Some(d)
+                break
+            }
+        }
+        let sameSha = match (existing) {
+            case Some(d) => d.sha256 == actualSha  // 精确比 sha256 字段（避免 meta 缺 sha 时误判幂等）
+            case None => false
+        }
+        // 覆盖 = 同版本已存在且 sha 不同（同 sha 走幂等，不消耗 overwrite）
+        let needOverwrite = existing.isSome() && !sameSha
+        var overwriteAllowed = false
+        if (this.permissionMode == "team") {
+            match (this.adminData) {
+                case Some(ad) =>
+                    let needCheck = versions.size > 0 || isNamespaceGoverned(ad, metaInfo.org, metaInfo.name)
+                    match (publisher) {
+                        case Some(u) =>
+                            if (needCheck && !checkPublishPermission(this.store, ad, u, metaInfo.org, metaInfo.name, needOverwrite)) {
+                                return PublishResult(PublishOutcome.Forbidden, 0, "no permission to publish")
+                            }
+                            overwriteAllowed = needOverwrite
+                        case None => overwriteAllowed = needOverwrite  // 无认证（离线模式）：不裁决
+                    }
+                case None => overwriteAllowed = needOverwrite
             }
         }
 
-        // 6. 制品字节存 blob（sha256 寻址，供发布计划执行推送到目标上游）
-        this.blobStore.put(actualSha, pd.tarball)
-
-        // 7. 入库（全量元数据字段，对齐官方 meta-data 规格）
-        let doc = PackageDoc()
-        doc.organization = metaInfo.org
-        doc.name = metaInfo.name
-        doc.version = metaInfo.version
-        doc.cjcVersion = metaInfo.cjcVersion
-        doc.description = metaInfo.description
-        doc.artifactType = metaInfo.artifactType
-        doc.executable = metaInfo.executable
-        doc.authors = metaInfo.authors
-        doc.repository = metaInfo.repository
-        doc.homepage = metaInfo.homepage
-        doc.documentation = metaInfo.documentation
-        doc.tag = metaInfo.tag
-        doc.category = metaInfo.category
-        doc.license = metaInfo.license
-        doc.metaVersion = metaInfo.metaVersion
-        doc.indexJson = String.fromUtf8(pd.metaData)
-        doc.sha256 = actualSha
-        doc.tarballSize = pd.tarball.size
-        match (publisher) {
-            case Some(u) => doc.publisherId = u.id
+        // 6. 幂等 / 覆盖 / 冲突
+        match (existing) {
+            case Some(d) =>
+                if (sameSha) {
+                    // 同 sha → 幂等（视为已存在，不入库）
+                    return PublishResult(PublishOutcome.Ok, d.id, "already exists (same sha)")
+                }
+                if (!overwriteAllowed) {
+                    return PublishResult(PublishOutcome.Conflict, d.id,
+                        "version exists with different sha, need overwrite")
+                }
+                return this.overwriteVersion(d, metaInfo, pd, actualSha, publisher)
             case None => ()
         }
+
+        // 7. 新版本入库（blob 内容寻址，供发布计划执行推送到目标上游）
+        this.blobStore.put(actualSha, pd.tarball)
+        let doc = PackageDoc()
+        let now = nowMsUtc()
+        fillPackageDoc(doc, metaInfo, String.fromUtf8(pd.metaData), actualSha, pd.tarball.size,
+            publisherIdOf(publisher), now, now)
         this.store.save(doc)
         return PublishResult(PublishOutcome.Ok, doc.id, "published")
+    }
+
+    // 覆盖已存在版本（调用方已完成 overwrite 裁决）：更新原文档而非新建，保持 id/createdAt 稳定
+    // 注意：包名所有权（publisherId）不因覆盖转移——首次发布者始终是 publisher；覆盖者由管理日志追责
+    func overwriteVersion(doc: PackageDoc, metaInfo: MetaInfo, pd: PublishData, sha: String, publisher: ?User): PublishResult {
+        this.blobStore.put(sha, pd.tarball)
+        let now = nowMsUtc()
+        let created = if (doc.createdAt > 0) { doc.createdAt } else { now }
+        let owner = if (doc.publisherId != 0) { doc.publisherId } else { publisherIdOf(publisher) }
+        fillPackageDoc(doc, metaInfo, String.fromUtf8(pd.metaData), sha, pd.tarball.size, owner, now, created)
+        this.store.save(doc)
+        return PublishResult(PublishOutcome.Ok, doc.id, "overwritten")
     }
 }
 
@@ -359,51 +373,156 @@ func permLevel(p: String): Int64 {
     }
 }
 
-// 用户对 (org, name) 是否具备发布权限（write 及以上）
-public func checkPublishPermission(adminData: AdminDataStore, user: User, org: String, name: String): Bool {
-    // 平台管理员豁免（平台所有者）
-    if (user.isAdmin) {
-        return true
-    }
-    // 团队路径：用户是团队成员 && （团队关联该包 || 团队关联该组织）&& 团队权限 >= write
-    let teams = adminData.listTeams()
-    for (t in teams) {
-        let memberIds = adminData.listTeamMemberIds(t.id)
-        var isMember = false
-        for (uid in memberIds) {
-            if (uid == user.id) {
-                isMember = true
-                break
-            }
-        }
-        if (!isMember) {
-            continue
-        }
-        // 团队-包关联（organization 为空串表示无组织包）
-        let pkgs = adminData.listTeamPackages(t.id)
-        for (p in pkgs) {
-            if (p.organization == org && p.packageName == name && permLevel(t.permission) >= 2) {
-                return true
-            }
-        }
-        // 团队-组织关联（organizationId=0 表示无组织）
-        let targetOrgId: Int64 = if (org.isEmpty()) { 0 } else { orgIdByName(adminData, org) }
-        let orgs = adminData.listTeamOrganizations(t.id)
-        for (o in orgs) {
-            if (o.organizationId == targetOrgId && permLevel(t.permission) >= 2) {
-                return true
-            }
-        }
-    }
-    false
+// 当前时刻（UTC 毫秒）
+func nowMsUtc(): Int64 {
+    DateTime.nowUTC().toUnixTimeStamp().toMilliseconds()
 }
 
-// 组织名 → id（不存在返回 0，与「无组织」的 0 语义一致）
+// 发布者用户 ID（未认证 → 0）
+func publisherIdOf(publisher: ?User): Int64 {
+    match (publisher) {
+        case Some(u) => u.id
+        case None => 0
+    }
+}
+
+// 组织名 → 团队关联用的组织 ID：空串 = 无组织（0）；非空但未登记 = -1（不匹配任何组织关联）
+// 0 专表「无组织包」：未知组织名不得落到 0，否则会被「关联无组织」的团队越权覆盖
 func orgIdByName(adminData: AdminDataStore, org: String): Int64 {
+    if (org.isEmpty()) {
+        return 0
+    }
     for (o in adminData.listOrgs()) {
         if (o.name == org) {
             return o.id
         }
     }
-    0
+    return -1
+}
+
+// 团队成员判定
+public func isTeamMember(adminData: AdminDataStore, teamId: Int64, userId: Int64): Bool {
+    for (uid in adminData.listTeamMemberIds(teamId)) {
+        if (uid == userId) {
+            return true
+        }
+    }
+    return false
+}
+
+// 该用户是否为 (org, name) 的发布者（任一版本 publisherId 命中，含软删版本）
+public func isPackagePublisher(store: PackageStore, org: String, name: String, userId: Int64): Bool {
+    for (d in store.listVersions(org, name)) {
+        if (d.publisherId == userId) {
+            return true
+        }
+    }
+    return false
+}
+
+// 命名空间是否已被团队纳管：存在 TeamOrganization 关联该组织，或 TeamPackage 关联该包名
+// 纳管后不再开放「无主认领」——新包也需 write 权限（自由命名空间仍可由首个发布者认领）
+public func isNamespaceGoverned(adminData: AdminDataStore, org: String, name: String): Bool {
+    let targetOrgId = orgIdByName(adminData, org)
+    for (t in adminData.listTeams()) {
+        for (p in adminData.listTeamPackages(t.id)) {
+            if (p.organization == org && p.packageName == name) {
+                return true
+            }
+        }
+        if (targetOrgId >= 0) {
+            for (o in adminData.listTeamOrganizations(t.id)) {
+                if (o.organizationId == targetOrgId) {
+                    return true
+                }
+            }
+        }
+    }
+    return false
+}
+
+// 用户对 (org, name) 的有效权限级别 = max(个人发布路径, 团队路径)（对齐 design.md §5.4.3）
+//   平台管理员 → overwrite（直通）
+//   个人发布路径：该用户是该包任一版本的发布者 → write（覆盖仍属团队 overwrite 权限）
+//   团队路径：团队成员 && （TeamPackage 包级 || TeamOrganization 组织级）→ 团队 permission（取最高）
+public func effectivePermission(store: PackageStore, adminData: AdminDataStore, user: User, org: String, name: String): Int64 {
+    if (user.isAdmin) {
+        return 3
+    }
+    var level: Int64 = 0
+    if (isPackagePublisher(store, org, name, user.id)) {
+        level = 2
+    }
+    let targetOrgId = orgIdByName(adminData, org)
+    for (t in adminData.listTeams()) {
+        let teamLevel = permLevel(t.permission)
+        if (teamLevel <= level) {
+            continue  // 团队权限不高于现有水平，命中也不影响结果
+        }
+        if (!isTeamMember(adminData, t.id, user.id)) {
+            continue
+        }
+        var hit = false
+        for (p in adminData.listTeamPackages(t.id)) {
+            if (p.organization == org && p.packageName == name) {
+                hit = true
+                break
+            }
+        }
+        if (!hit && targetOrgId >= 0) {
+            for (o in adminData.listTeamOrganizations(t.id)) {
+                if (o.organizationId == targetOrgId) {
+                    hit = true
+                    break
+                }
+            }
+        }
+        if (hit) {
+            level = teamLevel
+        }
+    }
+    return level
+}
+
+// 发布裁决：新包/新版本需 write 及以上；覆盖已存在版本需 overwrite
+public func checkPublishPermission(store: PackageStore, adminData: AdminDataStore, user: User,
+                                   org: String, name: String, overwrite: Bool): Bool {
+    let need: Int64 = if (overwrite) { 3 } else { 2 }
+    effectivePermission(store, adminData, user, org, name) >= need
+}
+
+// 读裁决（requireAuth=true 时的下载/索引）：read 及以上
+public func checkReadPermission(store: PackageStore, adminData: AdminDataStore, user: User,
+                                org: String, name: String): Bool {
+    effectivePermission(store, adminData, user, org, name) >= 1
+}
+
+// 用 meta 填充包文档（新发布/覆盖共用）：deletedAt 归零、记录 created/updated 时间、清掉回源痕迹
+func fillPackageDoc(doc: PackageDoc, metaInfo: MetaInfo, indexJson: String, sha: String, tarballSize: Int64,
+                    publisherId: Int64, now: Int64, createdAt: Int64): Unit {
+    doc.organization = metaInfo.org
+    doc.name = metaInfo.name
+    doc.version = metaInfo.version
+    doc.cjcVersion = metaInfo.cjcVersion
+    doc.description = metaInfo.description
+    doc.artifactType = metaInfo.artifactType
+    doc.executable = metaInfo.executable
+    doc.authors = metaInfo.authors
+    doc.repository = metaInfo.repository
+    doc.homepage = metaInfo.homepage
+    doc.documentation = metaInfo.documentation
+    doc.tag = metaInfo.tag
+    doc.category = metaInfo.category
+    doc.license = metaInfo.license
+    doc.metaVersion = metaInfo.metaVersion
+    doc.indexJson = indexJson
+    doc.sha256 = sha
+    doc.tarballSize = tarballSize
+    doc.publisherId = publisherId
+    doc.upstreamId = 0
+    doc.upstreamName = ""
+    doc.readme = ""
+    doc.deletedAt = 0
+    doc.createdAt = createdAt
+    doc.updatedAt = now
 }

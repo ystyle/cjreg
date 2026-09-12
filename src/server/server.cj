@@ -6,6 +6,7 @@ import tang.*
 import ystyle::cjreg.protocol.*
 import ystyle::cjreg.store.*
 import ystyle::cjreg.auth.*
+import ystyle::cjreg.auth.model.*
 import ystyle::cjreg.config.*
 import std.collection.*
 import stdx.encoding.json.stream.*
@@ -30,7 +31,14 @@ public func buildServer(
         case Some(v) => if (v == "team") { "team" } else { "open" }
         case None => "open"
     }
-    let publishSvc = PublishService(store, blobStore, auth: publishAuth, adminData: Some(AdminDataStore(store.storm)), permissionMode: permMode)
+    // 读鉴权开关（私有仓）：CJREG_REQUIRE_AUTH=1/true → 下载/索引需有效 token + 团队/个人 read 权限
+    let requireReadAuth = match (getVariable("CJREG_REQUIRE_AUTH")) {
+        case Some(v) => v == "1" || v == "true"
+        case None => false
+    }
+    // 权限数据（团队/组织/包关联）：发布裁决与读裁决共用同一实例
+    let permData = AdminDataStore(store.storm)
+    let publishSvc = PublishService(store, blobStore, auth: publishAuth, adminData: Some(permData), permissionMode: permMode)
     let indexSvc = IndexService(store)
     let downloadSvc = DownloadService(store)
     // 代理回源服务（传入上游服务时启用；不可变，供 handler lambda 捕获）
@@ -49,11 +57,8 @@ public func buildServer(
         let name = ctx.param("name")
         let org = ctx.query("organization") ?? ""
         let body = ctx.bodyRaw()
-        // 规格：Authorization: ${publishToken}（发布用户 token）
-        let token = match (ctx.getHeader("Authorization")) {
-            case Some(v) => v
-            case None => ""
-        }
+        // 规格：Authorization: ${publishToken}（发布用户 token；兼容 "Bearer <token>" 写法）
+        let token = extractAuthToken(ctx)
         let result = publishSvc.publish(org, name, body, token)
         match (result.outcome) {
             case PublishOutcome.Ok =>
@@ -80,6 +85,16 @@ public func buildServer(
         let name = ctx.param("name")
         let version = ctx.param("version")
         let org = ctx.query("organization") ?? ""
+        // 读鉴权（requireAuth=true）：token + read 权限
+        if (requireReadAuth) {
+            match (publishAuth) {
+                case Some(authSvc) =>
+                    if (!guardReadAccess(ctx, authSvc, permData, store, org, name)) {
+                        return
+                    }
+                case None => ()
+            }
+        }
         // 计数（本地有该版本才计）
         downloadSvc.find(org, name, version)
         match (proxySvc) {
@@ -105,6 +120,16 @@ public func buildServer(
         if (name.size < 3) {
             ctx.status(400u16).writeStringWithCode(400u16, "{\"error\":\"invalid package name\"}")
             return
+        }
+        // 读鉴权（requireAuth=true）：token + read 权限
+        if (requireReadAuth) {
+            match (publishAuth) {
+                case Some(authSvc) =>
+                    if (!guardReadAccess(ctx, authSvc, permData, store, org, name)) {
+                        return
+                    }
+                case None => ()
+            }
         }
         let local = indexSvc.generate(org, name, false)
         if (!local.isEmpty()) {
@@ -143,6 +168,41 @@ public func buildServer(
     }
 
     return app
+}
+
+// 从 Authorization 头取 token：兼容官方规格的裸 token 与 HTTP 惯用的 "Bearer <token>"
+func extractAuthToken(ctx: TangHttpContext): String {
+    let raw = match (ctx.getHeader("Authorization")) {
+        case Some(v) => v
+        case None => ""
+    }
+    let trimmed = raw.trimAscii()
+    if (trimmed.startsWith("Bearer ")) {
+        return trimmed[7..trimmed.size].trimAscii()
+    }
+    trimmed
+}
+
+// 读路径鉴权（requireAuth=true 的下载/索引）：token 缺失/无效 → 401；无 read 权限 → 403
+// 返回 true = 放行；false = 已写入拒绝响应（调用方直接 return）
+func guardReadAccess(ctx: TangHttpContext, authSvc: AuthService, adminData: AdminDataStore,
+                     store: PackageStore, org: String, name: String): Bool {
+    let token = extractAuthToken(ctx)
+    if (token.isEmpty()) {
+        ctx.status(401u16).writeStringWithCode(401u16, "{\"error\":\"missing token\"}")
+        return false
+    }
+    match (authSvc.validateAuthToken(token)) {
+        case Some(user) =>
+            if (!checkReadPermission(store, adminData, user, org, name)) {
+                ctx.status(403u16).writeStringWithCode(403u16, "{\"error\":\"no permission to read\"}")
+                return false
+            }
+            return true
+        case None =>
+            ctx.status(401u16).writeStringWithCode(401u16, "{\"error\":\"invalid token\"}")
+            return false
+    }
 }
 
 // 兼容：无管理 API / 无上游的构建

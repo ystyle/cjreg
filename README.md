@@ -66,11 +66,25 @@ POST   /api/admin/publish-plans/execute  发布计划执行（推送包到目标
 ### 官方协议端点
 
 ```
-POST  /pkg/:name[?organization=]    发布（官方二进制 meta+tar）
+POST  /pkg/:name[?organization=]    发布（官方二进制 meta+tar；Authorization: 发布 token）
 GET   /pkg/:name/:version           下载制品（本地无则回源上游）
 GET   /index/:mo/:du/:name          索引 NDJSON（本地无则回源上游）
 GET   /api/health                   健康检查
 ```
+
+### 权限开关（环境变量）
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `CJREG_PERMISSION_MODE` | `open` | `open`：有效发布 token 即可发布；`team`：启用双路径裁决（见下） |
+| `CJREG_REQUIRE_AUTH` | 关 | `1`/`true`：下载/索引也需有效 token + `read` 权限（私有仓） |
+
+**team 模式双路径裁决**（`docs/design.md` §5.4.3）：
+
+- **新包**：命名空间未被团队纳管（无 `TeamOrganization` 关联该组织 / `TeamPackage` 关联该包）→ 任意有效 token 可认领，首次发布者成为 `publisherId`
+- **已有包新版本**：`publisherId` 命中（个人发布路径）**或** 所在团队对该包/该组织有 `write` → 放行，否则 403
+- **覆盖已存在版本**（同版本不同 sha）：需团队 `overwrite`；`publisher` 自身不具备覆盖权，覆盖也不转移包名所有权
+- `open` 模式下同版本不同 sha 不静默覆盖，仍返回 409
 
 ## 双仓发布计划 e2e（验证）
 

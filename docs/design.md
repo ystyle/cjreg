@@ -203,9 +203,10 @@ GET /api/admin/resolve?name={module}&org={org}&require={版本需求}&strict={tr
 - 统一错误响应体：`{"error": "<message>"}`（对齐 cjrepo customErrorHandler）
 - **覆盖 vs 409 语义**：同版本重复发布时——有 `overwrite` 权限 → 覆盖（先删旧记录再入库，200）；无 `overwrite` 权限 → 403（无权限）；与已有制品 sha256 完全一致 → 幂等 200 或 409（按配置）
 
-**本地仓读写鉴权开关（requireAuth，私有化必需）**：
-- `requireAuth=false`（默认）：`GET /pkg`、`GET /index` 公开（无需认证）；`POST /pkg` 仍需发布 token
-- `requireAuth=true`：下载/索引也需有效 token，且做团队 `read` 权限检查——私有仓部署建议开启
+**本地仓读写鉴权开关（requireAuth，私有化必需，已实现）**：
+- `CJREG_REQUIRE_AUTH` 未设置/`0`（默认）：`GET /pkg`、`GET /index` 公开（无需认证）；`POST /pkg` 仍需发布 token
+- `CJREG_REQUIRE_AUTH=1`（或 `true`）：下载/索引也需有效 token（session 或 publish token，裸 token 与 `Bearer <token>` 均可），且做 `read` 权限检查（管理员直通、publisher 可读自己的包）——私有仓部署建议开启
+- 权限模式由 `CJREG_PERMISSION_MODE` 控制：`open`（默认）/ `team`
 
 **下载响应头**：`Content-Type: application/x-gzip` + `Content-Disposition: attachment; filename="{name}-{version}.cjp"`
 
@@ -319,24 +320,27 @@ POST /api/admin/login {username, password}
 | validatePublishToken | 用户发布 token 可发布；错误 token 拒绝 |
 | createUser/changePassword/resetPublishToken | 普通用户全生命周期 |
 
-#### 5.3.6 权限检查流程（对齐 cjrepo 双路径）
+#### 5.3.6 权限检查流程（双路径，已实现）
 
 ```
-请求（发布/下载/索引/管理）→ 提取 token → 获取用户
-  1. 超级管理员（isAdmin）→ 直接放行（全部操作）
-  2. 发布/下载/索引按资源查权限：
-     a. 先查 TeamPackage（包级权限）→ 命中即用
-     b. 无包级 → 查 TeamOrganization（组织级权限）
-     c. 都无 → 走"个人发布路径"（仅发布场景，见下）
-  3. 权限级别满足 → 放行；否则 403
+请求（发布/下载/索引）→ 提取 token → 获取用户（裸 token 与 "Bearer <token>" 均接受）
+  1. 超级管理员（isAdmin）→ 有效权限级别 = overwrite（直接放行）
+  2. 计算用户对 (org, name) 的**有效权限级别** = max(个人发布路径, 团队路径)：
+     个人发布路径：该用户是该包任一版本的 publisher（含软删版本）→ write(2)
+     团队路径：用户是该团队成员 && （TeamPackage 关联该包 || TeamOrganization 关联该组织）→ 团队 permission，取所有命中团队的**最高**值
+  3. 按操作要求判定：发布新包/新版本需 write(2) 及以上；覆盖已存在版本需 overwrite(3)；下载/索引（requireAuth）需 read(1) 及以上
+  4. 不满足 → 403；未认证（requireAuth）→ 401
 ```
 
-**发布动态权限（对齐 cjrepo）**：
-- **新包**（该 name 无任何版本）：任意有效发布 token 即可 → 记录 `publisherId`，首次发布者自动成为 publisher
-- **已有包新版本**：publisher 自动获得 write；非 publisher 需团队 write 权限
-- **覆盖已存在版本**：需 `overwrite` 权限（publisher 无覆盖权，走团队路径）；无权限 → 403
+**组织 ID 匹配规则**：`org` 为空串 = 无组织（关联 ID `0`）；`org` 非空但未在组织表中登记 = `-1`，**不匹配任何** `TeamOrganization`（避免「关联无组织」的团队越权到任意未登记组织）。
 
-**个人发布路径（无组织包）**：`publisherId` 驱动——包级权限裁决 = max(团队权限, 个人 publisher 权限)，任一满足即放行。
+**发布动态权限（已实现，team 模式）**：
+- **新包**（该 `org::name` 无任何版本）：命名空间**未被纳管**时任意有效发布 token 即可认领 → 记录 `publisherId`，首次发布者自动成为 publisher；若该组织或该包名已被任一团队关联（纳管），则需 `write`
+- **已有包新版本**：`publisherId` 命中（个人发布路径）或团队 `write` → 放行；否则 403
+- **覆盖已存在版本**（同版本、sha 不同）：需团队 `overwrite`；**publisher 自身没有覆盖权**（覆盖属团队权限）。覆盖为**原地更新**同一文档（保持 `id`/`createdAt`、刷新 `updatedAt`），且**不转移包名所有权**（`publisherId` 保持首次发布者）；同 sha 重复发布仍为幂等 200
+- **open 模式**（默认）：有效 token 即发布；同版本不同 sha **不静默覆盖**，仍返回 409
+
+**读鉴权开关（`CJREG_REQUIRE_AUTH=1/true`，已实现）**：`GET /pkg`、`GET /index` 需有效 token（session 或 publish token）+ 对资源的 `read` 权限（管理员直通、publisher 可读自己的包）；未开启时两个端点公开。
 
 ### 5.4 团队管理（对齐 cjrepo）
 
@@ -362,11 +366,13 @@ TeamMember        { id, teamId, userId }
 | `GET/PUT /api/admin/teams/:id/members` | 团队-成员关联 |
 | `GET /api/admin/users/:id/teams` | 用户所属团队列表（A4） |
 
-#### 5.4.3 权限语义
+#### 5.4.3 权限语义（已实现，见 §5.3.6 裁决细节）
 
-- 用户对包的操作权限 = max(个人 publisher 角色, 所在团队对该包/所属组织的 permission)
-- `read`：可下载/查看；`write`：可发布新版本；`overwrite`：可覆盖已存在版本
-- 检查顺序与发布动态权限见 §5.3.6（包级 TeamPackage → 组织级 TeamOrganization → 个人发布路径）
+- 用户对包的操作权限级别 = `max(个人发布路径 = write, 团队对该包/该组织的 permission)`；`isAdmin` = overwrite
+- `read(1)`：可下载/查看；`write(2)`：可发布新版本；`overwrite(3)`：可覆盖已存在版本
+- 团队路径：`TeamPackage`（包级）与 `TeamOrganization`（组织级）**都参与裁决并取最高**——不用「包级优先命中即止」，避免多团队并存时因遍历顺序误拒
+- 实现位置：`src/server/publish_service.cj`（`effectivePermission` / `checkPublishPermission` / `checkReadPermission` / `isNamespaceGoverned`）
+- 已知边界：团队成员一旦发布过该包即成为该包 publisher（个人路径 write），退出团队后仍保留 write —— 与 cjrepo 的 per-version `PublisherID` 语义一致；如需收紧（仅首次发布者为 owner）作为后续决策项
 
 ### 5.5 发布计划（对齐 cjrepo，分析能力复用 cjdep）
 

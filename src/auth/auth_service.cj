@@ -123,6 +123,16 @@ public class AuthService {
         return Some(user)
     }
 
+    // 读路径 token 校验（requireAuth=true 时的下载/索引）：session 或 publish token 均可
+    // （cjpm 下载侧通常只有 cangjie-repo.toml 里的 publish token，故两种都接受）
+    public func validateAuthToken(token: String): ?User {
+        match (this.validateSessionToken(token)) {
+            case Some(u) => return Some(u)
+            case None => ()
+        }
+        this.validatePublishToken(token)
+    }
+
     // ===== 管理员安全约束 =====
 
     // 启用状态的管理员数量（「最后一个管理员」保护的判定依据）

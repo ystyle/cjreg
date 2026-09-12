@@ -14,7 +14,10 @@ ADMIN_USER="admin"
 ADMIN_PASS="AdminPass1"
 
 cd "$ROOT"
-eval "$(cjvs env zsh)" && eval "$(cjvs stdx-env zsh)"
+# 仓颉环境：本机用 cjvs；CI（GitHub Actions + setup-cangjie）已就绪，可跳过
+if command -v cjvs >/dev/null 2>&1; then
+  eval "$(cjvs env zsh)" && eval "$(cjvs stdx-env zsh)"
+fi
 
 # 清理并构建
 rm -rf .smoke/A .smoke/B tests/pkgs/*/.cache tests/pkgs/*/target

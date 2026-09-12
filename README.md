@@ -35,17 +35,31 @@ cjpm test -j 16 --no-progress
 
 ## 快速开始（私有仓）
 
+**方式一：Docker Compose（推荐）**
+
+```bash
+git clone https://atomgit.com/ystyle/cjreg && cd cjreg
+export ADMIN_PASS='YourPass'
+bash scripts/docker-deploy.sh        # 编译 → 构建镜像 → init → 启动 → 健康检查
+# 门户 http://localhost:8060/    管理后台 http://localhost:8060/admin
+```
+
+**方式二：手动（裸机 / systemd）**
+
 ```bash
 # 1. 构建
 eval "$(cjvs env zsh)" && eval "$(cjvs stdx-env zsh)"
 cjpm build -j 16
 
-# 2. 初始化（首个管理员 + 默认官方上游）
+# 2. 初始化（首个管理员 + 默认官方上游 + 生成 cjreg.toml）
 ./target/release/bin/ystyle::cjreg init -d ./data --username admin --password YourPass
 
 # 3. 启动
 ./target/release/bin/ystyle::cjreg serve -p 8060 -d ./data
 ```
+
+> Docker/Compose/手动三种部署形态、卷与环境变量、优雅关闭与运维命令：
+> [docs-site/deploy](docs-site/deploy/index.md)（在线站点 `docs-site/`，VitePress 构建）。
 
 ### 管理 API（HTTP）
 
@@ -161,6 +175,9 @@ app ──→ encryptUtils ──→ mathUtils, strUtils
 - 认证：pbkdf2（用户名密码）+ 会话/发布 token
 
 ## 文档
+
+- **在线文档站**：<https://ystyle.top/cjreg/>（VitePress，源码在 `docs-site/`，
+  由 `.github/workflows/docs-deploy.yml` 自动部署到 GitHub Pages + 华为云 CDN 刷新）
 
 - 设计：[docs/design.md](docs/design.md)
 - 差距与实施对照：[docs/gap-analysis.md](docs/gap-analysis.md)

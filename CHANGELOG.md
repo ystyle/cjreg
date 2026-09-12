@@ -86,6 +86,13 @@
 - **优雅关闭**：`serve`/`admin-ui` 注册 SIGINT/SIGTERM（`Ctrl+C` / `docker stop` / `systemctl stop`）→
   先停 HTTP 服务 → 关闭数据库（flush memtable 落盘）→ 正常退出（exit 0）；重复信号幂等
 - **请求体上限可配**：`cjreg.toml` 的 `max_request_bytes`（默认 500 MiB，`-1` 不限）——stdx 默认仅 2 MB，会让大包发布被拒
+- **Docker / Compose 部署**：`Dockerfile`（archlinux + liburing/tzdata/ca-certificates、非 root、健康检查、
+  `STOPSIGNAL SIGTERM`）、`docker-compose.yml`（卷 / 端口 / GC 环境变量 / `stop_grace_period`）、
+  `scripts/docker-deploy.sh` 一键部署脚本；容器内实测优雅关闭与卷数据留存
+- **CI / Release 工作流**（GitHub Actions，供镜像仓使用）：构建 + 单测 + 覆盖率 + 双仓 e2e + 文档站构建 +
+  容器冒烟；Release 触发产出二进制并推送 `ghcr.io` 镜像
+- **文档站自动部署**：`docs-deploy.yml` → GitHub Pages（`DOCS_BASE=/cjreg/`）+ 华为云 CDN 缓存刷新，
+  发布地址 <https://ystyle.top/cjreg/>
 - **内存说明文档化**：badger arena（2×memTableSize）+ 仓颉 GC 堆默认 256 MB 的构成，以及 `cjHeapSize`/`cjGCThreshold`/`cjGCInterval` 调参
 - `--static` 静态编译单二进制；多 target 配置（Linux x86_64/aarch64、macOS、Windows、OpenHarmony）
 - 数据目录即数据：备份/迁移 = 拷贝目录

@@ -86,11 +86,23 @@ git push origin v0.1.0-submission     # 决赛写差异说明时以此 tag 为�
 - 验收：中断/恢复演练（kill 进程后计划置 `pending`）、等待索引确认（版本出现**且 SHA256 一致**）用例、SSE 事件序列单测。
 - 演示：管理端发起计划，页面实时滚动进度；手动跳过某一项。
 
-### 迭代 3：容器化与 CI
+### 迭代 3：容器化增强与 CI 完善（基础版已提前到初赛交付）
 
-- 目标：`Dockerfile`（多阶段：构建 + 静态二进制运行）+ `docker-compose.yml`（restart: always、数据卷、`cjHeapSize` 环境变量示例）；GitHub/AtomGit Actions 跑 `cjpm build` + `cjpm test` + `tests/e2e.sh`。
-- 验收：`docker compose up` 一键起服；CI 徽章全绿；镜像体积记录。
-- 演示：`docker compose up -d` → 浏览器访问 → `docker compose stop`（验证优雅关闭日志）。
+**初赛已交付**：`Dockerfile`（archlinux + liburing/tzdata/ca-certificates，非 root uid 1000，宿主构建/镜像打包）、
+`docker-compose.yml`（卷 `./data:/data`、`CJREG_PORT`/`CJREG_HEAP_SIZE` 等环境变量、`stop_grace_period: 30s`、
+健康检查）、`scripts/docker-deploy.sh` 一键脚本；本地已实测「init → up → 健康 → `docker compose stop` 优雅关闭 → 重启数据留存」。
+
+**决赛增强**：
+- **自包含构建**：`Dockerfile.build` 多阶段（仓颉工具链镜像 + cjxt 源码/中心仓版本），使评审无需本地工具链即可构建；
+- **多架构镜像**：`linux/amd64` + `linux/arm64`（buildx + QEMU，或原生 arm runner）；
+- **镜像瘦身**：底座换 `debian:slim`（`liburing2`）/ distroless，记录体积对比（当前 ~500 MB）；
+- **发布流水线**：Release 触发 → 二进制 tar.gz + 推 `ghcr.io/<owner>/cjreg:<tag>`；CI 增加 Docker 冒烟（已就绪）；
+- **部署文档**：反向代理（Nginx/Caddy）+ HTTPS 示例、K8s 清单（可选）；
+- **文档站自动部署已提前完成**：`docs-deploy.yml` → GitHub Pages + 华为云 CDN 刷新
+  （发布地址 <https://ystyle.top/cjreg/>），决赛可做多语言/版本化文档。
+
+- 验收：`ghcr.io` 镜像 `docker run` 即用；两种架构均可运行；镜像体积与初赛对比有量化下降。
+- 演示：`docker compose up -d --build` → 浏览器访问 → `docker compose stop`（优雅关闭日志）。
 
 ### 迭代 4：正式性能基准报告
 
@@ -147,7 +159,8 @@ git push origin v0.1.0-submission     # 决赛写差异说明时以此 tag 为�
 | 公开只读 API：`/api/stats`、`/api/packages`、`/api/packages/:name`、`/api/packages/:name/:version`、`/api/organizations` | 完成度 / 实用性 | 待做 |
 | 组织 CRUD REST、上游连通性测试端点 `POST /api/admin/upstreams/:id/test` | 完成度 | 待做 |
 | 包三级删除闭环（恢复 / 硬删入口 + 审计） | 完成度 | 待做 |
-| VitePress 文档站 | 文档完善度 15 分 | 进行中 |
+| VitePress 文档站 | 文档完善度 15 分 | ✅ 已完成（docs-site/，构建通过） |
+| Docker / Compose 部署 + 一键脚本 + CI/Release 工作流 | 完成度 / 可复现性 | ✅ 已完成（本地容器冒烟通过；Docker 增强留决赛迭代 3） |
 | 演示视频（核心功能 + 使用链路）、统一作品提交模板（已提交） | 质量门槛（缺则不合格） | 待录 |
 | 覆盖率报告 + 低成本测试补强（handler / 公开页渲染） | 代码质量 30 分 | 待做 |
 

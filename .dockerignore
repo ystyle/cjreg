@@ -1,0 +1,16 @@
+# Docker 构建上下文裁剪（镜像只需二进制 + public/）
+# 注意：必须保留宿主构建产物 target/release/bin/ystyle::cjreg
+.git
+.github
+.smoke
+.cache
+data
+docs
+docs-site
+tests
+target/debug
+target/release/*.d
+target/release/bin/*.log
+*.gcda
+*.gcno
+cov_output

@@ -4,7 +4,16 @@
 
 ## 1. 安装
 
-从发布页下载对应平台的静态二进制（Linux x86_64 / aarch64 等），或自行构建：
+**推荐 Docker Compose 一键部署**（详见 [Docker 部署](/deploy/docker)）：
+
+```shell
+export ADMIN_PASS='<强口令>'
+bash scripts/docker-deploy.sh
+```
+
+也可以从发布页下载静态二进制自行部署：
+
+从发布页下载对应平台的静态二进制（Linux x86_64），或自行构建：
 
 ```shell
 eval "$(cjvs env zsh)" && eval "$(cjvs stdx-env zsh)"

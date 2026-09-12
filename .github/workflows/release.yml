@@ -1,0 +1,104 @@
+name: Release
+
+# 触发：在 GitHub 发布 Release（tag）时构建产物并上传
+# 主仓库在 AtomGit，本工作流供 GitHub 镜像/发布使用
+on:
+  release:
+    types: [published]
+
+env:
+  CJXT_REPO: ${{ vars.CJXT_REPO || 'ystyle/cjxt' }}
+
+jobs:
+  linux-amd64:
+    name: Linux amd64 二进制
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout cjreg
+        uses: actions/checkout@v4
+        with:
+          path: cjreg
+      - name: Checkout cjxt（path 依赖）
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CJXT_REPO }}
+          path: cjxt
+      - uses: Zxilly/setup-cangjie@v3
+        with:
+          channel: sts
+          version: 1.1.3
+          components: stdx
+
+      - name: Build
+        working-directory: cjreg
+        env:
+          CANGJIE_STDX_PATH: ${{ env.CANGJIE_STDX_PATH_STATIC }}/stdx
+        run: |
+          VERSION="${{ github.ref_name }}"
+          cjpm build -j 16
+          mkdir -p dist
+          cp "target/release/bin/ystyle::cjreg" "dist/cjreg"
+          tar -czf "dist/cjreg_${VERSION}_linux_amd64.tar.gz" -C dist cjreg
+          # 运行所需静态资源（serveStatic("/css", "public/css")）
+          tar -czf "dist/cjreg_${VERSION}_public.tar.gz" -C . public
+          ls -lh dist
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload ${{ github.ref_name }} cjreg/dist/* --repo ${{ github.repository }} --clobber
+
+  container:
+    name: 容器镜像（ghcr.io）
+    runs-on: ubuntu-26.04
+    needs: linux-amd64
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # 目录布局必须与本地一致：cjreg 与 cjxt 同级（cjpm.toml 的 cjxt = { path = "../cjxt" }）
+      - name: Checkout cjreg
+        uses: actions/checkout@v4
+        with:
+          path: cjreg
+
+      - name: Checkout cjxt（path 依赖）
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CJXT_REPO }}
+          path: cjxt
+
+      - uses: Zxilly/setup-cangjie@v3
+        with:
+          channel: sts
+          version: 1.1.3
+          components: stdx
+
+      - name: 构建二进制（供镜像打包）
+        working-directory: cjreg
+        env:
+          CANGJIE_STDX_PATH: ${{ env.CANGJIE_STDX_PATH_STATIC }}/stdx
+        run: cjpm build -j 16
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: cjreg
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

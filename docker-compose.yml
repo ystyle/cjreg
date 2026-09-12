@@ -1,0 +1,48 @@
+# cjreg — Docker Compose 部署（默认部署方式）
+#
+# 用法：
+#   eval "$(cjvs env zsh)" && eval "$(cjvs stdx-env zsh)"
+#   cjpm build -j 16                       # 1) 宿主工具链编译（见 Dockerfile 说明）
+#   docker compose up -d --build           # 2) 构建镜像并启动
+#   open http://localhost:8060/            # 门户；/admin 管理后台
+#
+# 一键脚本：bash scripts/docker-deploy.sh
+#
+# 首次启动前需初始化（创建管理员 + 默认上游 + 生成 cjreg.toml）：
+#   docker compose run --rm cjreg /app/cjreg init -d /data --username admin --password '<强口令>'
+#
+# 配置：数据卷 ./data 里同时存放 cjreg.db、blobs/ 与 cjreg.toml（改完配置 restart 即可）。
+
+services:
+  cjreg:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cjreg:latest
+    container_name: cjreg
+    restart: unless-stopped
+
+    ports:
+      - "${CJREG_PORT:-8060}:8060"
+
+    volumes:
+      # 数据 + 配置：备份/迁移 = 拷这个目录
+      - ./data:/data
+
+    environment:
+      # 仓颉 GC 堆（默认上限 256MB；发布大包/高写入负载时调大）
+      cjHeapSize: "${CJREG_HEAP_SIZE:-2GB}"
+      cjGCThreshold: "${CJREG_GC_THRESHOLD:-1GB}"
+      cjGCInterval: "100ms"
+      # 开发调试开关：启动时向空库注入演示包（生产勿开）
+      # CJREG_SEED_DEMO: "1"
+
+    # 优雅关闭：SIGTERM 后给「停服 → flush 落盘」留足时间
+    stop_grace_period: 30s
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8060/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s

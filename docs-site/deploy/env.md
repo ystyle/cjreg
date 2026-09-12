@@ -28,6 +28,11 @@ require_auth = false
 max_request_bytes = 524288000
 ```
 
+## 容器部署（Docker Compose）
+
+容器里配置同样来自数据卷中的 `cjreg.toml`（`./data/cjreg.toml`），改完 `docker compose restart` 生效。
+compose 另暴露几个部署层开关（宿主端口、GC 堆），见 [Docker 部署](/deploy/docker#_5-环境变量)。
+
 ## 环境变量
 
 | 变量 | 作用 |

@@ -410,14 +410,23 @@ public func isTeamMember(adminData: AdminDataStore, teamId: Int64, userId: Int64
     return false
 }
 
-// 该用户是否为 (org, name) 的发布者（任一版本 publisherId 命中，含软删版本）
-public func isPackagePublisher(store: PackageStore, org: String, name: String, userId: Int64): Bool {
+// 包名所有者：最早一条版本记录（id 最小，含软删）的 publisherId（0 = 无版本/无主）
+// 所有权只属于「首个发布者」——团队协作发版不会产生新 owner；硬删最早记录才会转移
+public func packageOwner(store: PackageStore, org: String, name: String): Int64 {
+    var ownerId: Int64 = 0
+    var minId: Int64 = 0
     for (d in store.listVersions(org, name)) {
-        if (d.publisherId == userId) {
-            return true
+        if (minId == 0 || d.id < minId) {
+            minId = d.id
+            ownerId = d.publisherId
         }
     }
-    return false
+    return ownerId
+}
+
+// 该用户是否为 (org, name) 的包名所有者（唯一）
+public func isPackagePublisher(store: PackageStore, org: String, name: String, userId: Int64): Bool {
+    packageOwner(store, org, name) == userId
 }
 
 // 命名空间是否已被团队纳管：存在 TeamOrganization 关联该组织，或 TeamPackage 关联该包名
@@ -443,7 +452,8 @@ public func isNamespaceGoverned(adminData: AdminDataStore, org: String, name: St
 
 // 用户对 (org, name) 的有效权限级别 = max(个人发布路径, 团队路径)（对齐 design.md §5.4.3）
 //   平台管理员 → overwrite（直通）
-//   个人发布路径：该用户是该包任一版本的发布者 → write（覆盖仍属团队 overwrite 权限）
+//   个人发布路径：该用户是**包名所有者**（最早一条版本记录的发布者，唯一）→ write
+//     —— 版本级 publisherId 只作事实记录（谁发的这一版），团队协作发版不产生新 owner，也不授予权限
 //   团队路径：团队成员 && （TeamPackage 包级 || TeamOrganization 组织级）→ 团队 permission（取最高）
 public func effectivePermission(store: PackageStore, adminData: AdminDataStore, user: User, org: String, name: String): Int64 {
     if (user.isAdmin) {

@@ -526,6 +526,55 @@ func testCheckReadPermission() {
     @Expect(checkReadPermission(store, adminData, bob, "other", "demo"), false)
 }
 
+// ===== 包名所有者（模型 B）：版本级 publisher 累加，但仅首个发布者参与权限 =====
+
+@Test
+func testPackageOwnerIsFirstPublisherOnly() {
+    let (svc, authSvc, adminData, adminToken) = makePublishServicePerm()
+    let store = svc.store
+    let alice = authSvc.createUser("alice", "alice123", false).getOrThrow()
+    let member = authSvc.createUser("bob", "bob12345", false).getOrThrow()
+
+    // alice 认领新包（自由命名空间）→ 成为唯一 owner
+    @Expect(svc.publish("test", "demo", makePublishBodyConsistent("test", "demo", "1.0.0"), alice.publishToken).outcome == PublishOutcome.Ok, true)
+    @Expect(packageOwner(store, "test", "demo"), alice.id)
+    @Expect(isPackagePublisher(store, "test", "demo", alice.id), true)
+
+    // 团队成员发一个新版本 → 该版本 publisherId 记为 bob（事实累加），但 owner 不变
+    let orgId = adminData.createOrg("test", "Test", 1, 0)
+    let teamId = adminData.createTeam("writers", 0, permission: "write")
+    adminData.setTeamOrganizations(teamId, [orgId], 0)
+    adminData.setTeamMembers(teamId, [member.id])
+    @Expect(svc.publish("test", "demo", makePublishBodyConsistent("test", "demo", "1.1.0"), member.publishToken).outcome == PublishOutcome.Ok, true)
+    @Expect(publisherOfVersion(store, "test", "demo", "1.1.0"), member.id)  // 版本级记录照旧
+    @Expect(packageOwner(store, "test", "demo"), alice.id)                   // owner 唯一且不变
+    @Expect(isPackagePublisher(store, "test", "demo", member.id), false)
+
+    // bob 在团队内：write 来自团队路径（2），不是 owner 身份
+    @Expect(effectivePermission(store, adminData, member, "test", "demo"), 2)
+    // 退出团队后：不再有任何权限（模型 B 下版本级 publisher 不授予权限）
+    adminData.setTeamMembers(teamId, Array<Int64>())
+    @Expect(effectivePermission(store, adminData, member, "test", "demo"), 0)
+    @Expect(checkReadPermission(store, adminData, member, "test", "demo"), false)
+
+    // owner 自身不受影响
+    @Expect(effectivePermission(store, adminData, alice, "test", "demo"), 2)
+
+    // 覆盖不转移所有权（即使覆盖者不是 owner，且覆盖的是最早那条记录）
+    let carol = authSvc.createUser("carol", "carol123", false).getOrThrow()
+    let oTeam = adminData.createTeam("overwriters", 0, permission: "overwrite")
+    adminData.setTeamOrganizations(oTeam, [orgId], 0)
+    adminData.setTeamMembers(oTeam, [carol.id])
+    let tar2: Array<Byte> = [UInt8(31), UInt8(139), UInt8(8), UInt8(0), UInt8(99)]
+    @Expect(svc.publish("test", "demo", makePublishBodyWithTar("test", "demo", "1.0.0", tar2), carol.publishToken).outcome == PublishOutcome.Ok, true)
+    @Expect(packageOwner(store, "test", "demo"), alice.id)
+    @Expect(publisherOfVersion(store, "test", "demo", "1.0.0"), alice.id)
+
+    // 管理员直通不受模型影响
+    @Expect(svc.publish("test", "demo", makePublishBodyConsistent("test", "demo", "2.0.0"), adminToken).outcome == PublishOutcome.Ok, true)
+    @Expect(packageOwner(store, "test", "demo"), alice.id)
+}
+
 @Test
 func testPublishOpenModeAllowsNonTeamUser() {
     // 默认 open 模式：小企业内部先用着——有效 token 即可发布（无需团队授权）

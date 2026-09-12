@@ -20,7 +20,7 @@
 
 ### 2.2 `/me` 个人门户（新，3 个区块）
 1. **我的发布 Token**：Token 展示（只显后 8 位 + 复制按钮）/ 重置按钮（`resetPublishToken`，重置后旧 Token 立即失效——与管理员 Token 对话框一致）；附 `cangjie-repo.toml` 发布配置示例（复制）
-2. **我的包**：`Table<PackageDoc>` 按 `publisherId == me` 过滤（分页/搜索/详情跳转），复用 `Table<PackageDoc>` 泛型模式；空态引导"如何发布第一个包"
+2. **我的包**：`Table<PackageDoc>` 按 `publisherId == me` 过滤（= 我发布过版本的包，含协作发版；标注其中我是 **owner**（最早一条版本记录的发布者）的包）；分页/搜索/详情跳转复用 `Table<PackageDoc>` 泛型模式；空态引导"如何发布第一个包"
 3. **我的团队与权限**：`Descriptions`/简易表列出我所属团队 → 每团队权限（read/write/overwrite）+ 关联组织/包列表（只读）；发布权限模式（open/team）提示行（"当前为内部开放模式，发布无需团队授权"或"团队模式：需 write 及以上"）
 
 ## 3. API（新增，均要求 user session）

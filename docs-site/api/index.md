@@ -20,6 +20,7 @@
 | `/api/admin/users/:id/admin` | PUT | 提升/取消管理员（`{isAdmin}`；最后一个启用管理员 → 409） |
 | `/api/admin/upstreams` | GET / POST | 上游列表 / 新增 |
 | `/api/admin/upstreams/:id` | DELETE | 删除上游（官方仓受保护） |
+| `/api/admin/upstreams/:id/test` | POST | 上游连通性测试（`name`/`organization` 可选；返回状态码/耗时/包名样本/中文摘要） |
 | `/api/admin/resolve` | GET | 多仓解析诊断（`name` / `organization` / `require` / `strict`） |
 | `/api/admin/publish-plans/analyze` | POST | 依赖拓扑 + 四分类 |
 | `/api/admin/publish-plans/execute` | POST | 按序推送到目标仓（`target_url` / `target_token`） |

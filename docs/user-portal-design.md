@@ -115,11 +115,20 @@
 | 门户读模型（我的包/团队/掩码/提示） | ✅ | `src/server/user_service.cj` + 单测 |
 | 公开导航按登录态显示 | ✅ | `src/ui/pages_public.cj`（三态：登录 / 我的 / 管理后台） |
 | 页面渲染冒烟 | ✅ | `src/ui/user_portal_test.cj`（serializeSubtree 断言三区块）+ agent-browser 实测 |
+| 登录 loading | ✅ | 两个登录页均用 cjxt `Loading` 组件；登录动作「先返回 loading 补丁 → 后台线程校验口令 → `pushUpdate` 收尾」，口令校验期间遮罩可见 |
 
 ### 8.1 与设计的两处差异（有意为之）
 
 1. **Token 完整展示**：设计原写「只显后 8 位 + 复制按钮」，但掩码后的 Token 无法用于 `cangjie-repo.toml` 配置——门户改为**完整展示**（readonly 输入框，页面本身已在登录守卫后，且只显示自己的 Token）；掩码只用于 `/api/user/me` 的 API 响应。
 2. **复制按钮暂缺**：前端剪贴板需要 JS 通道，cjreg 目前没有 `addJS` 接线（cjxt 的 `@EmbedString` 来自 `embed` 依赖，cjreg 未引入）→ 本期用 readonly 输入框 + 提示，后续可加 `embed` 依赖 + 一段 `portal.js` 实现。
+
+### 8.1.1 登录 loading 的实现要点
+
+- cjxt `Loading().bind(busy).label("登录中...")` 常驻渲染（隐藏时 `display:none`），卡片需 `position: relative` 才能被遮罩覆盖
+- 若同步执行登录（旧实现），`busy=true` 的状态**永远不会被渲染**（handler 内改信号 → 只发最终补丁），用户看不到任何反馈；
+  现在 `doLogin` 只置 busy 并立即返回，PBKDF2 校验在 `spawn` 线程里做，完成后经 `App.pushUpdate` 回到会话串行上下文写上下文/跳转
+  （与「发布计划执行」同一模式）
+- 依赖 cjxt 修复：`pushUpdate` 的收尾也要 `syncAuthToken`（此前只有 `runAction` 会同步 token），否则异步登录后刷新会掉登录态
 
 ### 8.2 门户权限语义（与 §5 / design.md 一致）
 

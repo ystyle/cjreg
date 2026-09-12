@@ -7,7 +7,7 @@
 
 .login-container { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: #1d2b3a; flex-direction: column; }
 .login-title { font-size: 22px; font-weight: 600; color: #fff; margin-bottom: 24px; }
-.login-card { background: #fff; border-radius: 8px; padding: 32px; width: 380px; box-shadow: 0 4px 16px rgba(0,0,0,.2); }
+.login-card { background: #fff; border-radius: 8px; padding: 32px; width: 380px; box-shadow: 0 4px 16px rgba(0,0,0,.2); position: relative; }  /* relative：让 Loading 遮罩覆盖卡片 */
 .login-error { color: #f56c6c; font-size: 13px; margin: 8px 0; }
 .toolbar { display: flex; gap: 12px; margin-bottom: 16px; align-items: center; }
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; margin-bottom: 24px; }

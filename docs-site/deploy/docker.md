@@ -89,7 +89,19 @@ docker compose run --rm cjreg /app/cjreg admin reset-password -d /data \
 
 ## 8. 使用发布好的镜像（可选）
 
-Release 工作流会把镜像推送到 `ghcr.io/<owner>/cjreg`：
+发布版本时（**推送 `v*` tag**）Release 工作流会把镜像推送到 `ghcr.io/ystyle/cjreg`，
+tag 为版本号与 `latest`：
+
+```shell
+docker pull ghcr.io/ystyle/cjreg:v0.2.0     # 具体版本
+docker pull ghcr.io/ystyle/cjreg:latest     # 最新
+```
+
+> 私有仓库的镜像默认私有，拉取前先 `docker login ghcr.io -u <用户名> -p <PAT>`（PAT 勾选 `read:packages`）；
+> 需要公开拉取则在 GitHub → Packages → cjreg → Package settings 改为 public。
+> 发版步骤（含校验命令）见 `docs/RELEASE.md`。
+
+Compose 引用：
 
 ```yaml
 services:

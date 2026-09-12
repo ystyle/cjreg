@@ -55,7 +55,9 @@
   （初始化 → 启动 → 健康 → 优雅关闭 → 重启后数据留存）
 - **VitePress 文档站**：`docs-site/`（指南/API/部署/关于，local search，`base=/cjreg/`），
   `docs-deploy.yml` 自动发布到 GitHub Pages + 华为云 CDN 刷新（`https://ystyle.top/cjreg/`）
-- **CI / Release**：`ci.yml`（构建 + 单测 + 覆盖率 + 双仓 e2e + 文档站 + 镜像）、`release.yml`（linux-amd64 二进制 + ghcr 镜像）
+- **CI / Release**：`ci.yml`（构建 + 单测 + 覆盖率 + 双仓 e2e + 文档站 + **本地**镜像冒烟）、
+  `release.yml`（**tag 驱动**：linux-amd64 二进制产物 + 自动创建 GitHub Release + 推送 `ghcr.io/ystyle/cjreg:<tag>`/`:latest`）
+- 发版流程文档：`docs/RELEASE.md`（tag 为两侧唯一事实来源，含前置检查/校验命令/常见问题）
 - 容器冒烟两处修复：镜像构建后 `chmod 0755`（CI artifact 往返丢执行位 → `permission denied`）；
   数据目录属主对齐容器 uid 1000（`scripts/docker-deploy.sh` 自动 chown，文档补充说明）
 

@@ -7,3 +7,4 @@ data
 *.gcda
 *.gcno
 cov_output/
+.demo/

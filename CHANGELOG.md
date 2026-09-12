@@ -22,6 +22,19 @@
 - 测试：`admin_data_test.cj` 过滤/排序/分页/清理用例、`audit_test.cj` 辅助函数用例、
   `tests/e2e.sh` 第 5 步审计端到端（发布登记 / 失败记录 / 登录审计 / 过滤 / 分页 / 清理 / 401）
 
+### Added — 公开只读 API（C1–C5）
+
+- `GET /api/stats`：包/版本/下载/组织/团队/用户数、存储字节、服务端版本、启动时间与运行时长
+- `GET /api/packages`：包列表（分页 + 搜索 + `org::name` 语法 + 分类 OR + `updated/downloads/name` 排序）
+- `GET /api/packages/:name`：包详情（全部版本 + 聚合 + 最新版本 README）
+- `GET /api/packages/:name/:version`：版本详情（meta 全字段 + `sha256` + 制品字节 + 发布者）
+- `GET /api/organizations`：组织列表（含包/版本计数；有包但未登记的组织以 `id=0` 下发）
+- 可见性：`require_auth=false` 公开；`true` 时要求有效 Token，并按 `checkReadPermission`（与下载/索引同一裁决）
+  过滤（未登录 401、越权 403）；软删版本对所有公开端点不可见
+- 文档：`docs/public-api.md` + 文档站「公开只读 API」页与 API 表
+- 测试：`public_service_test.cj` 9 组用例（语法/分页/过滤排序/软删隐藏/统计/版本/组织计数/私有可见性/JSON 转义）、
+  `tests/e2e.sh` 第 6 步双仓实测 5 个端点
+
 ### Added — 交付形态（本版）
 
 - **Docker / Compose 部署**：`Dockerfile`（archlinux 基础 + liburing/tzdata，宿主机构建二进制入镜像、非 root 运行）、
@@ -38,7 +51,6 @@
 - **发布链路流式化**（大包稳定 + 内存 O(1)）：当前 `POST /pkg` 整包读入内存（峰值 ≈ 包体 2–3 倍），
   受仓颉 GC 堆默认 256 MB 限制，40 MiB 以上的包在默认配置下可能 OOM —— 详见 `docs/finals-plan.md` 迭代 1
 - 包三级删除闭环（恢复/硬删入口与索引、缓存、发布计划联动）
-- 公开只读 API（`/api/stats`、`/api/packages`、`/api/packages/:name`、`/api/organizations`）
 - 组织 CRUD REST 端点（当前仅管理端界面）
 - 发布计划 item 六状态（`publishing`/`waiting_index`/`skipped`）与 SSE 进度流
 - 镜像预热/周期同步（`serve --sync-interval`）与性能基准报告

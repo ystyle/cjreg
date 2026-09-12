@@ -67,11 +67,11 @@
 
 | # | 差距项 | 来源 | 状态 | 建议 |
 |---|---|---|---|---|
-| C1 | 公开统计 `GET /api/stats`（包/用户/版本/下载/存储/构建信息） | public.go | 部分覆盖 | 补 |
-| C2 | 公开包列表 `GET /api/packages`（分页/搜索/`org::` 语法/多分类 OR） | public.go | 缺失 | 补 |
-| C3 | 公开包详情 `GET /api/packages/:name`（全部版本） | public.go | 缺失 | 补 |
-| C4 | 公开版本详情 `GET /api/packages/:name/:version` | public.go | 缺失 | 补 |
-| C5 | 公开组织列表 `GET /api/organizations` | public.go | 缺失 | 补（低成本） |
+| C1 | 公开统计 `GET /api/stats`（包/用户/版本/下载/存储/构建信息） | public.go | ✅ 已实现（`src/server/public_service.cj` + `public_handler.cj`） | — |
+| C2 | 公开包列表 `GET /api/packages`（分页/搜索/`org::` 语法/多分类 OR） | public.go | ✅ 已实现（含 `updated/downloads/name` 排序） | — |
+| C3 | 公开包详情 `GET /api/packages/:name`（全部版本） | public.go | ✅ 已实现（含聚合与 README） | — |
+| C4 | 公开版本详情 `GET /api/packages/:name/:version` | public.go | ✅ 已实现（meta 全字段 + sha256 + 制品字节） | — |
+| C5 | 公开组织列表 `GET /api/organizations` | public.go | ✅ 已实现（含包/版本计数；未登记组织 `id=0`） | — |
 
 ## D. 用户管理
 
@@ -145,7 +145,8 @@
 
 ## 筛选建议（待用户确认后补入 design.md）
 
-- **必补（课题/私有化刚需）**：A1 publisher_id、A2 requireAuth、A3 权限检查顺序、B1 三级删除、E1/E2 审计日志、F1 组织 CRUD、G2 重启恢复、I1 官方 URL 定死
+- **必补（课题/私有化刚需）**：A1 publisher_id、A2 requireAuth、A3 权限检查顺序、B1 三级删除、F1 组织 CRUD、G2 重启恢复、I1 官方 URL 定死
+  （E1/E2 审计日志、C1–C5 公开只读 API 已完成）
 - **建议补（管理面闭环）**：C1-C5 公开 API、D1-D3 用户管理端点、B2 版本列表、A4 用户-团队查询
 - **细节明确**：G1 状态枚举、G3/G4/G5/G6 发布计划细节、H1/H2 字段级处理、I2/I3/I4/I5 协议细节
 - **可选**：B5 README、D4 email、E3 日志清理、F2 默认组织、I6 关键字/分类、J4/J5/J7/J8

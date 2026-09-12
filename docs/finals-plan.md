@@ -156,8 +156,9 @@ git push origin v0.1.0-submission     # 决赛写差异说明时以此 tag 为�
 | 项 | 关联评分 | 状态 |
 |---|---|---|
 | 审计日志：发布日志写入（IP/UA/详情）+ 管理日志查询/清理端点 + 管理端日志页 | 安全 / 完成度 | ✅ 已完成（`docs/audit-log.md`，单测 + e2e 第 5 步） |
-| 公开只读 API：`/api/stats`、`/api/packages`、`/api/packages/:name`、`/api/packages/:name/:version`、`/api/organizations` | 完成度 / 实用性 | 待做 |
+| 公开只读 API：`/api/stats`、`/api/packages`、`/api/packages/:name`、`/api/packages/:name/:version`、`/api/organizations` | 完成度 / 实用性 | ✅ 已完成（`docs/public-api.md`，单测 9 组 + e2e 第 6 步） |
 | 组织 CRUD REST、上游连通性测试端点 `POST /api/admin/upstreams/:id/test` | 完成度 | 待做 |
+| ~~公开只读 API~~ | 完成度 / 实用性 | ✅ 已完成 |
 | 包三级删除闭环（恢复 / 硬删入口 + 审计） | 完成度 | 待做 |
 | VitePress 文档站 | 文档完善度 15 分 | ✅ 已完成（docs-site/，构建通过） |
 | Docker / Compose 部署 + 一键脚本 + CI/Release 工作流 | 完成度 / 可复现性 | ✅ 已完成（本地容器冒烟通过；Docker 增强留决赛迭代 3） |

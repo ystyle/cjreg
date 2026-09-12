@@ -21,7 +21,7 @@
   "semver" = "0.0.3"
   "pbkdf2" = "1.0.0"
   "tang" = "1.0.4"
-  "bstorm" = "1.4.7"
+  "bstorm" = "1.4.8"
   "gjson" = "1.2.1"
   "cjxt" = { path = "../cjxt" }
 

@@ -422,7 +422,9 @@ public class AdminService {
     }
 
     // 发布计划执行：POST /api/admin/publish-plans/execute
-    // body: {packages:[{organization,name,version}], target_url}
+    // body: {packages:[{organization,name,version}], target_url, target_token?}
+    // target_token 为空时按 target_url 匹配上游表取该上游的 authToken
+    // （否则推送到需要认证的目标仓——如官方中心仓或另一个私有仓——会 401）
     public func executePlan(ctx: TangHttpContext): Unit {
         if (!requireAdmin(ctx)) {
             return
@@ -431,6 +433,7 @@ public class AdminService {
         var roots = ArrayList<(String, String, String)>()
         parsePackagesBody(body, roots)
         var targetUrl = ""
+        var targetToken = ""
         let bb = ByteBuffer()
         bb.write(body.toArray())
         let r = JsonReader(bb)
@@ -443,6 +446,8 @@ public class AdminService {
                             let n = r.readName()
                             if (n == "target_url") {
                                 targetUrl = r.readValue<String>()
+                            } else if (n == "target_token") {
+                                targetToken = r.readValue<String>()
                             } else {
                                 r.skip()
                             }
@@ -459,13 +464,15 @@ public class AdminService {
             writeJson(ctx, 400u16, "{\"error\":\"packages and target_url required\"}")
             return
         }
+        // 目标仓鉴权：显式 target_token 优先，否则按 URL 匹配上游表取该上游 authToken
+        let token = resolveTargetToken(targetToken, targetUrl, this.upstreamStore.listAll())
         // 先 analyze 得拓扑 items
         let (items, _) = this.planSvc.analyze(roots)
         if (items.size == 0) {
             writeJson(ctx, 400u16, "{\"error\":\"no packages found locally\"}")
             return
         }
-        let (ok, total, errors) = this.executor.execute(items, targetUrl, "")
+        let (ok, total, errors) = this.executor.execute(items, targetUrl, token)
         let sb = StringBuilder()
         sb.append("{\"success\":${ok},\"total\":${total},\"errors\":[")
         for (i in 0..errors.size) {
@@ -499,6 +506,30 @@ public class AdminService {
             case None => return 0
         }
     }
+}
+
+// 目标仓发布 token 解析：显式传入优先；否则按 URL 匹配上游表取其 authToken
+// （发布计划推送到官方仓或另一个私有仓时都要带 token，否则目标仓 401）
+public func resolveTargetToken(explicit: String, targetUrl: String, upstreams: ArrayList<Upstream>): String {
+    if (!explicit.isEmpty()) {
+        return explicit
+    }
+    let want = trimUrl(targetUrl)
+    for (u in upstreams) {
+        if (trimUrl(u.url) == want) {
+            return u.authToken
+        }
+    }
+    ""
+}
+
+// URL 归一（去尾部斜杠，便于比较）
+func trimUrl(v: String): String {
+    var s = v.trimAscii()
+    while (s.size > 0 && s[s.size - 1] == 47u8) {
+        s = s[0..s.size - 1]
+    }
+    s
 }
 
 // 写 JSON 响应

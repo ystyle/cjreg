@@ -34,7 +34,8 @@ func printUsage(): Unit {
     println("  -h, --help           帮助")
     println()
     println("配置文件（可选，TOML）：")
-    println("  [server] public_url / port / permission_mode / require_auth")
+    println("  [server] public_url / port / permission_mode / require_auth / max_request_bytes")
+    println("  发布大包（>30MB）需同时提高仓颉 GC 堆：export cjHeapSize=2GB")
     println("  init 会在数据目录生成一份带注释的 cjreg.toml 模板")
 }
 
@@ -181,8 +182,26 @@ func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
         .auth({ t => restoreAdminSession(authSvc, t) })
         .port(port)
         .setTang(app)
-        .serve()
+        // 请求体上限（cjreg.toml 的 max_request_bytes）：stdx 默认 2MB，大包发布会 413
+        .serverBuilder({ sb => sb.maxRequestBodySize(cfg.maxRequestBytes) })
+    // 优雅关闭（docker stop / Ctrl+C = SIGINT/SIGTERM）：
+    // 钩子在数据库 close 之前执行 → 先停 HTTP 服务（停止接收新请求、断开会话），
+    // 再 flush memtable 落盘成 SSTable，最后进程退出（exitAfterClose 默认 true）。
+    // 注意：普通 close()（如 init 结束）不触发钩子，仅信号关闭路径触发。
+    registerGracefulShutdown(pkgStore.storm, cjxtApp)
+    cjxtApp.serve()
     return 0
+}
+
+// 注册优雅关闭：SIGINT/SIGTERM → 停服 → 关闭数据库（flush 落盘）→ 退出
+// 容器/裸机通用（docker stop、systemctl stop、Ctrl+C）；非 Linux 平台由 bstorm/badger 侧 no-op，
+// 此时仍依赖 withSyncWrites 的逐写 fsync 保证不丢数据。
+func registerGracefulShutdown(storm: Storm, cjxtApp: App): Unit {
+    storm.registerShutdownHook({ =>
+        println("cjreg: 收到退出信号，正在优雅关闭（停止服务 → 落盘 → 退出）...")
+        cjxtApp.stop()
+    })
+    storm.registerSignalShutdown()
 }
 
 // 演示数据注入（CJREG_SEED_DEMO=1）：造几个本地包，便于验证发布计划/包管理等完整流程
@@ -334,6 +353,8 @@ func cmdAdminUI(dataDir: String, cfg: CjregConfig): Int64 {
         .state<CjregState>({ => CjregState(pkgStore, userStore, upStore, adminData, authSvc, app: Some(cjxtApp), config: cfg) })
         .auth({ t => restoreAdminSession(authSvc, t) })
         .host("0.0.0.0").port(port)
-        .serve()
+        .serverBuilder({ sb => sb.maxRequestBodySize(cfg.maxRequestBytes) })
+    registerGracefulShutdown(pkgStore.storm, cjxtApp)
+    cjxtApp.serve()
     return 0
 }

@@ -1,0 +1,155 @@
+[
+  {
+    "Name": "tomlcj",
+    "License": "Apache-2.0 with Runtime Library Exception",
+    "License File": "LICENSE",
+    "Version Number": "1.0.0",
+    "Owner": "ystyle",
+    "Upstream URL": "https://atomgit.com/ystyle/tomlcj",
+    "Description": "TOML 解析与编码库（代码提取自仓颉官方 cjpm，原始版权归仓颉官方所有）"
+  },
+  {
+    "Name": "semver",
+    "License": "Apache-2.0",
+    "License File": "LICENSE",
+    "Version Number": "0.0.3",
+    "Owner": "Yesokim",
+    "Upstream URL": "https://gitcode.com/Yesokim/semver.git",
+    "Description": "Semantic Versioning 语义化版本解析"
+  },
+  {
+    "Name": "pbkdf2",
+    "License": "MIT",
+    "License File": "LICENSE",
+    "Version Number": "1.0.0",
+    "Owner": "ystyle",
+    "Upstream URL": "https://atomgit.com/ystyle/pbkdf2-cj",
+    "Description": "PBKDF2 口令派生（SHA512 + 随机 salt），用于用户口令存储"
+  },
+  {
+    "Name": "tang",
+    "License": "MulanPSL-2.0",
+    "License File": "LICENSE",
+    "Version Number": "1.0.4",
+    "Owner": "ystyle",
+    "Upstream URL": "https://atomgit.com/ystyle/tang",
+    "Description": "轻量级 Web 框架（初版移植自 uptrace/bunrouter），HTTP 服务端路由"
+  },
+  {
+    "Name": "bstorm",
+    "License": "MIT",
+    "License File": "LICENSE",
+    "Version Number": "1.4.7",
+    "Owner": "ystyle",
+    "Upstream URL": "https://atomgit.com/ystyle/badger-storm",
+    "Description": "嵌入式 JSON 文档数据库（基于 badger-cj 的 ORM），承载包/用户/团队/日志等集合"
+  },
+  {
+    "Name": "badger-cj (badgercj)",
+    "License": "Apache-2.0",
+    "License File": "LICENSE",
+    "Version Number": "1.6.16",
+    "Owner": "ystyle（移植自 dgraph-io/badger）",
+    "Upstream URL": "https://atomgit.com/ystyle/badger-cj",
+    "Description": "嵌入式 LSM-Tree 键值数据库（bstorm 的存储引擎，经 bstorm 传递依赖引入）"
+  },
+  {
+    "Name": "gjson",
+    "License": "MulanPSL-2.0",
+    "License File": "LICENSE",
+    "Version Number": "1.2.1",
+    "Owner": "ystyle",
+    "Upstream URL": "https://atomgit.com/ystyle/gjson-cj",
+    "Description": "JSON 路径解析与取值工具（移植自 tidwall/gjson）"
+  },
+  {
+    "Name": "cjxt",
+    "License": "MIT",
+    "License File": "LICENSE",
+    "Version Number": "1.0.0（path 依赖，随仓库提供）",
+    "Owner": "ystyle",
+    "Upstream URL": "https://atomgit.com/ystyle/cjxt",
+    "Description": "服务端驱动 UI 框架（@Page/Signal/组件库），实现管理后台与公开门户"
+  },
+  {
+    "Name": "embed",
+    "License": "MulanPSL-2.0",
+    "License File": "LICENSE",
+    "Version Number": "1.0.7",
+    "Owner": "ystyle",
+    "Upstream URL": "https://atomgit.com/ystyle/embed-cj",
+    "Description": "编译期资源嵌入（类似 go:embed），cjxt 前端 CSS/JS 内嵌（经 cjxt 传递依赖引入）"
+  },
+  {
+    "Name": "markit",
+    "License": "MIT",
+    "License File": "LICENSE",
+    "Version Number": "0.0.4",
+    "Owner": "zichexuelan",
+    "Upstream URL": "https://gitcode.com/zichexuelan/markit.git",
+    "Description": "Markdown 解析（帮助文档页渲染，经 cjxt 传递依赖引入）"
+  },
+  {
+    "Name": "ulid",
+    "License": "MulanPSL-2.0",
+    "License File": "LICENSE",
+    "Version Number": "0.1.2",
+    "Owner": "changeden (OpenCangjieCommunity)",
+    "Upstream URL": "https://atomgit.com/OpenCangjieCommunity/ulid",
+    "Description": "字典序唯一标识符生成（会话 id，经 cjxt 传递依赖引入）"
+  },
+  {
+    "Name": "multipart",
+    "License": "见上游仓库",
+    "License File": "LICENSE",
+    "Version Number": "0.1.3",
+    "Owner": "changeden (OpenCangjieCommunity)",
+    "Upstream URL": "https://atomgit.com/OpenCangjieCommunity/multipart",
+    "Description": "HTTP multipart 请求解析（经 cjxt 传递依赖引入）"
+  },
+  {
+    "Name": "crc",
+    "License": "MIT",
+    "License File": "LICENSE",
+    "Version Number": "1.0.0",
+    "Owner": "ystyle",
+    "Upstream URL": "https://atomgit.com/ystyle/crc-cj",
+    "Description": "CRC32/CRC32C 校验和（经 bstorm 传递依赖引入）"
+  },
+  {
+    "Name": "snappy",
+    "License": "BSD-3-Clause",
+    "License File": "LICENSE",
+    "Version Number": "1.0.1",
+    "Owner": "ystyle",
+    "Upstream URL": "https://atomgit.com/ystyle/snappy-cj",
+    "Description": "Snappy 压缩（移植自 google/snappy，badger-cj 数据块压缩，传递依赖）"
+  },
+  {
+    "Name": "sonyflake",
+    "License": "MulanPSL2",
+    "License File": "LICENSE",
+    "Version Number": "1.0.9",
+    "Owner": "ystyle",
+    "Upstream URL": "https://github.com/ystyle/cj-sonyflake",
+    "Description": "Sonyflake 雪花算法 ID 生成（移植自 sony/sonyflake，传递依赖）"
+  },
+  {
+    "Name": "cjpminfo",
+    "License": "MulanPSL-2.0",
+    "License File": "LICENSE",
+    "Version Number": "1.2.0",
+    "Owner": "ystyle",
+    "Upstream URL": "https://github.com/ystyle/cjpminfo",
+    "Description": "编译期读取 cjpm.toml 信息（经 cjxt 传递依赖引入）"
+  },
+  {
+    "Name": "seajson",
+    "License": "Apache-2.0",
+    "License File": "LICENSE",
+    "Version Number": "1.4.7",
+    "Owner": "SeaJson 项目",
+    "Upstream URL": "https://atomgit.com/SeaJson/seajson",
+    "Description": "JSON 基础设施（经 badger-cj 传递依赖引入）"
+  }
+]

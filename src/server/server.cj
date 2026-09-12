@@ -27,10 +27,7 @@ public func buildServer(
         case None => None
     }
     // 权限模式：CJREG_PERMISSION_MODE=team 启用团队严格校验；默认 open（内部先用着，有效 token 即发布）
-    let permMode = match (getVariable("CJREG_PERMISSION_MODE")) {
-        case Some(v) => if (v == "team") { "team" } else { "open" }
-        case None => "open"
-    }
+    let permMode = permissionModeFromEnv()
     // 读鉴权开关（私有仓）：CJREG_REQUIRE_AUTH=1/true → 下载/索引需有效 token + 团队/个人 read 权限
     let requireReadAuth = match (getVariable("CJREG_REQUIRE_AUTH")) {
         case Some(v) => v == "1" || v == "true"
@@ -51,6 +48,18 @@ public func buildServer(
     app.get("/api/health", { ctx =>
         ctx.writeString("{\"status\":\"ok\"}")
     })
+
+    // 用户门户只读 API（/api/user/*）：session token 鉴权，普通用户与管理员均可
+    // （管理 API /api/admin/* 走 requireAdmin，二者分离；见 user_handler.cj）
+    match (publishAuth) {
+        case Some(authSvc) =>
+            let userApi = UserApi(authSvc, store, permData, permMode)
+            app.get("/api/user/me", { ctx => userApi.me(ctx) })
+            app.post("/api/user/me/publish-token", { ctx => userApi.resetPublishToken(ctx) })
+            app.get("/api/user/me/packages", { ctx => userApi.myPackages(ctx) })
+            app.get("/api/user/me/teams", { ctx => userApi.myTeams(ctx) })
+        case None => ()
+    }
 
     // 发布 POST /pkg/:name[?organization=]
     app.post("/pkg/:name", { ctx =>
@@ -202,6 +211,15 @@ func guardReadAccess(ctx: TangHttpContext, authSvc: AuthService, adminData: Admi
         case None =>
             ctx.status(401u16).writeStringWithCode(401u16, "{\"error\":\"invalid token\"}")
             return false
+    }
+}
+
+// 发布权限模式（环境变量 CJREG_PERMISSION_MODE）：team = 团队严格校验；默认 open
+// 服务端（buildServer）与 UI 状态（main.cj 注入 CjregState）共用，避免两处口径漂移
+public func permissionModeFromEnv(): String {
+    match (getVariable("CJREG_PERMISSION_MODE")) {
+        case Some(v) => if (v == "team") { "team" } else { "open" }
+        case None => "open"
     }
 }
 

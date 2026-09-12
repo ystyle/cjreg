@@ -45,4 +45,55 @@ public class AuthGuardTest {
             case None => @Fail("expected deny")
         }
     }
+
+    // ===== requireUser：登录即可（普通用户与管理员都放行）=====
+
+    @TestCase
+    public func testRequireUserDeniedWhenAnonymous(): Unit {
+        let ctx = HashMap<String, String>()
+        match (requireUser(ctx)) {
+            case Some(path) => @Expect(path, "/user/login")
+            case None => @Fail("expected deny with portal login path")
+        }
+    }
+
+    @TestCase
+    public func testRequireUserDeniedWhenLoggedOut(): Unit {
+        // 登出写空串（clearSessionContext）→ 与未登录同语义
+        let ctx = HashMap<String, String>()
+        ctx["uid"] = ""
+        ctx["isAdmin"] = ""
+        match (requireUser(ctx)) {
+            case Some(path) => @Expect(path, "/user/login")
+            case None => @Fail("expected deny")
+        }
+    }
+
+    @TestCase
+    public func testRequireUserPassForNormalUser(): Unit {
+        let ctx = HashMap<String, String>()
+        ctx["uid"] = "7"
+        ctx["username"] = "alice"
+        ctx["isAdmin"] = "0"
+        @Expect(requireUser(ctx).isNone(), true)
+    }
+
+    @TestCase
+    public func testRequireUserPassForAdmin(): Unit {
+        // 管理员同样可访问用户门户
+        let ctx = HashMap<String, String>()
+        ctx["uid"] = "1"
+        ctx["isAdmin"] = "1"
+        @Expect(requireUser(ctx).isNone(), true)
+    }
+
+    @TestCase
+    public func testRequireAdminStillRejectsNormalUser(): Unit {
+        // 两个守卫互不越权：普通用户能进门户、不能进管理端
+        let ctx = HashMap<String, String>()
+        ctx["uid"] = "7"
+        ctx["isAdmin"] = "0"
+        @Expect(requireUser(ctx).isNone(), true)
+        @Expect(requireAdmin(ctx).isSome(), true)
+    }
 }

@@ -63,6 +63,24 @@ POST   /api/admin/publish-plans/analyze  发布计划依赖分析（拓扑排序
 POST   /api/admin/publish-plans/execute  发布计划执行（推送包到目标上游）
 ```
 
+### 用户门户（普通用户）
+
+```
+GET    /me                          个人门户：发布 Token / 我的包 / 我的团队与权限
+GET    /user/login                  用户登录（接受所有启用用户，含管理员）
+```
+
+公开导航按登录态显示：未登录「登录」→ 已登录「我的」→ 管理员额外显示「管理后台」。
+
+### 用户 API（session token）
+
+```
+GET    /api/user/me                  当前用户 + 掩码 Token + 权限模式
+POST   /api/user/me/publish-token    重置自己的发布 Token（旧 Token 立即失效）
+GET    /api/user/me/packages         我发布过版本的包（分页/搜索，含 owner 标记）
+GET    /api/user/me/teams           我所属团队 + 权限 + 关联组织/包
+```
+
 ### 官方协议端点
 
 ```

@@ -103,3 +103,26 @@
 - **表达**：`TeamMemberDoc.permission`，团队 `permission` 降级为「上限」，成员有效权限 = `min(成员权限, 团队上限)`。
 - **成本**：改 `checkPublishPermission`、下载/索引的 read 检查、团队 UI 冲突提示，发布主链路回归面大。
 - **触发条件**：同一团队内确实需要并存 read 与 overwrite 的人，且不愿为此拆分为多个团队。
+
+## 8. 实现状态（本期已落地）
+
+| 设计项 | 状态 | 实现位置 |
+|---|---|---|
+| `/user/login` 用户登录 | ✅ | `src/ui/pages_user.cj`（接受所有启用用户；`isAdmin` 从用户对象取） |
+| `/me` 个人门户（三区块） | ✅ | `src/ui/pages_user.cj`（Token / 我的包 / 我的团队与权限） |
+| `requireUser` 页面守卫 | ✅ | `src/ui/auth_guard.cj`（登录即可，5 个单测） |
+| `/api/user/*` 四端点 | ✅ | `src/server/user_handler.cj`（session 鉴权，匿名 401） |
+| 门户读模型（我的包/团队/掩码/提示） | ✅ | `src/server/user_service.cj` + 单测 |
+| 公开导航按登录态显示 | ✅ | `src/ui/pages_public.cj`（三态：登录 / 我的 / 管理后台） |
+| 页面渲染冒烟 | ✅ | `src/ui/user_portal_test.cj`（serializeSubtree 断言三区块）+ agent-browser 实测 |
+
+### 8.1 与设计的两处差异（有意为之）
+
+1. **Token 完整展示**：设计原写「只显后 8 位 + 复制按钮」，但掩码后的 Token 无法用于 `cangjie-repo.toml` 配置——门户改为**完整展示**（readonly 输入框，页面本身已在登录守卫后，且只显示自己的 Token）；掩码只用于 `/api/user/me` 的 API 响应。
+2. **复制按钮暂缺**：前端剪贴板需要 JS 通道，cjreg 目前没有 `addJS` 接线（cjxt 的 `@EmbedString` 来自 `embed` 依赖，cjreg 未引入）→ 本期用 readonly 输入框 + 提示，后续可加 `embed` 依赖 + 一段 `portal.js` 实现。
+
+### 8.2 门户权限语义（与 §5 / design.md 一致）
+
+- 区块「我的包」= **我发布过版本的包**（含协作发版），并标注其中我是 **owner**（最早一条版本记录的发布者）的包
+- 区块「我的团队与权限」**只读**（沿用管理员统配，owner 自助仍在 §7.4 backlog）
+- 提示行按 `CJREG_PERMISSION_MODE` 显示 open / team 文案

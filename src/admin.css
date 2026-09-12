@@ -169,3 +169,12 @@
 .docs-content table th { background: #f6f8fa; font-weight: 600; }
 .docs-content a { color: #409eff; text-decoration: none; }
 .docs-content a:hover { text-decoration: underline; }
+
+/* ===== 用户门户（/me） ===== */
+.login-foot-hint { font-size: 12px; color: #909399; line-height: 1.6; margin: 4px 0 12px; }
+.portal-section { background: #fff; border-radius: 16px; padding: 24px; margin-bottom: 24px; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+.portal-section-title { font-size: 18px; font-weight: 600; color: #303133; margin: 0 0 8px; }
+.portal-hint { font-size: 13px; color: #909399; line-height: 1.6; margin: 0 0 12px; }
+.portal-token-row { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.portal-token-row .el-input { flex: 1; }
+.portal-search { max-width: 360px; margin-bottom: 16px; }

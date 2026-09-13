@@ -642,6 +642,11 @@ class PublishPlanDetailPage <: Component {
             report.abortReason
         } else if (report.failed > 0) {
             "失败 ${report.failed} 项：${if (report.errors.size > 0) { report.errors[0] } else { "" }}"
+        } else if (report.success == 0 && report.skipped > 0) {
+            // 「全部跳过」不能悄悄收成「已完成」：那看起来像发过了，实际一个字节都没传
+            "本次没有实际上传：${report.skipped} 项都已在目标仓存在（409）或未勾选，目标仓版本与本地一致"
+        } else if (report.skipped > 0) {
+            "成功 ${report.success} 项，跳过 ${report.skipped} 项（目标仓已有或未勾选）"
         } else {
             ""
         }

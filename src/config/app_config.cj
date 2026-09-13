@@ -11,6 +11,18 @@ import tomlcj.*
 import std.fs.*
 import std.convert.*
 
+// 默认站点名称（未配置 site_name 时的品牌文字与标签标题）
+public let DEFAULT_SITE_NAME = "cjreg"
+
+// 站点名称归一：空白回落默认值（避免配置成空串把品牌文字弄没）
+public func normalizeSiteName(raw: String): String {
+    let v = raw.trimAscii()
+    if (v.isEmpty()) {
+        return DEFAULT_SITE_NAME
+    }
+    v
+}
+
 // 服务端运行配置
 public class CjregConfig {
     // 对外访问地址（含协议/端口）——用户门户与帮助文档里的 registry 示例用它
@@ -25,6 +37,9 @@ public class CjregConfig {
     // HTTP 请求体上限（字节）：stdx 默认仅 2MB，会让大包发布被拒（413/连接重置）
     // 默认 500MiB（对齐官方「单段 ≤ 500MB」规格）；≤0 表示不限制（私有仓可按需调整）
     public var maxRequestBytes: Int64 = 500 * 1024 * 1024
+    // 站点名称：浏览器标签标题 + 页面品牌文字（公开端 nav / 后台侧栏 / 登录页）
+    // 空 = 用默认 "cjreg"
+    public var siteName: String = DEFAULT_SITE_NAME
     // 实际加载到的配置文件路径（空 = 未使用配置文件，全默认值）
     public var configPath: String = ""
 
@@ -75,6 +90,10 @@ public func loadConfigFile(path: String): ?CjregConfig {
         if (p > 0 && p <= 65535) {
             cfg.port = UInt16(p)
         }
+        let site = readStr(server, "site_name")
+        if (!site.isEmpty()) {
+            cfg.siteName = normalizeSiteName(site)
+        }
     } catch (e: Exception) {
         return None  // 解析失败按「未配置」处理（不阻断启动）
     }
@@ -101,6 +120,9 @@ public func configTemplate(port: UInt16): String {
     + "# 位置：-c/--config 指定的路径，或数据目录下的 cjreg.toml；不存在时全部走默认值。\n"
     + "\n"
     + "[server]\n"
+    + "# 站点名称：浏览器标签标题 + 页面品牌文字（公开端导航 / 后台侧栏 / 登录页）\n"
+    + "site_name = \"${DEFAULT_SITE_NAME}\"\n"
+    + "\n"
     + "# 对外访问地址（含协议与端口）——用户门户与帮助文档里的 registry 示例用它\n"
     + "public_url = \"http://localhost:${port}\"\n"
     + "\n"

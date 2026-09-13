@@ -139,6 +139,7 @@ func openStores(dataDir: String): ?(PackageStore, BstormUserStore, BstormUpstrea
 
 // serve：启动 HTTP 服务（含管理 API）
 func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
+    setSiteName(cfg.siteName)   // 品牌文字（公开端导航 / 后台侧栏 / 登录页）
     let port = cfg.port
     let stores = openStores(dataDir)
     if (stores.isNone()) {
@@ -179,7 +180,7 @@ func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
     }
     let cjxtApp = App()
     cjxtApp
-        .configure(AppConfig(cssBundle: "/css/bundle.css?v=3"))
+        .configure(AppConfig(title: cfg.siteName, cssBundle: "/css/bundle.css?v=3"))
         .serveStatic("/css", "public/css")
         .UseComponent()
         .state<CjregState>({ =>
@@ -379,6 +380,7 @@ func cmdSyncMetadata(dataDir: String, all: Bool): Int64 {
 
 // admin-ui：启动 cjxt 管理界面（直接访问同进程 store/service）
 func cmdAdminUI(dataDir: String, cfg: CjregConfig): Int64 {
+    setSiteName(cfg.siteName)
     let port = cfg.port
     let stores = openStores(dataDir)
     if (stores.isNone()) {
@@ -393,7 +395,7 @@ func cmdAdminUI(dataDir: String, cfg: CjregConfig): Int64 {
     let proxySvc = ProxyService(pkgStore, blobStore, UpstreamService(upStore))
     let cjxtApp = App()
     cjxtApp
-        .configure(AppConfig(cssBundle: "/css/bundle.css?v=3"))
+        .configure(AppConfig(title: cfg.siteName, cssBundle: "/css/bundle.css?v=3"))
         .serveStatic("/css", "public/css")
         .UseComponent()
         .state<CjregState>({ =>

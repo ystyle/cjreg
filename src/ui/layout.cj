@@ -5,10 +5,27 @@ import cjxt.*
 import cjxt.macros.*
 import cjxt.components.*
 import ystyle::cjreg.auth.model.*
+import ystyle::cjreg.config.*
 import std.collection.*
 
 let adminCSS = @importCSS("admin.css")
 public func cls(name: String): String { adminCSS.get(name) }
+
+// 站点名称（浏览器标签标题 + 品牌文字）：由 main.cj 启动时按 cjreg.toml 的 site_name 注入。
+// 用包级变量而不是给每个页面传参：品牌文字是全局的，12 处 adminLayout 调用没必要都加参数。
+public var SITE_NAME: String = DEFAULT_SITE_NAME
+
+public func setSiteName(name: String): Unit {
+    SITE_NAME = normalizeSiteName(name)
+}
+
+// 站点名解析：显式参数优先（便于单测），否则用启动时注入的包级值
+func resolvedSiteName(explicit: String): String {
+    if (explicit.isEmpty()) {
+        return SITE_NAME
+    }
+    explicit
+}
 
 // 通用：侧边导航项
 public func navLink(path: String, label: String, active: Bool): IComponent {
@@ -20,7 +37,8 @@ public func navLink(path: String, label: String, active: Bool): IComponent {
 }
 
 // 侧边导航（activePath 高亮）— Menu/MenuItem 组件
-public func adminSidebar(activePath: String): IComponent {
+public func adminSidebar(activePath: String, siteName!: String = ""): IComponent {
+    let brandName = resolvedSiteName(siteName)
     let entries = ArrayList<(String, String)>()
     entries.add(("/admin", "仪表盘"))
     entries.add(("/admin/packages", "包管理"))
@@ -44,7 +62,8 @@ public func adminSidebar(activePath: String): IComponent {
         )
     }
     div([
-        div([text("cjreg 管理")], attrs: Some(HashMap<String, String>([("class", cls("admin-brand"))]))),
+        div([text(brandName + " 管理")],
+            attrs: Some(HashMap<String, String>([("class", cls("admin-brand"))]))),
         menu,
         logoutMenuItem(),
     ], attrs: Some(HashMap<String, String>([("class", cls("admin-sidebar"))])))
@@ -77,9 +96,9 @@ public func adminMain(children: Array<IComponent>): IComponent {
 }
 
 // 完整布局：侧边 + 主区
-public func adminLayout(activePath: String, children: Array<IComponent>): IComponent {
+public func adminLayout(activePath: String, children: Array<IComponent>, siteName!: String = ""): IComponent {
     div([
-        adminSidebar(activePath),
+        adminSidebar(activePath, siteName: siteName),
         adminMain(children),
     ], attrs: Some(HashMap<String, String>([("class", cls("admin-layout"))])))
 }

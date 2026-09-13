@@ -97,7 +97,7 @@ func categoryLabels(strs: ArrayList<String>): ArrayList<String> {
 // 未登录 → 「登录」入口（用户门户 /user/login）；已登录 → 「我的」（/me）；
 // 管理员额外显示「管理后台」入口（登录后才显示管理入口）。
 // 注意必须在 render() 里读：令牌恢复后的就地重渲不会重跑 onMount。
-public func publicNav(active: String, sctx: Option<SessionContext>): IComponent {
+public func publicNav(active: String, sctx: Option<SessionContext>, siteName!: String = ""): IComponent {
     let isAdmin = match (sctx) {
         case Some(s) => s.isAdmin
         case None => false
@@ -108,7 +108,8 @@ public func publicNav(active: String, sctx: Option<SessionContext>): IComponent 
     }
     let children = ArrayList<IComponent>()
     let brandGo: ActionHandler = { c => c.route.push("/"); PatchResult.ReRender }
-    var brand = div([text("cjreg")], attrs: Some(HashMap<String, String>([("class", cls("public-brand"))])))
+    var brand = div([text(if (siteName.isEmpty()) { SITE_NAME } else { siteName })],
+        attrs: Some(HashMap<String, String>([("class", cls("public-brand"))])))
     brand = brand.onClick(brandGo)
     children.add(brand)
     children.add(navLink("/", "首页", active == "/"))

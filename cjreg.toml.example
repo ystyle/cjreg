@@ -7,6 +7,10 @@
 # 例外：CJREG_SEED_DEMO=1 是开发调试开关（往空库注入演示包），不属于部署配置。
 
 [server]
+# 站点名称：浏览器标签标题 + 页面品牌文字（公开端导航 / 后台侧栏 / 登录页）
+# 默认 cjreg；私有仓想叫别的名字（如「XX 内部仓」）改这里即可
+site_name = "cjreg"
+
 # 对外访问地址（含协议与端口）——用户门户与帮助文档里的 registry 示例用它
 # 生产部署填真实域名，例如 https://pkg.example.com
 public_url = "http://localhost:8060"

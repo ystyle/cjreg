@@ -62,7 +62,7 @@ class UserLoginPage <: Component {
         this.loginForm = form
         let toAdmin: ActionHandler = { c => c.route.push("/admin/login"); PatchResult.ReRender }
         div([
-            div([text("cjreg 用户门户")], attrs: Some(HashMap<String, String>([("class", cls("login-title"))]))),
+            div([text("${SITE_NAME} 用户门户")], attrs: Some(HashMap<String, String>([("class", cls("login-title"))]))),
             div([
                 form,
                 if (this.errorMsg.get() != "") {

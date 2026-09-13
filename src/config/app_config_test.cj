@@ -150,6 +150,7 @@ port = 9000
         @Expect(t.contains("port = 8123"), true)
         @Expect(t.contains("permission_mode"), true)
         @Expect(t.contains("require_auth"), true)
+        @Expect(t.contains("site_name"), true)
         // 模板本身是合法 TOML，且能被解析回同样的默认值
         let path = writeTempConfig("template.toml", t)
         match (loadConfigFile(path)) {
@@ -158,7 +159,30 @@ port = 9000
                 @Expect(c.permissionMode, "open")
                 @Expect(c.requireAuth, false)
                 @Expect(c.publicUrl, "http://localhost:8123")
+                @Expect(c.siteName, DEFAULT_SITE_NAME)
             case None => @Fail("模板应是合法 TOML")
+        }
+    }
+
+    @TestCase
+    public func testSiteNameFromConfigOrDefault(): Unit {
+        // 未配置 → 默认 cjreg（浏览器标签别再看 "cjxt App"）
+        let plain = writeTempConfig("nositename.toml", "[server]\nport = 8060\n")
+        match (loadConfigFile(plain)) {
+            case Some(c) => @Expect(c.siteName, "cjreg")
+            case None => @Fail("应能解析")
+        }
+        // 配置了就按配置走（两端空白裁掉）
+        let custom = writeTempConfig("sitename.toml", "[server]\nsite_name = \"  ystyle 仓 \"\n")
+        match (loadConfigFile(custom)) {
+            case Some(c) => @Expect(c.siteName, "ystyle 仓")
+            case None => @Fail("应能解析")
+        }
+        // 配成空白 → 回落默认，不会把品牌文字弄没
+        let blank = writeTempConfig("blanksite.toml", "[server]\nsite_name = \"   \"\n")
+        match (loadConfigFile(blank)) {
+            case Some(c) => @Expect(c.siteName, DEFAULT_SITE_NAME)
+            case None => @Fail("应能解析")
         }
     }
 }

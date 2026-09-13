@@ -19,8 +19,13 @@ cjpm build -j 16
 CJREG_SEED_DEMO=1 ./target/release/bin/ystyle::cjreg serve -d .smoke/auth-data -p 18062
 ```
 
-服务配置走 `<数据目录>/cjreg.toml`（或 `-c/--config`）：`[server] public_url / port / permission_mode / require_auth`；
+服务配置走 `<数据目录>/cjreg.toml`（或 `-c/--config`）：`[server] site_name / public_url / port / permission_mode / require_auth / max_request_bytes`；
 权限模式与对外地址都改这个文件（没有环境变量配置项，`CJREG_SEED_DEMO` 只是开发调试开关）。
+
+- **`site_name`（站点名称，默认 `cjreg`）**：一门两用——浏览器**标签标题**（cjxt 的 `AppConfig.title`，
+  不配就是默认的「cjxt App」，很丑）+ 页面**品牌文字**（公开端导航、后台侧栏「X 管理」、登录页「X 管理控制台 / X 用户门户」）。
+  运行时改配置 restart 即可生效；配成空白回落默认值（不会把品牌文字弄没）。
+  有标题的页面（`@Page["/admin/packages", "包管理"]`）会把自己设为标签标题，其余页面用站点名称。
 
 ## 生产部署（docker，私有仓）
 

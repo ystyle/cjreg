@@ -55,7 +55,7 @@ class LoginPage <: Component {
         ]).labelTop()
         this.loginForm = form
         div([
-            div([text("cjreg 管理控制台")], attrs: Some(HashMap<String, String>([("class", cls("login-title"))]))),
+            div([text("${SITE_NAME} 管理控制台")], attrs: Some(HashMap<String, String>([("class", cls("login-title"))]))),
             div([
                 form,
                 if (this.errorMsg.get() != "") {

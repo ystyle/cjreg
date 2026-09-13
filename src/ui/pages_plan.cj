@@ -532,7 +532,9 @@ class PublishPlanDetailPage <: Component {
             case "running" => Tag([text("推送中")]).kind(ComponentKind.Warning)
             case "waiting_index" => Tag([text("等待索引")]).kind(ComponentKind.Warning)
             case "skipped" => Tag([text("未推送")]).kind(ComponentKind.Info)
-            case _ => Tag([text("待发布")]).kind(ComponentKind.Info)
+            // 默认（pending）用「未推送」而不是「待发布」：分类列已经有一档叫「待发布」，
+            // 两列都写「待发布」会让人以为分类没生效
+            case _ => Tag([text("未推送")]).kind(ComponentKind.Info)
         }
     }
 

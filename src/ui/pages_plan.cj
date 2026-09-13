@@ -159,7 +159,9 @@ class PublishPlansPage <: Component {
                 this.statusTag(r.doc.status)
             }))
             .add(TableColumn<PlanRow>().label("目标上游").accessor({ r => r.upstream }).minWidth(140))
-            .add(TableColumn<PlanRow>().label("进度").accessor({ r => "${r.doc.completedCount}/${r.doc.totalCount}" }).width(90))
+            .add(TableColumn<PlanRow>().label("进度").accessor({ r =>
+                progressTextOf(r.doc.completedCount, r.doc.totalCount)
+            }).width(100))
             .add(TableColumn<PlanRow>().label("操作").minWidth(180).render({ r, i =>
                 let id = r.doc.id
                 let detailH: ActionHandler = { c => this.gotoDetail(c, id) }
@@ -425,7 +427,9 @@ class PublishPlanCreatePage <: Component {
                 planCategoryName(it.category), it.selected)
             order++
         }
-        st.adminData.setPlanTotal(planId, analysis.items.size)
+        // 进度的分母 = **需要发布的项数**，不是条目总数：
+        // 目标仓已有同版本（already_exists）的项根本不用发，算进去会让「0/6」看着像 6 个都要发。
+        st.adminData.setPlanTotal(planId, countRequired(analysis.items))
         if (analysis.targetError != "") {
             // 对比没做成必须留在计划上：否则「全部待发布」看起来像是真的比对过了
             st.adminData.setPlanError(planId, analysis.targetError, nowMs())
@@ -487,6 +491,8 @@ class PublishPlanDetailPage <: Component {
     var state: Option<CjregState> = None
     var planId: Int64 = 0
     var msg = Signal<String>("")
+    // 「重新分析」在跑：要逐包取目标仓索引（真网络），界面必须有加载态
+    var analyzing = Signal<Bool>(false)
     // 发布项行数据（pushUpdate 时经 refreshItems 更新）
     var itemRows = Signal<ArrayList<PlanItemDoc>>(ArrayList<PlanItemDoc>())
 
@@ -717,12 +723,31 @@ class PublishPlanDetailPage <: Component {
             return PatchResult.ReRender
         }
         let _ = st.adminData.setPlanItemSelected(docId, !selected)
+        // 分母只数"需要发布"的项：这里用分类（不是勾选）算，与创建时同一口径，
+        // 免得用户勾一下分母就变，看着像进度在跳
+        this.syncPlanTotal(st)
         this.refreshItems()
         PatchResult.ReRender
     }
 
+    // 把计划的"需要发布项数"重算落库（创建/勾选/重新分析后调用）
+    func syncPlanTotal(st: CjregState): Unit {
+        var n: Int64 = 0
+        for (d in st.adminData.listPlanItems(this.planId)) {
+            if (d.category == "already_exists") {
+                continue
+            }
+            n++
+        }
+        let _ = st.adminData.setPlanTotal(this.planId, n)
+    }
+
     // 重新分类：按当前目标仓索引重跑一遍 analyze（目标仓在这期间可能已经同步了，
     // 或者是计划早于"目标仓对比"功能创建的）。只改分类与默认勾选，不动执行状态。
+    //
+    // **必须异步**：对比要逐包去目标仓取索引（真网络，实测 6 个包数秒到十几秒），
+    // 同步做完的话界面一直停在旧状态，用户以为点了没反应。所以这里只置"分析中"，
+    // 把活儿丢给线程，干完 pushUpdate 回来。
     func reanalyze(ctx: ActionContext): PatchResult {
         let st = match (this.state) {
             case Some(x) => x
@@ -732,54 +757,92 @@ class PublishPlanDetailPage <: Component {
             this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
-        let plan = match (st.adminData.getPlan(this.planId)) {
-            case Some(p) => p
-            case None =>
-                this.msg.set("计划不存在")
-                return PatchResult.ReRender
+        if (this.analyzing.get()) {
+            return PatchResult.ReRender       // 已在跑，别叠加
         }
-        let target = st.upStore.getById(plan.targetUpstream)
-        if (target.isNone()) {
-            this.msg.set("目标上游不存在，无法对比")
-            return PatchResult.ReRender
+        let sid = ctx.getSessionId()
+        this.analyzing.set(true)
+        this.msg.set("正在对比目标仓索引…")
+        spawn { =>
+            this.reanalyzeAsync(st, sid)
         }
-        // 用计划里的条目（org/name/version）当根重跑：与创建时同一份输入
-        let docs = st.adminData.listPlanItems(this.planId)
-        let roots = ArrayList<(String, String, String)>()
-        for (d in docs) {
-            roots.add((d.packageOrg, d.packageName, d.packageVersion))
-        }
-        let planSvc = PublishPlanService(st.pkgStore)
-        let proxy = st.proxySvc
-        let analysis = planSvc.analyze(roots, targetUpstream: target, fetchIndex: { up, org, name =>
-            match (proxy) {
-                case Some(p) => p.fetchUpstreamIndex(up, org, name)
-                case None => Option<String>.None
+        PatchResult.ReRender
+    }
+
+    func reanalyzeAsync(st: CjregState, sid: String): Unit {
+        var summary = ""
+        try {
+            let plan = match (st.adminData.getPlan(this.planId)) {
+                case Some(p) => p
+                case None =>
+                    this.finishAnalyze(st, sid, "计划不存在")
+                    return
             }
-        })
-        // 按 org::name@version 把分类写回原条目（依赖补齐可能带来新条目，这里只更新已存在的）
-        for (d in docs) {
-            for (it in analysis.items) {
-                if (it.name == d.packageName && it.org == d.packageOrg && it.version == d.packageVersion) {
-                    // 已完成/已推送的不回退勾选状态（那是执行记录）
-                    let sel = if (d.status == "completed" || d.status == "waiting_index") {
-                        d.selected
-                    } else {
-                        it.selected
+            let target = st.upStore.getById(plan.targetUpstream)
+            if (target.isNone()) {
+                this.finishAnalyze(st, sid, "目标上游不存在，无法对比")
+                return
+            }
+            // 用计划里的条目（org/name/version）当根重跑：与创建时同一份输入
+            let docs = st.adminData.listPlanItems(this.planId)
+            let roots = ArrayList<(String, String, String)>()
+            for (d in docs) {
+                roots.add((d.packageOrg, d.packageName, d.packageVersion))
+            }
+            let planSvc = PublishPlanService(st.pkgStore)
+            let proxy = st.proxySvc
+            let analysis = planSvc.analyze(roots, targetUpstream: target, fetchIndex: { up, org, name =>
+                match (proxy) {
+                    case Some(p) => p.fetchUpstreamIndex(up, org, name)
+                    case None => Option<String>.None
+                }
+            })
+            // 按 org::name@version 把分类写回原条目（依赖补齐可能带来新条目，这里只更新已存在的）
+            var updated: Int64 = 0
+            for (d in docs) {
+                for (it in analysis.items) {
+                    if (it.name == d.packageName && it.org == d.packageOrg && it.version == d.packageVersion) {
+                        // 已完成/已推送的不回退勾选状态（那是执行记录）
+                        let sel = if (d.status == "completed" || d.status == "waiting_index") {
+                            d.selected
+                        } else {
+                            it.selected
+                        }
+                        let _ = st.adminData.setPlanItemCategory(d.id, planCategoryName(it.category), sel)
+                        updated++
+                        break
                     }
-                    let _ = st.adminData.setPlanItemCategory(d.id, planCategoryName(it.category), sel)
-                    break
                 }
             }
+            this.syncPlanTotal(st)          // 分类变了，分母跟着变
+            if (analysis.targetError != "") {
+                let _ = st.adminData.setPlanError(this.planId, analysis.targetError, nowMs())
+                summary = analysis.targetError
+            } else {
+                summary = "已按目标仓索引重新分类 ${updated} 项"
+            }
+        } catch (e: Exception) {
+            // 异步线程里的异常没人接：不接住的话界面会永远停在"分析中…"
+            println("[cjreg] 重新分析失败（plan ${this.planId}）: " + e.toString())
+            summary = "重新分析失败：" + e.toString()
         }
-        if (analysis.targetError != "") {
-            let _ = st.adminData.setPlanError(this.planId, analysis.targetError, nowMs())
-            this.msg.set(analysis.targetError)
-        } else {
-            this.msg.set("已按目标仓索引重新分类")
+        this.finishAnalyze(st, sid, summary)
+    }
+
+    // 收尾：清"分析中"、刷表格（必须在 pushUpdate 里做，否则到不了前端）
+    func finishAnalyze(st: CjregState, sid: String, summary: String): Unit {
+        let app = match (st.app) {
+            case Some(a) => a
+            case None =>
+                this.analyzing.set(false)
+                return
         }
-        this.refreshItems()
-        PatchResult.ReRender
+        let _ = app.pushUpdate(sid, { pctx =>
+            this.analyzing.set(false)
+            this.msg.set(summary)
+            this.refreshItems()
+            PatchResult.ReRender
+        })
     }
 
     func refreshItems(): Unit {
@@ -793,6 +856,34 @@ class PublishPlanDetailPage <: Component {
                 this.itemRows.set(data)
             case None => ()
         }
+    }
+
+    // 进度：分母是"需要发布的项数"，全都不需要发时直说，别显示 0/0
+    func progressText(done: Int64, total: Int64): IComponent {
+        text(progressTextOf(done, total))
+    }
+
+    // 明细：共几项、其中已存在/冲突/需发布各几个（不进分母也要让人看得见，不然像"项丢了"）
+    func itemBreakdown(): String {
+        var exists: Int64 = 0
+        var conflict: Int64 = 0
+        var need: Int64 = 0
+        let rows = this.itemRows.get()
+        for (d in rows) {
+            match (d.category) {
+                case "already_exists" => exists++
+                case "conflict" => conflict++
+                case _ => need++
+            }
+        }
+        var s = "共 ${rows.size} 项 · 需发布 ${need}"
+        if (exists > 0) {
+            s += " · 目标仓已有 ${exists}"
+        }
+        if (conflict > 0) {
+            s += " · 冲突 ${conflict}"
+        }
+        s
     }
 
     // 目标仓能不能覆盖已有同版本（官方中心仓不能 → 冲突条目只能升版重发）
@@ -872,7 +963,8 @@ class PublishPlanDetailPage <: Component {
                             .add(DescriptionsItem().label("名称").children([text(plan.name)]))
                             .add(DescriptionsItem().label("状态").children([this.statusTag(if (executing) { "running" } else { plan.status })]))
                             .add(DescriptionsItem().label("目标上游").children([text(this.upstreamName(st, plan.targetUpstream))]))
-                            .add(DescriptionsItem().label("进度").children([text("${plan.completedCount}/${plan.totalCount}")]))
+                            .add(DescriptionsItem().label("进度").children([this.progressText(plan.completedCount, plan.totalCount)]))
+                            .add(DescriptionsItem().label("发布项").children([text(this.itemBreakdown())]))
                             .add(DescriptionsItem().label("轮询").children([text("${plan.pollInterval}s / 超时 ${plan.pollTimeout}s")]))
                             .add(DescriptionsItem().label("执行").children([progressLine])),
                         // 计划级原因：中止/失败后刷新页面仍要看得到「为什么停了」
@@ -887,7 +979,12 @@ class PublishPlanDetailPage <: Component {
                             // 重新分类：按目标仓索引重跑对比（目标仓可能刚同步完；
                             // 老计划也可能是在"目标仓对比"上线前建的，分类是旧的）
                             if (!executing) {
-                                Button([text("重新分析")]).onClick(reanalyze)
+                                let analyzing = this.analyzing.get()
+                                let btn = Button([text(if (analyzing) { "分析中…" } else { "重新分析" })])
+                                if (analyzing) {
+                                    btn.loading()
+                                }
+                                btn.onClick(reanalyze)
                             } else {
                                 div()
                             },
@@ -902,7 +999,7 @@ class PublishPlanDetailPage <: Component {
                             } else {
                                 div()
                             },
-                        ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))]))),
+                        ], attrs: Some(HashMap<String, String>([("class", cls("card-actions"))]))),
                     ]),
                         adminCard("发布项", [this.renderItems()]),
                     ]),

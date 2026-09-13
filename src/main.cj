@@ -163,19 +163,30 @@ func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
     // 重启恢复：执行线程随进程退出 → 把「执行中」的计划转为 paused（可续跑），
     // 进度按**条目状态**重算而不是清零：单条状态是即时落盘的，重启后正是靠它决定
     // 哪些不用再发（清零会让用户以为全都没发过，重复推送只会换回 409）。
+    //
+    // 顺带把所有计划的进度分母重算一遍（"需要发布的项数"）：老计划的 totalCount 是
+    // 「条目总数」，把目标仓已有的项也算进去了（实测「0/6」里其实只有 2 项要发）。
     for (planDoc in adminData.listPlans()) {
-        if (planDoc.status == "running") {
-            var completed: Int64 = 0
-            for (item in adminData.listPlanItems(planDoc.id)) {
-                if (item.status == "running") {
-                    let _ = adminData.updatePlanItem(item.id, "pending", "", nowMs())
-                } else if (item.status == "completed") {
-                    completed++
-                }
+        var completed: Int64 = 0
+        var required: Int64 = 0
+        for (item in adminData.listPlanItems(planDoc.id)) {
+            if (item.status == "running") {
+                let _ = adminData.updatePlanItem(item.id, "pending", "", nowMs())
+            } else if (item.status == "completed") {
+                completed++
             }
+            if (item.category != "already_exists") {
+                required++
+            }
+        }
+        let _ = adminData.setPlanTotal(planDoc.id, required)
+        if (planDoc.status == "running") {
             let _ = adminData.updatePlanStatus(planDoc.id, "paused", completed, nowMs())
             let _ = adminData.setPlanError(planDoc.id,
                 "服务重启：计划已自动暂停，点「继续执行」会跳过已完成项接着发", nowMs())
+        } else if (planDoc.completedCount != completed) {
+            // 非 running 的计划也可能对不上（比如上次是进程被杀在收口前）
+            let _ = adminData.updatePlanStatus(planDoc.id, planDoc.status, completed, nowMs())
         }
     }
     // 演示/冒烟数据开关：CJREG_SEED_DEMO=1 注入几个本地包（便于验证发布计划等完整流程）
@@ -187,7 +198,7 @@ func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
     }
     let cjxtApp = App()
     cjxtApp
-        .configure(AppConfig(title: cfg.siteName, cssBundle: "/css/bundle.css?v=4"))
+        .configure(AppConfig(title: cfg.siteName, cssBundle: "/css/bundle.css?v=5"))
         .serveStatic("/css", "public/css")
         .UseComponent()
         .state<CjregState>({ =>
@@ -402,7 +413,7 @@ func cmdAdminUI(dataDir: String, cfg: CjregConfig): Int64 {
     let proxySvc = ProxyService(pkgStore, blobStore, UpstreamService(upStore))
     let cjxtApp = App()
     cjxtApp
-        .configure(AppConfig(title: cfg.siteName, cssBundle: "/css/bundle.css?v=4"))
+        .configure(AppConfig(title: cfg.siteName, cssBundle: "/css/bundle.css?v=5"))
         .serveStatic("/css", "public/css")
         .UseComponent()
         .state<CjregState>({ =>

@@ -127,6 +127,28 @@ public func targetOverwritable(up: ?Upstream): Bool {
     }
 }
 
+// 计划进度里"需要发布"的项数：**不含 already_exists**。
+// 目标仓已有同版本的项不用发（默认也没勾选），把它算进分母会让「0/6」看着像 6 个都要发；
+// 反过来又不能在界面上消失——它们会在计划明细里以「目标仓已有 N」单独列出来。
+public func countRequired(items: ArrayList<PlanItem>): Int64 {
+    var n: Int64 = 0
+    for (it in items) {
+        if (it.category == PlanCategory.AlreadyExists) {
+            continue
+        }
+        n++
+    }
+    n
+}
+
+// 进度文案（详情页与列表页共用）：全都不需要发时直说，别显示 0/0
+public func progressTextOf(done: Int64, total: Int64): String {
+    if (total <= 0) {
+        return "无需发布"
+    }
+    "${done}/${total}"
+}
+
 // 分类 → 字符串（存储与接口取值，与 cjrepo 的 category 一致）
 public func planCategoryName(c: PlanCategory): String {
     match (c) {

@@ -646,7 +646,132 @@ public class AdminService {
             detail: "id=${r.orgId} affected=${r.affected}")
     }
 
+    // ===== 单版本详情 + 上游重拉 =====
+
+    // GET /api/admin/packages/:id → 单版本详情（含 README 全文、来源上游、sha/大小/时间/发布者）
+    public func getPackageVersion(ctx: TangHttpContext): Unit {
+        if (!requireAdmin(ctx)) {
+            return
+        }
+        let store = match (this.pkgStore) {
+            case Some(s) => s
+            case None =>
+                writeJson(ctx, 500u16, "{\"error\":\"package store unavailable\"}")
+                return
+        }
+        let id = match (Int64.tryParse(ctx.param("id"))) {
+            case Some(n) => n
+            case None => 0
+        }
+        let doc = match (store.getById(id)) {
+            case Some(d) => d
+            case None =>
+                writeJson(ctx, 404u16, "{\"error\":\"package version not found\"}")
+                return
+        }
+        writeJson(ctx, 200u16, this.versionDetailJson(store, doc))
+    }
+
+    // POST /api/admin/packages/:id/refetch[?force=1] → 按上游内容重拉并覆盖本地缓存
+    // 仅对回源镜像版本开放（upstreamId != 0）；上游 sha 变了需 force=1 二次确认
+    public func refetchPackageVersion(ctx: TangHttpContext): Unit {
+        if (!requireAdmin(ctx)) {
+            return
+        }
+        let id = match (Int64.tryParse(ctx.param("id"))) {
+            case Some(n) => n
+            case None => 0
+        }
+        if (id <= 0) {
+            writeJson(ctx, 400u16, "{\"error\":\"invalid package id\"}")
+            return
+        }
+        let store = match (this.pkgStore) {
+            case Some(s) => s
+            case None =>
+                writeJson(ctx, 500u16, "{\"error\":\"package store unavailable\"}")
+                return
+        }
+        let proxy = match (this.proxySvc) {
+            case Some(p) => p
+            case None =>
+                writeJson(ctx, 503u16, "{\"error\":\"proxy service unavailable（未配置上游回源）\"}")
+                return
+        }
+        let doc = match (store.getById(id)) {
+            case Some(d) => d
+            case None =>
+                writeJson(ctx, 404u16, "{\"error\":\"package version not found\"}")
+                return
+        }
+        let force = (ctx.query("force") ?? "") == "1"
+        let r = refetchVersion(proxy, doc, force)
+        let target = auditTarget(doc.organization, doc.name, doc.version)
+        let (actorId, actorName) = this.actorOf(ctx)
+        writeAudit(this.adminData, LogKind.Admin, actorId, actorName, "refetch_package",
+            if (r.outcome == RefetchOutcome.Ok) { "ok" } else { "failed" }, target, ctx,
+            error: if (r.outcome == RefetchOutcome.Ok) { "" } else { r.message },
+            detail: "upstream=${r.upstreamName} old=${shortSha(r.oldSha)} new=${shortSha(r.newSha)} " +
+                "changed=${r.changed} size=${r.size} force=${force} id=${id}")
+        var code = 200u16
+        match (r.outcome) {
+            case RefetchOutcome.NotFound => code = 404u16
+            case RefetchOutcome.LocalOwned => code = 409u16
+            case RefetchOutcome.ShaChanged => code = 409u16
+            case RefetchOutcome.Invalid => code = 409u16
+            case RefetchOutcome.UpstreamMissing => code = 404u16
+            case RefetchOutcome.Unavailable => code = 503u16
+            case RefetchOutcome.Unreachable => code = 502u16
+            case _ => code = 200u16
+        }
+        writeJson(ctx, code, refetchJson(r))
+    }
+
+    // 单版本详情 JSON（管理端用，含 README 全文；不走公开接口的脱敏口径）
+    func versionDetailJson(store: PackageStore, doc: PackageDoc): String {
+        let publisher = if (doc.publisherId > 0) {
+            match (this.userStore.getUser(doc.publisherId)) {
+                case Some(u) => u.username
+                case None => ""
+            }
+        } else {
+            ""
+        }
+        let upstream = if (doc.upstreamId > 0) {
+            match (this.upstreamStore.getById(doc.upstreamId)) {
+                case Some(u) => u.name
+                case None => doc.upstreamName
+            }
+        } else {
+            ""
+        }
+        let blobs: BlobStore = match (this.blobStore) {
+            case Some(b) => b
+            case None => MemoryBlobStore()
+        }
+        let sb = StringBuilder()
+        sb.append("{\"id\":${doc.id},\"organization\":\"${escapeJsonStr(doc.organization)}\",")
+        sb.append("\"name\":\"${escapeJsonStr(doc.name)}\",\"version\":\"${escapeJsonStr(doc.version)}\",")
+        sb.append("\"cjcVersion\":\"${escapeJsonStr(doc.cjcVersion)}\",")
+        sb.append("\"description\":\"${escapeJsonStr(doc.description)}\",")
+        sb.append("\"artifactType\":\"${escapeJsonStr(doc.artifactType)}\",\"executable\":${doc.executable},")
+        sb.append("\"authors\":${jsonStringArray(doc.authors)},\"repository\":\"${escapeJsonStr(doc.repository)}\",")
+        sb.append("\"homepage\":\"${escapeJsonStr(doc.homepage)}\",")
+        sb.append("\"documentation\":\"${escapeJsonStr(doc.documentation)}\",")
+        sb.append("\"tag\":${jsonStringArray(doc.tag)},\"category\":${jsonStringArray(doc.category)},")
+        sb.append("\"license\":${jsonStringArray(doc.license)},")
+        sb.append("\"sha256\":\"${escapeJsonStr(doc.sha256)}\",\"tarballSize\":${doc.tarballSize},")
+        sb.append("\"downloads\":${doc.downloadCount},\"publisherId\":${doc.publisherId},")
+        sb.append("\"publisher\":\"${escapeJsonStr(publisher)}\",")
+        sb.append("\"upstreamId\":${doc.upstreamId},\"upstreamName\":\"${escapeJsonStr(upstream)}\",")
+        sb.append("\"deletedAt\":${doc.deletedAt},\"createdAt\":${doc.createdAt},\"updatedAt\":${doc.updatedAt},")
+        sb.append("\"readme\":\"${escapeJsonStr(doc.readme)}\",\"readmeLength\":${doc.readme.size},")
+        sb.append("\"artifactPresent\":${artifactAvailable(store, blobs, doc)}}")
+        sb.toString()
+    }
+
     // ===== 包三级删除闭环 =====
+
     // DELETE /api/admin/packages/:id → 软删除（deletedAt；索引/下载/公开 API 立即不可见）
     public func deletePackage(ctx: TangHttpContext): Unit {
         this.lifecycleEntry(ctx, "soft")

@@ -91,11 +91,21 @@ public class ProxyService {
     public var pkgStore: PackageStore
     public var blobStore: BlobStore
     public var upstreamSvc: UpstreamService
+    // 可注入的出网 GET（单测离线注入 stub；默认走真实 httpGet）
+    public var httpFetch: ?(String, String) -> ?Array<Byte> = None
 
     public init(pkgStore: PackageStore, blobStore: BlobStore, upstreamSvc: UpstreamService) {
         this.pkgStore = pkgStore
         this.blobStore = blobStore
         this.upstreamSvc = upstreamSvc
+    }
+
+    // 出网 GET 的唯一出口：测试注入点 + 后续打点都集中在这里
+    public func fetchBytes(url: String, token: String): ?Array<Byte> {
+        match (this.httpFetch) {
+            case Some(f) => f(url, token)
+            case None => httpGet(url, token)
+        }
     }
 
     // 取索引：本地有版本 → 返回；否则按优先级回源上游，命中即缓存索引条目到本地
@@ -123,7 +133,7 @@ public class ProxyService {
             if (url.isEmpty()) {
                 continue
             }
-            let body = httpGet(url, up.authToken)
+            let body = this.fetchBytes(url, up.authToken)
             if (body.isNone()) {
                 continue
             }
@@ -163,7 +173,7 @@ public class ProxyService {
         let ups = this.upstreamSvc.enabledSorted()
         for (up in ups) {
             let url = buildPackageURL(up.url, name, version, org)
-            let body = httpGet(url, up.authToken)
+            let body = this.fetchBytes(url, up.authToken)
             if (body.isNone()) {
                 continue
             }
@@ -179,6 +189,25 @@ public class ProxyService {
     public func generateLocalIndex(org: String, name: String): String {
         let svc = IndexService(this.pkgStore)
         return svc.generate(org, name, false)
+    }
+
+    // 直接从**指定上游**取索引（不查本地）：重拉需要上游的权威 sha256sum
+    // （fetchIndex 本地有版本时会直接返回本地索引，拿不到上游口径）
+    public func fetchUpstreamIndex(up: Upstream, org: String, name: String): ?String {
+        let url = buildIndexURL(up.url, name, org)
+        if (url.isEmpty()) {
+            return None
+        }
+        match (this.fetchBytes(url, up.authToken)) {
+            case Some(b) =>
+                let ndjson = String.fromUtf8(b)
+                if (ndjson.isEmpty()) {
+                    None
+                } else {
+                    Some(ndjson)
+                }
+            case None => None
+        }
     }
 
     // 把上游 NDJSON 索引条目缓存到本地 pkg 集合（记录 upstream 来源）

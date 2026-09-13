@@ -178,3 +178,12 @@
 .portal-token-row { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
 .portal-token-row .el-input { flex: 1; }
 .portal-search { max-width: 360px; margin-bottom: 16px; }
+
+/* ===== 版本详情对话框（键值块 + README）===== */
+.kv-block { padding: 4px 0 8px; }
+.kv-row { display: flex; gap: 12px; padding: 6px 0; border-bottom: 1px dashed #ebeef5; font-size: 13px; line-height: 1.6; }
+.kv-label { color: #909399; width: 92px; flex-shrink: 0; }
+.dialog-section { font-size: 13px; font-weight: 600; color: #303133; margin: 14px 0 8px; padding-top: 10px; border-top: 1px solid #ebeef5; }
+
+/* 版本详情正文：README 可能很长，只让正文区滚动（对话框整体不滚，底部按钮保持在视口内） */
+.detail-scroll { max-height: 58vh; overflow-y: auto; padding-right: 6px; }

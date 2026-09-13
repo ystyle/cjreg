@@ -123,7 +123,7 @@ public func restoreVersion(pkgStore: PackageStore, blobStore: BlobStore, doc: Pa
     LifecycleResult(LifecycleOutcome.Ok, "已恢复", 0, false, true)
 }
 
-/// 硬删除：仅允许已软删的版本；删除 blob + 记录 + 联动计划项
+/// 硬删除：仅允许已软删的版本；删除 blob（未被其它版本引用时）+ 记录 + 联动计划项
 public func hardDeleteVersion(pkgStore: PackageStore, blobStore: BlobStore, adminData: ?AdminDataStore,
                               doc: PackageDoc, now: Int64): LifecycleResult {
     if (doc.deletedAt == 0) {
@@ -131,12 +131,40 @@ public func hardDeleteVersion(pkgStore: PackageStore, blobStore: BlobStore, admi
             "硬删除前需先软删除（避免误操作直接丢失制品）", 0, false, true)
     }
     var removed = false
+    var shared = 0
     if (!doc.sha256.isEmpty()) {
-        removed = blobStore.remove(doc.sha256)
+        // blob 是内容寻址的：同一个制品可能被多个版本共享（跨组织镜像同一个包等），
+        // 删之前必须确认没人再用 —— 否则会静默搞坏另一个版本的下载（它只能靠回源救，本地发布的可救不回来）
+        shared = shaReferencedByOthers(pkgStore, doc.sha256, doc.id)
+        if (shared == 0) {
+            removed = blobStore.remove(doc.sha256)
+        }
     }
     let steps = skipPlanItemsForVersion(adminData, doc.organization, doc.name, doc.version, now)
     pkgStore.hardDelete(doc)
-    LifecycleResult(LifecycleOutcome.Ok, "已硬删除（记录 + 制品，不可恢复）", steps, removed, false)
+    let msg = if (shared > 0) {
+        "已硬删除记录；制品仍被 ${shared} 个其它版本引用，保留未删"
+    } else {
+        "已硬删除（记录 + 制品，不可恢复）"
+    }
+    LifecycleResult(LifecycleOutcome.Ok, msg, steps, removed, false)
+}
+
+/// 同一 sha 还被多少个**其它**未删文档引用（内容寻址的 blob 可能被多版本共享）
+public func shaReferencedByOthers(pkgStore: PackageStore, sha: String, excludeId: Int64): Int64 {
+    if (sha.isEmpty()) {
+        return 0
+    }
+    var n: Int64 = 0
+    for (d in pkgStore.storm.all<PackageDoc>()) {
+        if (d.id == excludeId || d.deletedAt != 0) {
+            continue
+        }
+        if (d.sha256 == sha) {
+            n++
+        }
+    }
+    return n
 }
 
 /// 计划项联动：把引用该版本且未完成的计划项标记为 skipped

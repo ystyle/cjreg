@@ -60,7 +60,7 @@ func testEnrichFillsEmptyFieldsOnly() {
     @Expect(d.executable, true)
 }
 
-// 2. 字段齐全 → 不需要补齐（调用方据此跳过解压）
+// 2. 字段齐全（含制品大小）→ 不需要补齐（调用方据此跳过解压）
 @Test
 func testNeedsArtifactEnrichFalseWhenComplete() {
     let d = PackageDoc()
@@ -71,8 +71,12 @@ func testNeedsArtifactEnrichFalseWhenComplete() {
     d.repository = "r"
     d.tag = ArrayList<String>(["t"])
     d.category = ArrayList<String>(["c"])
+    d.tarballSize = 1234
     @Expect(needsArtifactEnrich(d), false)
     d.readme = ""
+    @Expect(needsArtifactEnrich(d), true)
+    d.readme = "r"
+    d.tarballSize = 0   // 只缺制品大小也要补（列表/详情要显示体积）
     @Expect(needsArtifactEnrich(d), true)
 }
 
@@ -104,6 +108,7 @@ func testSyncMetadataLatestOnly() {
     b.repository = "https://x"
     b.tag = ArrayList<String>(["t"])
     b.category = ArrayList<String>(["Network"])
+    b.tarballSize = 1024   // 制品大小也算展示字段：齐全才跳过解压
     store.save(b)
 
     let report = syncPackageMetadata(store, blob, proxy, false)

@@ -305,7 +305,10 @@ public func parsePackagesBody(body: String, out: ArrayList<(String, String, Stri
             }
         }
     } catch (e: Exception) {
-        ()
+        // 请求体解析中断此前完全静默：out 里只留下半截 packages 列表，调用方
+        // 只在「一个都没解析出来」时才回 400，于是「body 坏了」被静默当成
+        // 「用户只提交了这部分包」，发布计划按残缺列表执行。
+        println("[cjreg] 发布计划请求体解析失败（已解析 " + out.size.toString() + " 个包）: " + e.toString())
     }
 }
 

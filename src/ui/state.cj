@@ -22,6 +22,8 @@ public class CjregState <: AppState {
     public var config: CjregConfig
     // 制品库（包硬删除时清理 blob；None = 未注入，硬删不可用）——由 main.cj 的状态工厂注入
     public var blobStore: ?BlobStore = None
+    // 回源代理（管理端「重拉」用；None = 未注入，重拉不可用）
+    public var proxySvc: ?ProxyService = None
     // 登录态
     public var currentUser: Signal<Option<User>> = Signal<Option<User>>(Option<User>.None)
     public var sessionToken: Signal<String> = Signal<String>("")

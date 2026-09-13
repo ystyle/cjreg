@@ -185,6 +185,7 @@ func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
         .state<CjregState>({ =>
             let st = CjregState(pkgStore, userStore, upStore, adminData, authSvc, app: Some(cjxtApp), config: cfg)
             st.blobStore = Some(blobStore)
+            st.proxySvc = Some(proxySvc)
             st
         })
         .auth({ t => restoreAdminSession(authSvc, t) })
@@ -387,6 +388,8 @@ func cmdAdminUI(dataDir: String, cfg: CjregConfig): Int64 {
     let authSvc = AuthService(userStore, 86400)
     // 制品库（包硬删除清理 blob）：与 serve 相同的磁盘布局
     let blobStore: BlobStore = DiskBlobStore(dataDir + "/blobs")
+    // 回源代理（管理端「重拉」用）：与 serve 同构
+    let proxySvc = ProxyService(pkgStore, blobStore, UpstreamService(upStore))
     let cjxtApp = App()
     cjxtApp
         .configure(AppConfig(cssBundle: "/css/bundle.css?v=3"))
@@ -395,6 +398,7 @@ func cmdAdminUI(dataDir: String, cfg: CjregConfig): Int64 {
         .state<CjregState>({ =>
             let st = CjregState(pkgStore, userStore, upStore, adminData, authSvc, app: Some(cjxtApp), config: cfg)
             st.blobStore = Some(blobStore)
+            st.proxySvc = Some(proxySvc)
             st
         })
         .auth({ t => restoreAdminSession(authSvc, t) })

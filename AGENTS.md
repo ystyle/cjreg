@@ -77,6 +77,44 @@ CJREG_PORT=8066 docker compose build && CJREG_PORT=8066 docker compose up -d
 > 2026-09-13：生产数据首次回捞结果 = 66 个包、补齐 65 个（唯一没补的是本地测试包 `docker::dtest`，
 > 它的制品是占位字节不是真 gzip）；公开列表描述从 1/66 变为 65/66。
 
+补充：制品字节数（`tarballSize`）也在这个口径里（索引协议不带 size，只有下载/重拉后才知道），
+所以「只缺 size」的版本同样会被 `sync-metadata` 再补一轮（本地有 blob 就不用回源）。
+
+## 后台：包版本列表 / 单版本详情 / 上游重拉
+
+**版本列表**（包管理页「版本」按钮）：ID / 版本 / **来源**（本地发布 or `回源 · <上游名>`）/ **大小** /
+**sha256**（缩写）/ **发布时间** / 下载 / 状态 / 操作（详情 · 重拉 · 软删 | 恢复 · 硬删）。
+
+- **重拉**只对**回源镜像**版本出现（`upstreamId != 0`）；本地发布的版本本地才是权威，后端直接 409。
+- **单版本详情**弹窗：全字段 + SHA256 全量 + 来源上游 + **README 全文**（Markdown 渲染，正文区独立滚动）。
+- 两者都有管理 API（给脚本/CI 用）：
+  - `GET  /api/admin/packages/:id` → 详情 JSON（含 `readme`/`readmeLength`/`upstreamName`/`artifactPresent`）
+  - `POST /api/admin/packages/:id/refetch[?force=1]` → 重拉并覆盖本地缓存
+
+**重拉的语义与护栏**（`src/server/refetch_service.cj`）：
+
+| 情况 | 结果 |
+|---|---|
+| 上游索引取不到 / 制品下载失败 | `502 unreachable`，本地不动 |
+| 上游索引里已无该版本 | `404 upstream_missing` |
+| 下载内容与上游索引 sha 不符（半截包） | `409 invalid`，丢弃、本地不动 |
+| 上游同版本 sha 变了（上游换过内容） | `409 sha_changed`（带 old/new sha），**要 `force=1` 才覆盖** |
+| 本地发布的版本 | `409 local_owned`（连上游都不问） |
+| 正常 | `200 ok` + `changed=true/false` |
+
+- 成功后更新 sha / 制品大小 / indexJson / README / 展示字段；**不改** id / 下载数 / createdAt / updatedAt
+  （重拉是刷新缓存，不是发版）；旧 blob 仍被其它版本引用时不清理。
+- 每次重拉（含失败）都写管理审计 `refetch_package`，detail 带 `upstream/old/new/changed/size/force`。
+- 排查用：`curl -s "http://127.0.0.1:8066/api/admin/logs/admin?keyword=refetch" -H "Authorization: Bearer <session>"`。
+
+**硬删除的制品保护**：blob 是内容寻址的，同一制品理论上可被多个版本共享；硬删前会检查
+`shaReferencedByOthers`，仍被引用时**只删记录、保留制品**（提示语里会写「仍被 N 个其它版本引用」）。
+
+> **UI 坑（已踩）**：cjxt 的 `Dialog` 保留**首次渲染**的静态子节点与 `title`（只有自带订阅的组件如
+> `Table` 才会更新）。所以对话框里的动态内容必须包在「组件 + 信号」里——本仓用 `SignalView`
+> （`pages_manage.cj`）包一层；纯 `text(...)` 或 `Dialog.title(...)` 换数据后**不会刷新**。
+
+
 ## agent-browser 在沙箱的使用说明
 
 本工作区（DSH sandbox）里 `$HOME` 只读，agent-browser 有几个坑必须绕过。以下均来自实测。

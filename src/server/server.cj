@@ -228,6 +228,8 @@ public func buildServer(
             app.put("/api/admin/organizations/:id", { ctx => adm.updateOrganization(ctx) })
             app.delete("/api/admin/organizations/:id", { ctx => adm.deleteOrganization(ctx) })
             app.get("/api/admin/packages", { ctx => adm.listPackages(ctx) })
+            app.get("/api/admin/packages/:id", { ctx => adm.getPackageVersion(ctx) })
+            app.post("/api/admin/packages/:id/refetch", { ctx => adm.refetchPackageVersion(ctx) })
             app.delete("/api/admin/packages/:id/hard", { ctx => adm.hardDeletePackage(ctx) })
             app.delete("/api/admin/packages/:id", { ctx => adm.deletePackage(ctx) })
             app.put("/api/admin/packages/:id/restore", { ctx => adm.restorePackage(ctx) })

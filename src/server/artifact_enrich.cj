@@ -6,7 +6,8 @@
 // 于是：制品流经本地（下载/回源）时顺手补齐；存量包用 `cjreg admin sync-metadata` 回捞。
 //
 // 两条硬约束：
-//   1. 只填空字段，**绝不覆盖**已有值（本地发布的包已由 meta-data.json 填好）；
+//   1. 默认只填空字段，**绝不覆盖**已有值（本地发布的包已由 meta-data.json 填好）；
+//      显式重拉（overwrite=true）时按上游新制品整体刷新 —— 那是「以上游为准」的语义；
 //   2. 不改 updatedAt —— 元数据补齐不是发版，不能把「最近更新」排序搅乱。
 package ystyle::cjreg.server
 
@@ -19,20 +20,32 @@ import std.collection.*
 public func needsArtifactEnrich(d: PackageDoc): Bool {
     return d.readme.isEmpty() || d.description.isEmpty() || d.license.isEmpty()
         || d.authors.isEmpty() || d.repository.isEmpty() || d.tag.isEmpty()
-        || d.category.isEmpty()
+        || d.category.isEmpty() || d.tarballSize == 0
 }
 
 // 用制品内容补齐文档；返回是否发生了变更（调用方负责 save）
-public func enrichDocFromArtifact(doc: PackageDoc, tarball: Array<Byte>): Bool {
+// overwrite=false：只填空字段（下载/回源补齐）；true：按制品内容整体刷新（重拉覆盖）
+public func enrichDocFromArtifact(doc: PackageDoc, tarball: Array<Byte>, overwrite!: Bool = false): Bool {
     let files = extractArtifactFiles(tarball)
     if (!files.ok()) {
+        // 制品读不动 → 不采信任何派生字段（连大小也不写），只把失败打出来
         println("[cjreg] 制品内容提取失败 ${doc.organization}::${doc.name}@${doc.version}: ${files.error}")
+        return false
     }
     var changed = false
-    if (doc.readme.isEmpty() && !files.readme.isEmpty()) {
-        doc.readme = files.readme
-        changed = true
-        println("[cjreg] 补齐 README ${doc.organization}::${doc.name}@${doc.version}（${files.readme.size} 字符）")
+    // 制品字节数：回源落库时拿不到（索引协议不带 size），下载后顺手补上
+    if (overwrite || doc.tarballSize == 0) {
+        if (doc.tarballSize != tarball.size) {
+            doc.tarballSize = tarball.size
+            changed = true
+        }
+    }
+    if (!files.readme.isEmpty() && (overwrite || doc.readme.isEmpty())) {
+        if (doc.readme != files.readme) {
+            doc.readme = files.readme
+            changed = true
+            println("[cjreg] 补齐 README ${doc.organization}::${doc.name}@${doc.version}（${files.readme.size} 字节）")
+        }
     }
     if (doc.readme.isEmpty()) {
         println("[cjreg] 制品内无 README ${doc.organization}::${doc.name}@${doc.version}（${files.note}）")
@@ -45,29 +58,31 @@ public func enrichDocFromArtifact(doc: PackageDoc, tarball: Array<Byte>): Bool {
         println("[cjreg] cjpm.toml 解析失败 ${doc.organization}::${doc.name}@${doc.version}: ${m.error}")
         return changed
     }
-    if (doc.description.isEmpty() && !m.description.isEmpty()) {
-        doc.description = m.description
-        changed = true
+    if (!m.description.isEmpty() && (overwrite || doc.description.isEmpty())) {
+        if (doc.description != m.description) {
+            doc.description = m.description
+            changed = true
+        }
     }
-    if (doc.repository.isEmpty()) {
+    if (overwrite || doc.repository.isEmpty()) {
         doc.repository = m.repository
     }
-    if (doc.homepage.isEmpty()) {
+    if (overwrite || doc.homepage.isEmpty()) {
         doc.homepage = m.homepage
     }
-    if (doc.documentation.isEmpty()) {
+    if (overwrite || doc.documentation.isEmpty()) {
         doc.documentation = m.documentation
     }
-    if (doc.authors.isEmpty()) {
+    if (overwrite || doc.authors.isEmpty()) {
         doc.authors = m.authors
     }
-    if (doc.tag.isEmpty()) {
+    if (overwrite || doc.tag.isEmpty()) {
         doc.tag = m.tag
     }
-    if (doc.category.isEmpty()) {
+    if (overwrite || doc.category.isEmpty()) {
         doc.category = m.category
     }
-    if (doc.license.isEmpty()) {
+    if (overwrite || doc.license.isEmpty()) {
         doc.license = m.license
     }
     if (m.outputType == "executable") {

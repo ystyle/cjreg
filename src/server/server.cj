@@ -178,11 +178,22 @@ public func buildServer(
     })
 
     // 索引 GET /index/:mo/:du/:name[?organization=]（本地无则回源上游）
+    //
+    // **分片必须校验**：官方中心仓对不匹配的 mo/du 返回
+    // 400 "first two and second two not match module name"。
+    // 我们以前直接忽略这两段 —— 结果 `/index/xx/yy/crc` 也能拿到索引，
+    // 于是"在私有仓预演通过、发到官方仓却 400/404"这种错在预演里**永远暴露不出来**
+    // （实测：我把 bstorm 的索引路径写成 bs/ap 后，官方仓 400，私有仓却照常 200）。
     app.get("/index/:mo/:du/:name", { ctx =>
         let name = ctx.param("name")
         let org = ctx.query("organization") ?? ""
         if (name.size < 3) {
             ctx.status(400u16).writeStringWithCode(400u16, "{\"error\":\"invalid package name\"}")
+            return
+        }
+        if (!indexShardMatches(ctx.param("mo"), ctx.param("du"), name)) {
+            ctx.status(400u16).writeStringWithCode(400u16,
+                "{\"error\":\"Bad request: first two and second two not match module name.\"}")
             return
         }
         // 读鉴权（requireAuth=true）：token + read 权限

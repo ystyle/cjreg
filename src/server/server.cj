@@ -163,6 +163,9 @@ public func buildServer(
                 let (outcome, blob, sha) = proxy.fetchArtifact(org, name, version)
                 match (blob) {
                     case Some(bytes) =>
+                        // 制品到手 → 顺手补齐该版本的展示字段/README
+                        // （回源聚合的包只有索引字段，展示信息只存在于制品内部，见 artifact_enrich.cj）
+                        let _ = enrichDocByVersion(store, org, name, version, bytes)
                         ctx.attachment("${name}-${version}.cjp")
                             .set("Content-Type", "application/x-gzip")
                         ctx.write(bytes)

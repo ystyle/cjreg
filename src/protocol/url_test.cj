@@ -18,6 +18,23 @@ func testBuildIndexURL() {
         "https://x/registry/index/co/rd/cordis_core?organization=ystyle")
 }
 
+// 索引分片校验：服务端必须和官方中心仓一样严格，否则私有仓预演发现不了"索引路径写错"
+@Test
+func testIndexShardMatches() {
+    // 4+ 字符：前 2 + 第 3-4
+    @Expect(indexShardMatches("js", "on", "jsonvalue"), true)
+    @Expect(indexShardMatches("to", "ml", "tomlcj"), true)
+    @Expect(indexShardMatches("js", "so", "jsonvalue"), false)
+    @Expect(indexShardMatches("xx", "yy", "jsonvalue"), false)
+    // 3 字符：第 2 段就是第 3 个字符（实测官方仓：cr/c/crc 200、cr/rc/crc 400）
+    @Expect(indexShardMatches("cr", "c", "crc"), true)
+    @Expect(indexShardMatches("cr", "rc", "crc"), false)
+    @Expect(indexShardMatches("bs", "to", "bstorm"), true)
+    @Expect(indexShardMatches("bs", "ap", "bstorm"), false)
+    // < 3 字符
+    @Expect(indexShardMatches("di", "", "di"), false)
+}
+
 @Test
 func testBuildPackageURL() {
     @Expect(buildPackageURL("https://x/registry", "jsonvalue", "1.1.0", ""),

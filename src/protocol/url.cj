@@ -14,6 +14,19 @@ public func trimTrailing(base: String): String {
 // 短名规则：name >= 4 字符 → mo=name[0:2], du=name[2:4]
 //           name == 3 字符 → mo=name[0:2], du=name[2]（第 3 字符）
 //           name <  3 字符 → 官方模块名规格为 [3,64]，此分支为防御性处理，返回空串
+// 索引路径的两段分片是否与模块名匹配：
+//   第 1 段 = 名字前 2 字符；第 2 段 = 第 3-4 字符（名字只有 3 字符时就是第 3 字符）。
+// 官方中心仓对不匹配的分片返回 400；我们服务端也必须一样严格 —— 否则私有仓预演
+// 会把"索引路径写错"这种错悄悄放过去（实测踩过：bs/ap/bstorm 在官方仓 400、在本仓 200）。
+public func indexShardMatches(mo: String, du: String, name: String): Bool {
+    if (name.size < 3) {
+        return false
+    }
+    let wantMo = name[0..2]
+    let wantDu = if (name.size >= 4) { name[2..4] } else { name[2..3] }
+    mo == wantMo && du == wantDu
+}
+
 public func buildIndexURL(base: String, name: String, org: String): String {
     let b = trimTrailing(base)
     if (name.size < 3) {

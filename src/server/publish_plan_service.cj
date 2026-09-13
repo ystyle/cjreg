@@ -668,6 +668,37 @@ public func parseDependencyRefs(indexJson: String): ArrayList<(String, String, S
     return result
 }
 
+// 「检查索引」的结果
+public class IndexCheckResult {
+    public var checked: Int64 = 0          // 探测了几个
+    public var unreachable: Int64 = 0      // 目标仓索引取不到的个数
+    public var ready: ArrayList<Int64> = ArrayList<Int64>()   // 已在目标仓索引里的输入下标
+
+    public init() {}
+}
+
+// 一次性检查若干 (org, name, version) 是否已出现在目标仓索引里。
+//
+// 用途：计划里那些「已推送成功、在等索引」的项，不该逼用户再点一次「继续执行」干等
+// 一个轮询周期（默认 60s，超时 600s）。这里只探一次：命中的就可以直接标成发布完成。
+// 「目标仓到底有没有」永远是**现查**的（不在包记录上打标记），所以这个动作随时可重放。
+public func checkVersionsInIndex(targets: ArrayList<(String, String, String)>,
+                                 probe: (String, String) -> ?String): IndexCheckResult {
+    let r = IndexCheckResult()
+    for (i in 0..targets.size) {
+        let (org, name, version) = targets[i]
+        match (probe(org, name)) {
+            case Some(text) =>
+                r.checked++
+                if (indexHasVersion(text, name, version)) {
+                    r.ready.add(i)
+                }
+            case None => r.unreachable++
+        }
+    }
+    r
+}
+
 // 计划内的依赖关系：item.pkgId → 它（直接）依赖的、**也在本计划里**的 pkgId 列表。
 //
 // 用途：某个包发失败/索引一直没就绪时，**只有依赖它的项**该被卡住；
@@ -1072,7 +1103,7 @@ func waitIndexReady(probe: (String, String) -> ?String, org: String, name: Strin
 
 // 目标仓索引里是否已有该版本（索引是 NDJSON，逐行解析而不是做子串匹配——
 // 子串会把 "1.0.1" 误命中成 "1.0.10"）
-func indexHasVersion(indexJson: String, name: String, version: String): Bool {
+public func indexHasVersion(indexJson: String, name: String, version: String): Bool {
     for (e in parseNDJSON(indexJson)) {
         if (e.name == name && e.version == version) {
             return true

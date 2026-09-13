@@ -550,13 +550,33 @@ class PublishPlanDetailPage <: Component {
     }
 
     // 分类标签：把「目标仓已有」与「真需要发」区分开，别一律显示"待发布"
-    func categoryTag(c: String): IComponent {
+    // 分类标签。注意：**分类是建计划（或上次重新分析）那一刻的目标仓比对结果**，
+    // 一旦本次计划真的把它推成功了，再显示「待发布」就是自相矛盾（实测用户就会问
+    // "tsdb 明明发出去了，怎么还回退成待发布"）。所以按执行状态分层显示：
+    //   已推送成功、在等索引 → 「已推送·等索引」
+    //   已完成             → 「已发布」
+    func categoryTag(c: String, status: String): IComponent {
+        match (status) {
+            case "completed" => return Tag([text("已发布")]).kind(ComponentKind.Success)
+            case "waiting_index" => return Tag([text("已推送·等索引")]).kind(ComponentKind.Warning)
+            case _ => ()
+        }
         match (c) {
             case "already_exists" => Tag([text("已存在")]).kind(ComponentKind.Success)
             case "conflict" => Tag([text("冲突")]).kind(ComponentKind.Danger)
             case "version_optional" => Tag([text("可升版")]).kind(ComponentKind.Warning)
             case _ => Tag([text("待发布")]).kind(ComponentKind.Primary)
         }
+    }
+
+    // 有没有"已推送成功、在等目标仓索引"的项
+    func hasWaitingIndex(): Bool {
+        for (d in this.itemRows.get()) {
+            if (d.status == "waiting_index") {
+                return true
+            }
+        }
+        false
     }
 
     // 分类说明（执行前就能看出「为什么不用发」/「发不出去该怎么办」）。
@@ -765,6 +785,100 @@ class PublishPlanDetailPage <: Component {
             // 界面没刷到没关系（上面已落盘）；但不能把异常抛出去把线程搞死
             println("[cjreg] 发布计划收口推送失败（plan ${this.planId}，状态已落盘为 ${finalStatus}）: " + e.toString())
         }
+    }
+
+    // 「检查索引」：对"已推送成功、在等索引"的项各探测一次目标仓索引，
+    // 命中的直接标成发布完成（内容早就在目标仓了，只是索引/审核没过）。
+    // 同样走 analyzing 的加载态（真网络，逐包取索引）。
+    func checkIndex(ctx: ActionContext): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
+        }
+        if (this.analyzing.get()) {
+            return PatchResult.ReRender
+        }
+        let sid = ctx.getSessionId()
+        this.analyzing.set(true)
+        st.planAnalyzeSince.set(nowMs())
+        this.msg.set("正在检查目标仓索引…")
+        spawn { =>
+            this.checkIndexAsync(st, sid)
+        }
+        PatchResult.ReRender
+    }
+
+    func checkIndexAsync(st: CjregState, sid: String): Unit {
+        var summary = ""
+        try {
+            let plan = match (st.adminData.getPlan(this.planId)) {
+                case Some(p) => p
+                case None =>
+                    this.finishAnalyze(st, sid, "计划不存在")
+                    return
+            }
+            let target = st.upStore.getById(plan.targetUpstream)
+            if (target.isNone()) {
+                this.finishAnalyze(st, sid, "目标上游不存在，无法检查")
+                return
+            }
+            let docs = st.adminData.listPlanItems(this.planId)
+            let waiting = ArrayList<PlanItemDoc>()
+            let targets = ArrayList<(String, String, String)>()
+            for (d in docs) {
+                if (d.status == "waiting_index") {
+                    waiting.add(d)
+                    targets.add((d.packageOrg, d.packageName, d.packageVersion))
+                }
+            }
+            if (waiting.size == 0) {
+                this.finishAnalyze(st, sid, "没有在等索引的项")
+                return
+            }
+            let proxy = st.proxySvc
+            let up = target.getOrThrow()
+            let r = checkVersionsInIndex(targets, { org, name =>
+                match (proxy) {
+                    case Some(p) => p.fetchUpstreamIndex(up, org, name)
+                    case None => Option<String>.None
+                }
+            })
+            var done: Int64 = 0
+            for (i in r.ready) {
+                let d = waiting[i]
+                let _ = st.adminData.updatePlanItem(d.id, "completed",
+                    "索引已就绪（检查索引确认），本项发布完成", nowMs())
+                done++
+            }
+            // 重新数一遍进度：全部项都完成/跳过时，计划就是完成了
+            var completed: Int64 = 0
+            var pending: Int64 = 0
+            for (d in st.adminData.listPlanItems(this.planId)) {
+                if (d.status == "completed") {
+                    completed++
+                } else if (d.category != "already_exists") {
+                    pending++
+                }
+            }
+            if (pending == 0) {
+                let _ = st.adminData.updatePlanStatus(this.planId, "completed", completed, nowMs())
+                let _ = st.adminData.setPlanError(this.planId, "全部项已完成", nowMs())
+            } else {
+                let _ = st.adminData.updatePlanStatus(this.planId, "paused", completed, nowMs())
+            }
+            st.adminData.addLog(LogKind.Publish, 0, "", "plan ${this.planId} 检查索引", "ok", nowMs())
+            summary = "检查索引：${done}/${waiting.size} 项已就绪并标记为已发布" +
+                (if (r.unreachable > 0) { "（${r.unreachable} 项目标仓索引取不到）" } else { "" }) +
+                (if (pending == 0) { "；计划已全部完成" } else { "；其余项仍需发布，可点「继续执行」" })
+        } catch (e: Exception) {
+            println("[cjreg] 检查索引失败（plan ${this.planId}）: " + e.toString())
+            summary = "检查索引失败：" + e.toString()
+        }
+        this.finishAnalyze(st, sid, summary)
     }
 
     // 请求停止执行：只置标志，执行器在"下一项开推前"和"等索引的每一轮"看到就收口。
@@ -1011,8 +1125,8 @@ class PublishPlanDetailPage <: Component {
             .add(TableColumn<PlanItemDoc>().label("包").accessor({ d =>
                 packageLabel(d.packageOrg, d.packageName, d.packageVersion)
             }).minWidth(230))
-            .add(TableColumn<PlanItemDoc>().label("分类").width(90).render({ d, i =>
-                this.categoryTag(d.category)
+            .add(TableColumn<PlanItemDoc>().label("分类").width(120).render({ d, i =>
+                this.categoryTag(d.category, d.status)
             }))
             .add(TableColumn<PlanItemDoc>().label("状态").width(90).render({ d, i =>
                 this.itemStatusTag(d.status)
@@ -1100,6 +1214,13 @@ class PublishPlanDetailPage <: Component {
                             if (canStart) {
                                 Button([text(if (resuming) { "继续执行（跳过已完成项）" } else { "开始执行" })])
                                     .kind(ButtonKind.Primary).onClick(doStart)
+                            } else {
+                                div()
+                            },
+                            // 「等索引」的项没必要逼用户再点一次执行、干等一个轮询周期（默认 60s、
+                            // 超时 600s）：单独给一个"现在查一次"的入口，命中就直接标成已发布
+                            if (!executing && this.hasWaitingIndex()) {
+                                Button([text("检查索引")]).onClick(checkIndex)
                             } else {
                                 div()
                             },

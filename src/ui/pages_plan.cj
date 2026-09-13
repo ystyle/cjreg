@@ -5,6 +5,7 @@ import cjxt.*
 import cjxt.macros.*
 import cjxt.components.*
 import ystyle::cjreg.store.*
+import ystyle::cjreg.config.*
 import ystyle::cjreg.server.*
 import ystyle::cjreg.index.*
 import std.collection.*
@@ -512,6 +513,7 @@ class PublishPlanDetailPage <: Component {
             case "completed" => Tag([text("成功")]).kind(ComponentKind.Success)
             case "failed" => Tag([text("失败")]).kind(ComponentKind.Danger)
             case "running" => Tag([text("推送中")]).kind(ComponentKind.Warning)
+            case "skipped" => Tag([text("未推送")]).kind(ComponentKind.Info)
             case _ => Tag([text("待发布")]).kind(ComponentKind.Info)
         }
     }
@@ -536,15 +538,29 @@ class PublishPlanDetailPage <: Component {
                     case Some(up) =>
                         let docs = st.adminData.listPlanItems(this.planId)
                         let execItems = ArrayList<PlanItem>()
-                        let docIds = ArrayList<Int64>()
+                        // pkgId → 计划项 docId：执行回调是按项来的（一个项可能回调多次），
+                        // 用索引并行数组会错位，必须按 pkgId 映射
+                        let docIds = HashMap<Int64, Int64>()
+                        var pending: Int64 = 0
                         for (d in docs) {
                             if (!d.selected) { continue }
-                            execItems.add(PlanItem(d.packageId, d.packageName, d.packageOrg, d.packageVersion, toPlanCategory(d.category), d.order))
-                            docIds.add(d.id)
-                            let _ = st.adminData.updatePlanItem(d.id, "running", "", nowMs())
+                            let it = PlanItem(d.packageId, d.packageName, d.packageOrg, d.packageVersion, toPlanCategory(d.category), d.order)
+                            it.selected = d.selected
+                            // 带上库里已有的状态：续跑时执行器据此跳过已完成的项
+                            it.status = toPlanItemStatus(d.status)
+                            if (!(it.status == PlanItemStatus.Completed)) {
+                                pending++
+                                let _ = st.adminData.updatePlanItem(d.id, "running", "", nowMs())
+                            }
+                            execItems.add(it)
+                            docIds[d.packageId] = d.id
                         }
                         if (execItems.size == 0) {
                             this.msg.set("没有可执行的发布项")
+                            return PatchResult.ReRender
+                        }
+                        if (pending == 0) {
+                            this.msg.set("所有项都已完成，无需重复推送")
                             return PatchResult.ReRender
                         }
                         st.adminData.updatePlanStatus(this.planId, "running", 0, nowMs())
@@ -554,7 +570,7 @@ class PublishPlanDetailPage <: Component {
                         st.adminData.addLog(LogKind.Publish, sessionUid(ctx), sessionUsername(ctx), "start plan ${plan.name}", "ok", nowMs())
                         // 异步执行（网络操作在线程内，DB 写在 pushUpdate 回调里串行化）
                         spawn { =>
-                            this.runExecution(st, sid, execItems, docIds, up.url, up.authToken)
+                            this.runExecution(st, sid, execItems, docIds, up, plan.pollInterval, plan.pollTimeout)
                         }
                     case None =>
                         this.msg.set("目标上游不存在")
@@ -565,8 +581,13 @@ class PublishPlanDetailPage <: Component {
         PatchResult.ReRender
     }
 
-    // 异步执行线程：逐项推送，每项完成通过 App.pushUpdate 推进度给前端
-    func runExecution(st: CjregState, sid: String, items: ArrayList<PlanItem>, docIds: ArrayList<Int64>, url: String, token: String): Unit {
+    // 异步执行线程：逐项推送，每项完成通过 App.pushUpdate 推进度给前端。
+    // 计划级语义（对齐官方返回码规格）：
+    //   429 / 401 / 403 → 目标仓直接告诉我们「继续下去也是白费」→ **暂停计划**并记下原因，
+    //                     未执行的项保持未推送（下次点「继续执行」从这里接上）
+    //   409            → 目标仓已有同版本不同制品 → 该项跳过（不是失败），继续下一项
+    //   >=500 / 网络   → 执行器内部退避重试，仍失败才判该项失败
+    func runExecution(st: CjregState, sid: String, items: ArrayList<PlanItem>, docIds: HashMap<Int64, Int64>, up: Upstream, pollIntervalSec: Int64, pollTimeoutSec: Int64): Unit {
         let app = match (st.app) {
             case Some(a) => a
             case None => return
@@ -574,25 +595,64 @@ class PublishPlanDetailPage <: Component {
         let executor = PublishExecutor(st.pkgStore, DiskBlobStore("${getDataDir()}/blobs"))
         let total = items.size
         let done = Box<Int64>(0)
-        let (ok, _, _) = executor.execute(items, url, token, onItem: { it, ok, err =>
-            // 服务端推送回调在 execMutex 内执行：DB 写与 WS handler 串行化
+        let okCount = Box<Int64>(0)
+        let report = executor.execute(items, up.url, up.authToken, onItem: { it, _, err =>
+            // **先即时落盘**：单条状态与计划进度都必须进 DB，不能只留在执行线程的内存里、
+            // 也不能只挂在 pushUpdate 上——页面一关（WS 会话没了）pushUpdate 就不再执行，
+            // 结果是「计划永远 running、单条永远 Pending」，重启后分不清哪些已经发过。
+            done.value++
+            if (it.status == PlanItemStatus.Completed) {
+                okCount.value++
+            }
+            match (docIds.get(it.pkgId)) {
+                case Some(docId) =>
+                    let _ = st.adminData.updatePlanItem(docId, planItemStatusName(it.status), err, nowMs())
+                case None => ()
+            }
+            let _ = st.adminData.updatePlanStatus(this.planId, "running", okCount.value, nowMs())
+            // 再推给前端刷新界面（纯 UI，失败也不影响已落盘的进度）
             let _ = app.pushUpdate(sid, { pctx =>
                 let s = pctx.getState<CjregState>()
-                if (done.value < docIds.size) {
-                    let _ = s.adminData.updatePlanItem(docIds[done.value], if (ok) { "completed" } else { "failed" }, err, nowMs())
-                }
-                done.value++
                 s.planProgress.set("${done.value}/${total}")
                 this.refreshItems()
                 PatchResult.ReRender
             })
-        })
-        let finalStatus = if (ok == total && total > 0) { "completed" } else { "failed" }
+        }, indexProbe: { org, name =>
+            // 拓扑序下一条依赖它：推完必须确认**目标仓索引里真的能查到该版本**再往下走
+            // （中心仓索引同步偶尔很慢，这里按计划的轮询间隔等，超时就暂停而不是判失败）
+            match (st.proxySvc) {
+                case Some(p) => p.fetchUpstreamIndex(up, org, name)
+                case None => Option<String>.None
+            }
+        }, pollIntervalSec: pollIntervalSec, pollTimeoutSec: pollTimeoutSec)
+        // 中止 → paused（可续跑）；否则按成败收口
+        let finalStatus = if (report.aborted) {
+            "paused"
+        } else if (report.failed == 0 && report.total > 0) {
+            "completed"
+        } else {
+            "failed"
+        }
+        let summary = if (report.aborted) {
+            report.abortReason
+        } else if (report.failed > 0) {
+            "失败 ${report.failed} 项：${if (report.errors.size > 0) { report.errors[0] } else { "" }}"
+        } else {
+            ""
+        }
+        // 计划级收口同样**先落盘**，再推界面
+        let _ = st.adminData.updatePlanStatus(this.planId, finalStatus, report.success, nowMs())
+        if (summary != "") {
+            let _ = st.adminData.setPlanError(this.planId, summary, nowMs())
+        }
+        if (report.aborted) {
+            st.adminData.addLog(LogKind.Publish, 0, "", "plan ${this.planId} paused", "failed", nowMs())
+        }
         let _ = app.pushUpdate(sid, { pctx =>
             let s = pctx.getState<CjregState>()
-            let _ = s.adminData.updatePlanStatus(this.planId, finalStatus, ok, nowMs())
             s.planBusy.set(false)
             s.planStatus.set(finalStatus)
+            this.msg.set(summary)
             this.refreshItems()
             PatchResult.ReRender
         })
@@ -633,7 +693,8 @@ class PublishPlanDetailPage <: Component {
         let executing = st.planBusy.get()
         match (st.adminData.getPlan(this.planId)) {
             case Some(plan) =>
-                let canStart = !executing && (plan.status == "pending" || plan.status == "failed")
+                let canStart = !executing && plan.status != "running" && plan.status != "completed"
+                let resuming = plan.status == "paused" || plan.status == "failed"
                 let progressLine = if (executing) {
                     div([text("执行中: ${st.planProgress.get()}")])
                 } else {
@@ -653,10 +714,18 @@ class PublishPlanDetailPage <: Component {
                             .add(DescriptionsItem().label("进度").children([text("${plan.completedCount}/${plan.totalCount}")]))
                             .add(DescriptionsItem().label("轮询").children([text("${plan.pollInterval}s / 超时 ${plan.pollTimeout}s")]))
                             .add(DescriptionsItem().label("执行").children([progressLine])),
+                        // 计划级原因：中止/失败后刷新页面仍要看得到「为什么停了」
+                        if (plan.lastError != "") {
+                            div([Tag([text(plan.lastError)]).kind(ComponentKind.Warning)],
+                                attrs: Some(HashMap<String, String>([("style", "margin: 8px 0")])))
+                        } else {
+                            div()
+                        },
                         div([
                             Button([text("返回列表")]).onClick(backHandler),
                             if (canStart) {
-                                Button([text("开始执行")]).kind(ButtonKind.Primary).onClick(doStart)
+                                Button([text(if (resuming) { "继续执行（跳过已完成项）" } else { "开始执行" })])
+                                    .kind(ButtonKind.Primary).onClick(doStart)
                             } else {
                                 div()
                             },
@@ -687,6 +756,29 @@ func toPlanCategory(s: String): PlanCategory {
         case "already_exists" => PlanCategory.AlreadyExists
         case "conflict" => PlanCategory.Conflict
         case _ => PlanCategory.NeedPublish
+    }
+}
+
+// 计划项状态：字符串 ⇄ 枚举（续跑时要把库里的状态带回执行器，
+// 否则已成功的项会被重复推送、换回 409）
+func toPlanItemStatus(s: String): PlanItemStatus {
+    match (s) {
+        case "completed" => PlanItemStatus.Completed
+        case "failed" => PlanItemStatus.Failed
+        case "running" => PlanItemStatus.Pending
+        case "skipped" => PlanItemStatus.Skipped
+        case _ => PlanItemStatus.Pending
+    }
+}
+
+func planItemStatusName(s: PlanItemStatus): String {
+    match (s) {
+        case PlanItemStatus.Completed => "completed"
+        case PlanItemStatus.Failed => "failed"
+        case PlanItemStatus.Skipped => "skipped"
+        case PlanItemStatus.Publishing => "running"
+        case PlanItemStatus.WaitingIndex => "pending"
+        case PlanItemStatus.Pending => "pending"
     }
 }
 

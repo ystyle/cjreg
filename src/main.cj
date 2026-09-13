@@ -160,15 +160,22 @@ func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
     // 同一 Tang 实例：协议路由 + cjxt 管理/公开页面（单进程共享 store）
     let app = buildServer(pkgStore, Some(admin), Some(upSvc), blobStore, config: cfg,
         adminData: Some(adminData))
-    // 重启恢复：执行中的计划复位为待执行（执行线程随进程退出）
+    // 重启恢复：执行线程随进程退出 → 把「执行中」的计划转为 paused（可续跑），
+    // 进度按**条目状态**重算而不是清零：单条状态是即时落盘的，重启后正是靠它决定
+    // 哪些不用再发（清零会让用户以为全都没发过，重复推送只会换回 409）。
     for (planDoc in adminData.listPlans()) {
-        if (planDoc.status == "running" || planDoc.status == "paused") {
-            let _ = adminData.updatePlanStatus(planDoc.id, "pending", 0, nowMs())
+        if (planDoc.status == "running") {
+            var completed: Int64 = 0
             for (item in adminData.listPlanItems(planDoc.id)) {
                 if (item.status == "running") {
                     let _ = adminData.updatePlanItem(item.id, "pending", "", nowMs())
+                } else if (item.status == "completed") {
+                    completed++
                 }
             }
+            let _ = adminData.updatePlanStatus(planDoc.id, "paused", completed, nowMs())
+            let _ = adminData.setPlanError(planDoc.id,
+                "服务重启：计划已自动暂停，点「继续执行」会跳过已完成项接着发", nowMs())
         }
     }
     // 演示/冒烟数据开关：CJREG_SEED_DEMO=1 注入几个本地包（便于验证发布计划等完整流程）

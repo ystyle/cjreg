@@ -117,6 +117,9 @@ public class PlanDoc {
     public var pollTimeout: Int64 = 600
     public var createdAt: Int64 = 0
     public var updatedAt: Int64 = 0
+    // 计划级失败/中止原因（如「429 每日请求频率超限，已暂停，可次日继续」）：
+    // 刷新页面后也要看得到为什么停下来，而不是只剩一个 paused
+    public var lastError: String = ""
 }
 
 // 计划项（独立表，对齐 cjrepo PublishPlanItem）
@@ -545,6 +548,21 @@ public class AdminDataStore {
             case None => return false
         }
     }
+
+    // 记计划级原因（中止/失败），供详情页在刷新后仍能显示「为什么停了」
+    public func setPlanError(id: Int64, err: String, now: Int64): Bool {
+        match (this.storm.get<PlanDoc>(id)) {
+            case Some(d) =>
+                d.lastError = err
+                d.updatedAt = now
+                this.storm.save(d)
+                return true
+            case None => return false
+        }
+    }
+
+    // 启动兜底在 main.cj 的 serve 路径里做（要连带重置条目状态并重算进度，
+    // 放在那里能用 listPlanItems 一次遍历完成）
 
     public func setPlanTotal(id: Int64, total: Int64): Bool {
         match (this.storm.get<PlanDoc>(id)) {

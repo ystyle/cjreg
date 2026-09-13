@@ -1116,18 +1116,36 @@ public class AdminService {
             writeJson(ctx, 400u16, "{\"error\":\"no packages found locally\"}")
             return
         }
-        let (ok, total, errors) = this.executor.execute(items, targetUrl, token)
+        let report = this.executor.execute(items, targetUrl, token)
+        // 状态与审计按「是否中止」区分：429/401/403 是**暂停**（可续跑），不是失败
+        let outcome = if (report.aborted) {
+            "paused"
+        } else if (report.failed > 0) {
+            "failed"
+        } else {
+            "ok"
+        }
         writeAudit(this.adminData, LogKind.Admin, planActorId, planActorName, "execute_publish_plan",
-            if (ok == total && total > 0) { "ok" } else { "failed" }, targetUrl, ctx,
-            error: if (errors.size > 0) { errors[0] } else { "" },
-            detail: "success=${ok}/${total} roots=${roots.size} explicitToken=${!targetToken.isEmpty()}")
+            outcome, targetUrl, ctx,
+            error: if (report.aborted) {
+                report.abortReason
+            } else if (report.errors.size > 0) {
+                report.errors[0]
+            } else {
+                ""
+            },
+            detail: "success=${report.success} skipped=${report.skipped} failed=${report.failed} " +
+                "total=${report.total} aborted=${report.aborted} roots=${roots.size} " +
+                "explicitToken=${!targetToken.isEmpty()}")
         let sb = StringBuilder()
-        sb.append("{\"success\":${ok},\"total\":${total},\"errors\":[")
-        for (i in 0..errors.size) {
+        sb.append("{\"success\":${report.success},\"skipped\":${report.skipped},")
+        sb.append("\"failed\":${report.failed},\"total\":${report.total},")
+        sb.append("\"aborted\":${report.aborted},\"abort_reason\":\"${escapeJsonStr(report.abortReason)}\",\"errors\":[")
+        for (i in 0..report.errors.size) {
             if (i > 0) {
                 sb.append(",")
             }
-            sb.append("\"${errors[i]}\"")
+            sb.append("\"${escapeJsonStr(report.errors[i])}\"")
         }
         sb.append("]}")
         writeJson(ctx, 200u16, sb.toString())

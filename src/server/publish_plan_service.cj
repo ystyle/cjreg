@@ -424,6 +424,18 @@ func makePublishSection(version: UInt8, data: Array<Byte>): Array<Byte> {
     return buf.toArray()
 }
 
+// 执行报告（取代原来的三元组：既要分类计数，也要能表达「整个计划被中止」）
+public class ExecuteReport {
+    public var success: Int64 = 0
+    public var total: Int64 = 0
+    public var skipped: Int64 = 0
+    public var failed: Int64 = 0
+    // 中止：认证/权限/配额这类「后续必然同样失败」的情况，立刻停手
+    public var aborted: Bool = false
+    public var abortReason: String = ""
+    public var errors: ArrayList<String> = ArrayList<String>()
+}
+
 // 发布计划执行引擎：按拓扑顺序把本地包推送到目标上游
 public class PublishExecutor {
     public var pkgStore: PackageStore
@@ -434,12 +446,28 @@ public class PublishExecutor {
         this.blobStore = blobStore
     }
 
-    // 执行：对 items（拓扑序）逐个推送；返回 (成功数, 总数, 失败详情)
-    // targetUrl 为目标上游 registry base（如 http://localhost:8070）
-    public func execute(items: ArrayList<PlanItem>, targetUrl: String, token: String, onItem!: (PlanItem, Bool, String) -> Unit = { _, _, _ => () }): (Int64, Int64, ArrayList<String>) {
-        let total = items.size
-        var success: Int64 = 0
-        let errors = ArrayList<String>()
+    // 执行：对 items（拓扑序）逐个推送。
+    //
+    // 状态码语义（对齐官方仓返回码规格）：
+    //   200        成功
+    //   400 / 404  该项失败（元数据/制品/路径问题，重试无用）→ 继续下一项
+    //   401 / 403  认证 / 权限 → **中止整个计划**（后面每一项都会同样失败）
+    //   409        目标仓已有同版本不同制品 → 该项**跳过**（需升版或先处理目标仓）→ 继续
+    //   429        每日请求频率超限 → **中止整个计划**（保存进度，明日再执行）
+    //   >=500 / 网络异常  服务器/连接故障 → 退避重试至多 MaxRetries 次，仍失败判该项失败
+    //
+    // poster：出网 POST 的注入点（单测用桩，默认走真实 HTTP）。
+    public func execute(items: ArrayList<PlanItem>, targetUrl: String, token: String,
+                        onItem!: (PlanItem, Bool, String) -> Unit = { _, _, _ => () },
+                        poster!: (String, Array<Byte>, String) -> (Bool, Int64, String) = { u, b, t =>
+                            httpPostBinary(u, b, t)
+                        },
+                        indexProbe!: ?(String, String) -> ?String = None,
+                        pollIntervalSec!: Int64 = 0,
+                        pollTimeoutSec!: Int64 = 0): ExecuteReport {
+        let report = ExecuteReport()
+        report.total = items.size
+        let MaxRetries: Int64 = 3
 
         // 先按 order 排序（拓扑顺序）
         var sorted = ArrayList<PlanItem>()
@@ -459,55 +487,213 @@ public class PublishExecutor {
             i++
         }
 
-        for (it in sorted) {
-            // 取本地包文档（含 meta + sha）
-            match (this.pkgStore.getById(it.pkgId)) {
-                case Some(doc) =>
-                    // 从 indexJson 提取 sha256sum
-                    let sha = extractSha256(doc.indexJson)
-                    if (sha.isEmpty()) {
-                        it.status = PlanItemStatus.Failed
-                        it.error = "无 sha256sum"
-                        errors.add("${doc.name}@${doc.version}: 无 sha256sum")
-                        onItem(it, false, "无 sha256sum")
-                        continue
-                    }
-                    // 从 blob 取制品
-                    match (this.blobStore.get(sha)) {
-                        case Some(tar) =>
-                            // 组装官方二进制 [meta][tar]
-                            let metaBytes = doc.indexJson.toArray()
-                            let body = ArrayList<Byte>()
-                            for (b in makePublishSection(UInt8(1), metaBytes)) {
-                                body.add(b)
-                            }
-                            for (b in makePublishSection(UInt8(1), tar)) {
-                                body.add(b)
-                            }
-                            let url = buildPackagePublishURL(targetUrl, doc.name, doc.organization)
-                            let (ok, code) = httpPostBinary(url, body.toArray(), token)
-                            if (ok) {
-                                success++
-                                it.status = PlanItemStatus.Completed
-                                onItem(it, true, "")
-                            } else {
-                                it.status = PlanItemStatus.Failed
-                                it.error = "HTTP ${code}"
-                                errors.add("${doc.name}@${doc.version}: 推送失败 HTTP ${code}")
-                                onItem(it, false, "HTTP ${code}")
-                            }
-                        case None =>
-                            it.status = PlanItemStatus.Failed
-                            it.error = "制品缺失（sha=${sha}）"
-                            errors.add("${doc.name}@${doc.version}: 制品缺失（sha=${sha}）")
-                            onItem(it, false, "制品缺失")
-                    }
-                case None =>
-                    errors.add("pkg#${it.pkgId} 不存在")
+        var idx: Int64 = 0
+        while (idx < sorted.size) {
+            let it = sorted[idx]
+            if (report.aborted) {
+                // 中止后剩余项统一记成「未推送（计划已中止）」，避免看起来像各自失败了
+                it.status = PlanItemStatus.Skipped
+                it.error = "计划已中止：${report.abortReason}"
+                report.skipped++
+                onItem(it, true, it.error)
+                idx++
+                continue
             }
+            if (!it.selected) {
+                it.status = PlanItemStatus.Skipped
+                it.error = "未勾选：不推送"
+                report.skipped++
+                onItem(it, true, it.error)
+                idx++
+                continue
+            }
+            if (it.status == PlanItemStatus.Completed) {
+                // 续跑（计划被中止后再次执行）时跳掉已成功的项：重复推同一版本只会换回 409
+                it.error = "已完成：跳过"
+                report.skipped++
+                onItem(it, true, it.error)
+                idx++
+                continue
+            }
+            // 取本地包文档（含 meta + sha）
+            let doc = match (this.pkgStore.getById(it.pkgId)) {
+                case Some(d) => d
+                case None =>
+                    it.status = PlanItemStatus.Failed
+                    it.error = "包文档不存在"
+                    report.failed++
+                    report.errors.add("pkg#${it.pkgId} 不存在")
+                    onItem(it, false, it.error)
+                    idx++
+                    continue
+            }
+            let sha = extractSha256(doc.indexJson)
+            if (sha.isEmpty()) {
+                it.status = PlanItemStatus.Failed
+                it.error = "无 sha256sum"
+                report.failed++
+                report.errors.add("${doc.name}@${doc.version}: 无 sha256sum")
+                onItem(it, false, it.error)
+                idx++
+                continue
+            }
+            let tar = match (this.blobStore.get(sha)) {
+                case Some(b) => b
+                case None =>
+                    it.status = PlanItemStatus.Failed
+                    it.error = "制品缺失（sha=${sha}）"
+                    report.failed++
+                    report.errors.add("${doc.name}@${doc.version}: 制品缺失（sha=${sha}）")
+                    onItem(it, false, it.error)
+                    idx++
+                    continue
+            }
+            // 组装官方发布二进制 [meta][tar]
+            let metaBytes = doc.indexJson.toArray()
+            let body = ArrayList<Byte>()
+            for (b in makePublishSection(UInt8(1), metaBytes)) {
+                body.add(b)
+            }
+            for (b in makePublishSection(UInt8(1), tar)) {
+                body.add(b)
+            }
+            let url = buildPackagePublishURL(targetUrl, doc.name, doc.organization)
+            it.status = PlanItemStatus.Publishing
+            onItem(it, true, "推送中")
+
+            var ok = false
+            var code: Int64 = 0
+            var text = ""
+            var attempt: Int64 = 0
+            while (attempt < MaxRetries) {
+                attempt++
+                let (o, c, t) = poster(url, body.toArray(), token)
+                ok = o
+                code = c
+                text = t
+                if (ok || !isRetryable(code)) {
+                    break
+                }
+                if (attempt < MaxRetries) {
+                    // 退避：500ms / 1s（服务器故障多为瞬时）
+                    sleep(Duration.millisecond * 500 * attempt)
+                }
+            }
+            if (ok) {
+                // 推送成功后还要**等目标仓索引就绪**才算完成：
+                // 拓扑序里下一条依赖这一条，而中心仓的索引/缓存同步可能很慢
+                // （几分钟到几小时）。不等就推下一条，会出现「依赖还没出现在索引里」
+                // 的假失败，或者推到一半自己把自己卡住。
+                var ready = true
+                match (indexProbe) {
+                    case Some(probe) =>
+                        if (pollIntervalSec > 0 && pollTimeoutSec > 0) {
+                            it.status = PlanItemStatus.WaitingIndex
+                            onItem(it, true, "等待目标仓索引就绪")
+                            ready = waitIndexReady(probe, doc.organization, doc.name, doc.version,
+                                pollIntervalSec, pollTimeoutSec)
+                        }
+                    case None => ()
+                }
+                if (ready) {
+                    report.success++
+                    it.status = PlanItemStatus.Completed
+                    it.error = ""
+                    onItem(it, true, "")
+                } else {
+                    // 索引迟迟不出现 → **暂停**而不是判失败：内容其实已经推上去了，
+                    // 只是还没同步；用户稍后点「继续执行」会跳过已完成项、从这里接上
+                    it.status = PlanItemStatus.Skipped
+                    it.error = "等待索引就绪超时（${pollTimeoutSec}s）：${doc.name}@${doc.version} 还没出现在目标仓索引里"
+                    report.skipped++
+                    report.aborted = true
+                    report.abortReason = "等待 ${doc.name}@${doc.version} 索引就绪超时" +
+                        "（已等 ${pollTimeoutSec}s）：中心仓同步可能较慢，稍后点「继续执行」接着发"
+                    report.errors.add("${doc.name}@${doc.version}: ${it.error}")
+                    onItem(it, false, it.error)
+                }
+            } else {
+                match (code) {
+                    case 409 =>
+                        // 目标仓已有同版本不同制品：不是「失败」，而是「这次发不上去」
+                        it.status = PlanItemStatus.Skipped
+                        it.error = "409 目标仓已有同版本不同制品（需升版后重发）${bodyTail(text)}"
+                        report.skipped++
+                        onItem(it, true, it.error)
+                    case 401 | 403 =>
+                        it.status = PlanItemStatus.Skipped
+                        it.error = "${code} 目标仓认证/权限失败，计划已中止${bodyTail(text)}"
+                        report.skipped++
+                        report.aborted = true
+                        report.abortReason = "${code} 认证/权限失败：请检查发布 Token 与组织权限"
+                        report.errors.add("${doc.name}@${doc.version}: ${it.error}")
+                        onItem(it, false, it.error)
+                    case 429 =>
+                        it.status = PlanItemStatus.Skipped
+                        it.error = "429 每日请求频率超限，计划已中止${bodyTail(text)}"
+                        report.skipped++
+                        report.aborted = true
+                        report.abortReason = "429 每日请求频率超限：进度已保存，请次日再执行剩余项"
+                        report.errors.add("${doc.name}@${doc.version}: ${it.error}")
+                        onItem(it, false, it.error)
+                    case _ =>
+                        it.status = PlanItemStatus.Failed
+                        it.error = "HTTP ${code}${bodyTail(text)}"
+                        if (code == 0) {
+                            it.error = "推送失败（网络/连接）：${text}"
+                        }
+                        report.failed++
+                        report.errors.add("${doc.name}@${doc.version}: ${it.error}")
+                        onItem(it, false, it.error)
+                }
+            }
+            idx++
         }
-        return (success, total, errors)
+        return report
     }
+}
+
+// 服务器故障/网络异常可重试；4xx 一律不重试（重试也还是同一个结果，还会白烧配额）
+func isRetryable(code: Int64): Bool {
+    code == 0 || code >= 500
+}
+
+// 轮询目标仓索引直到出现「该包该版本」：每次等 pollIntervalSec 秒，最多等 pollTimeoutSec 秒。
+// 返回 false 表示超时（内容可能已经推上去了，只是索引还没同步）。
+func waitIndexReady(probe: (String, String) -> ?String, org: String, name: String, version: String,
+                    pollIntervalSec: Int64, pollTimeoutSec: Int64): Bool {
+    var waited: Int64 = 0
+    while (waited < pollTimeoutSec) {
+        sleep(Duration.second * pollIntervalSec)
+        waited += pollIntervalSec
+        match (probe(org, name)) {
+            case Some(text) =>
+                if (indexHasVersion(text, name, version)) {
+                    return true
+                }
+            case None => ()
+        }
+    }
+    false
+}
+
+// 目标仓索引里是否已有该版本（索引是 NDJSON，逐行解析而不是做子串匹配——
+// 子串会把 "1.0.1" 误命中成 "1.0.10"）
+func indexHasVersion(indexJson: String, name: String, version: String): Bool {
+    for (e in parseNDJSON(indexJson)) {
+        if (e.name == name && e.version == version) {
+            return true
+        }
+    }
+    false
+}
+
+// 把目标仓返回的正文尾部拼进错误文案（正文里是官方仓的原因说明）
+func bodyTail(text: String): String {
+    if (text.isEmpty()) {
+        return ""
+    }
+    ": ${text}"
 }
 
 // 目标上游发布 URL：POST /pkg/{name}?organization={org}

@@ -59,10 +59,13 @@ func testExecuteSortsByOrder() {
     items.add(PlanItem(b, "mid", "test", "1.0.0", PlanCategory.NeedPublish, 2))
 
     // 执行到不存在的目标 → 全部失败但不崩、遍历所有
-    let (ok, total, errors) = executor.execute(items, "http://localhost:1", "")
-    @Expect(total, 3)
-    @Expect(ok, 0)
-    @Expect(errors.size, 3)
+    // （网络失败按可重试处理：内部退避重试 3 次后仍失败才判该项失败）
+    let r = executor.execute(items, "http://localhost:1", "")
+    @Expect(r.total, 3)
+    @Expect(r.success, 0)
+    @Expect(r.failed, 3)
+    @Expect(r.aborted, false)
+    @Expect(r.errors.size, 3)
 }
 
 @Test
@@ -83,8 +86,9 @@ func testExecuteMissingArtifact() {
 
     let items = ArrayList<PlanItem>()
     items.add(PlanItem(doc.id, "demo", "test", "1.0.0", PlanCategory.NeedPublish, 1))
-    let (ok, total, errors) = executor.execute(items, "http://localhost:1", "")
-    @Expect(total, 1)
-    @Expect(ok, 0)
-    @Expect(errors.size, 1)
+    let r = executor.execute(items, "http://localhost:1", "")
+    @Expect(r.total, 1)
+    @Expect(r.success, 0)
+    @Expect(r.failed, 1)
+    @Expect(r.errors.size, 1)
 }

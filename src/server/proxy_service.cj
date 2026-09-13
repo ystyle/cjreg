@@ -327,16 +327,28 @@ public func readStreamToBytes(stream: InputStream): Array<Byte> {
 }
 
 // HTTP POST 官方发布二进制（发布计划执行：推送包到目标上游）
-// 返回 (是否成功, 状态码)
-public func httpPostBinary(url: String, body: Array<Byte>, token: String): (Bool, Int64) {
+// 返回 (是否成功, 状态码, 响应正文——截断 300 字符)
+//
+// 正文必须带出来：官方仓的失败原因写在正文里（429「每日请求频率超限」、
+// 409「制品冲突」等），只回状态码的话上层只能写「HTTP 429」，排障看不到为什么。
+public func httpPostBinary(url: String, body: Array<Byte>, token: String): (Bool, Int64, String) {
     let client = buildHttpClient(url)
     try {
         // 目标仓（官方中心仓 / 另一个私有仓）按官方规格校验 Authorization: {token}
         // ——此前这里漏带头，向需认证的目标仓推送必然 401
         let resp = client.send(buildPostRequest(url, body, token))
         let code = Int64(resp.status)
+        var text = ""
+        try {
+            text = String.fromUtf8(readStreamToBytes(resp.body))
+            if (text.size > 300) {
+                text = text[..300] + "..."
+            }
+        } catch (e: Exception) {
+            text = ""
+        }
         client.close()
-        return (code >= 200 && code < 300, code)
+        return (code >= 200 && code < 300, code, text)
     } catch (e: Exception) {
         // 此前只回 (false, 0)，上层把它渲染成「推送失败 HTTP 0」——状态码 0 不是真实
         // HTTP 码，真正的失败原因（TLS/超时/连接被拒）全被吞掉，无法定位。
@@ -346,7 +358,7 @@ public func httpPostBinary(url: String, body: Array<Byte>, token: String): (Bool
         } catch (e2: Exception) {
             ()
         }
-        return (false, 0)
+        return (false, 0, e.toString())
     }
 }
 

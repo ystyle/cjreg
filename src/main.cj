@@ -368,6 +368,7 @@ func cmdSyncMetadata(dataDir: String, all: Bool): Int64 {
     println("cjreg: 开始回捞展示字段/README（范围：${if (all) { "所有版本" } else { "每个包的最新版本" }}）")
     let report = syncPackageMetadata(pkgStore, blobStore, proxy, all)
     pkgStore.storm.close()  // 必须 close 才落盘（badger flush）
+    println("cjreg: 补收录时间 ${report.stamped} 个版本文档（回源落库早于该字段）")
     println("cjreg: 回捞完成 —— 包 ${report.packages} 个，待补版本 ${report.candidates} 个，" +
         "补齐 ${report.enriched} 个，制品无新增可补内容 ${report.unchanged} 个，制品取不到 ${report.unresolved} 个")
     println("cjreg: 补完后仍缺 —— README ${report.missingReadme} 个，" +

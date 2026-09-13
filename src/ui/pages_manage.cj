@@ -865,7 +865,7 @@ class PackagesPage <: Component {
             }))
             .add(TableColumn<PackageDoc>().label("大小").accessor({ d => fmtSize(d.tarballSize) }).width(80))
             .add(TableColumn<PackageDoc>().label("sha256").accessor({ d => shortSha(d.sha256) }).width(110))
-            .add(TableColumn<PackageDoc>().label("发布时间").accessor({ d => formatLogTime(d.createdAt) }).width(96))
+            .add(TableColumn<PackageDoc>().label("时间").accessor({ d => formatLogTime(versionTimeMs(d)) }).width(96))
             .add(TableColumn<PackageDoc>().label("下载").accessor({ d => d.downloadCount.toString() }).width(64))
             .add(TableColumn<PackageDoc>().label("状态").width(70).render({ d, i =>
                 if (d.deletedAt != 0) {
@@ -953,7 +953,8 @@ class PackagesPage <: Component {
         head.add(kv("sha256", d.sha256))
         head.add(kv("下载次数", d.downloadCount.toString()))
         head.add(kv("发布者", if (d.publisherId > 0) { "#${d.publisherId}" } else { "-" }))
-        head.add(kv("创建 / 更新", "${formatLogTime(d.createdAt)} / ${formatLogTime(d.updatedAt)}"))
+        head.add(kv(if (d.upstreamId == 0) { "发布于" } else { "收录于" }, formatLogTime(versionTimeMs(d))))
+        head.add(kv("记录更新", formatLogTime(d.updatedAt)))
         head.add(kv("SDK 版本", d.cjcVersion))
         head.add(kv("描述", d.description))
         head.add(kv("协议", joinList(d.license)))

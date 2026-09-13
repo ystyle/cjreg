@@ -116,6 +116,8 @@ public func enrichDocByVersion(pkgStore: PackageStore, org: String, name: String
 // 补齐上报
 public class SyncReport {
     public var packages: Int64 = 0
+    // 补了「本仓收录时间」的版本文档数（存量回源文档 createdAt 为 0 → 公开页显示「未知」）
+    public var stamped: Int64 = 0
     public var candidates: Int64 = 0   // 需要补齐的版本数
     public var enriched: Int64 = 0     // 实际补齐到东西的版本数
     public var unchanged: Int64 = 0    // 制品里也没有可补内容（如既无 README 也无 cjpm.toml 字段）
@@ -158,6 +160,17 @@ public func syncPackageMetadata(pkgStore: PackageStore, blobStore: BlobStore, pr
             idx = keys.size - 1
         }
         groups[idx].add(d)
+    }
+    // 0. 先补「本仓收录时间」：与制品无关，纯存量数据（回源落库早于本字段）
+    //    只补 createdAt，不动 updatedAt —— 否则「最近更新」排序会被回捞时刻全部顶乱
+    let stampNow = nowMsUtc()
+    for (d in pkgStore.storm.all<PackageDoc>()) {
+        if (d.deletedAt != 0 || d.createdAt > 0) {
+            continue
+        }
+        d.createdAt = stampNow
+        pkgStore.save(d)
+        report.stamped++
     }
     for (i in 0..keys.size) {
         report.packages++

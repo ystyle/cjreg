@@ -83,7 +83,7 @@ CJREG_PORT=8066 docker compose build && CJREG_PORT=8066 docker compose up -d
 ## 后台：包版本列表 / 单版本详情 / 上游重拉
 
 **版本列表**（包管理页「版本」按钮）：ID / 版本 / **来源**（本地发布 or `回源 · <上游名>`）/ **大小** /
-**sha256**（缩写）/ **发布时间** / 下载 / 状态 / 操作（详情 · 重拉 · 软删 | 恢复 · 硬删）。
+**sha256**（缩写）/ **时间**（本地发布=发布时刻，回源=收录时刻）/ 下载 / 状态 / 操作（详情 · 重拉 · 软删 | 恢复 · 硬删）。
 
 - **重拉**只对**回源镜像**版本出现（`upstreamId != 0`）；本地发布的版本本地才是权威，后端直接 409。
 - **单版本详情**弹窗：全字段 + SHA256 全量 + 来源上游 + **README 全文**（Markdown 渲染，正文区独立滚动）。
@@ -109,6 +109,20 @@ CJREG_PORT=8066 docker compose build && CJREG_PORT=8066 docker compose up -d
 
 **硬删除的制品保护**：blob 是内容寻址的，同一制品理论上可被多个版本共享；硬删前会检查
 `shaReferencedByOthers`，仍被引用时**只删记录、保留制品**（提示语里会写「仍被 N 个其它版本引用」）。
+
+## 时间显示：区分「发布于」与「收录于」
+
+索引协议**不含任何时间字段**（上游发布时间拿不到），所以回源镜像版本没有「发布时间」可言：
+
+- **回源落库**（`cacheIndexEntries`）写 `createdAt = updatedAt = now` —— 语义是「**本仓收录时间**」；
+- **存量补**：`admin sync-metadata` 会给 `createdAt == 0` 的文档补收录时间（输出里有「补收录时间 N 个版本文档」），
+  **只补 createdAt、不动 updatedAt**（否则「最近更新」排序会被回捞时刻全部顶乱）；
+- **公开页文案按来源区分**（`pages_public.cj` 的 `versionTimeText`/`versionTimePrefix`）：
+  本地发布（`upstreamId == 0`）→「发布于 …」；回源镜像 →「收录于 …」；都拿不到才「时间未知」。
+  详情页头部优先「更新于 …」（真实更新事件），没有才退回版本时间文案。
+
+> **TZ**：页面时间都走 `.inLocal()`，容器默认 UTC 会把 19:06 显示成 11:06。`docker-compose.yml`
+> 已固定 `TZ: ${CJREG_TZ:-Asia/Shanghai}`（改完 `docker compose up -d` 重建容器即可生效）。
 
 > **UI 坑（已踩）**：cjxt 的 `Dialog` 保留**首次渲染**的静态子节点与 `title`（只有自带订阅的组件如
 > `Table` 才会更新）。所以对话框里的动态内容必须包在「组件 + 信号」里——本仓用 `SignalView`

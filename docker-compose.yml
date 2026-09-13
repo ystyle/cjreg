@@ -32,6 +32,8 @@ services:
       - ./data:/data
 
     environment:
+      # 时区：页面时间（收录/发布/审计日志）都走 .inLocal()，容器默认 UTC 会显示成 UTC 时刻
+      TZ: "${CJREG_TZ:-Asia/Shanghai}"
       # 仓颉 GC 堆（默认上限 256MB；发布大包/高写入负载时调大）
       cjHeapSize: "${CJREG_HEAP_SIZE:-2GB}"
       cjGCThreshold: "${CJREG_GC_THRESHOLD:-1GB}"

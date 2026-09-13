@@ -235,6 +235,11 @@ public class ProxyService {
             doc.sha256 = e.sha256sum
             doc.upstreamId = up.id
             doc.upstreamName = up.name
+            // 本仓收录时间：索引协议不含任何时间字段（上游发布时间拿不到），
+            // 所以公开页只能显示「本仓收录于 …」；不写就是 0 → 页面全「未知」
+            let now = nowMsUtc()
+            doc.createdAt = now
+            doc.updatedAt = now
             // 每个 doc 只存对应版本的单行索引（避免多行取 [0] 导致重复）
             doc.indexJson = generateNDJSON(ArrayList<PackageIndex>([e]))
             this.pkgStore.save(doc)

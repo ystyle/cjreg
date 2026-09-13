@@ -636,7 +636,7 @@ class PublicPackageDetail <: Component {
 
         // header meta 行
         let headerMeta = ArrayList<IComponent>()
-        headerMeta.add(this.metaItem("更新于", [text(reqDateText(vs.toArray()))]))
+        headerMeta.add(this.metaItem("时间", [text(reqDateText(vs.toArray()))]))
         if (p.category.size > 0) {
             headerMeta.add(this.metaItem("分类", this.tags(categoryLabels(p.category), ComponentKind.Warning)))
         }
@@ -679,7 +679,7 @@ class PublicPackageDetail <: Component {
             if (v.version == p.version) {
                 verMain.add(Tag([text("最新")]).size(TagSize.Small).kind(ComponentKind.Success))
             }
-            verMain.add(span([text("发布于 " + reqDateText([v]))], attrs: Some(HashMap<String, String>([("class", cls("version-date"))]))))
+            verMain.add(span([text(versionTimeText(v))], attrs: Some(HashMap<String, String>([("class", cls("version-date"))]))))
             versionItems.add(div(verMain.toArray(), attrs: Some(HashMap<String, String>([("class", cls("version-item"))]))))
         }
 
@@ -727,12 +727,41 @@ class PublicPackageDetail <: Component {
     }
 }
 
-// "更新于/发布于" 文本：取版本列表最早 createdAt（简化：列表第一个的时间）
+// 版本时间：本地发布的版本是「发布于」（cjreg 就是发布方），
+// 回源镜像的版本只有「本仓收录于」（上游发布时间不在索引协议里，拿不到）
+public func versionTimeMs(d: PackageDoc): Int64 {
+    if (d.upstreamId == 0) {
+        return d.createdAt
+    }
+    if (d.createdAt > 0) {
+        return d.createdAt
+    }
+    return d.updatedAt
+}
+
+public func versionTimePrefix(d: PackageDoc): String {
+    if (d.upstreamId == 0) {
+        return "发布于 "
+    }
+    return "收录于 "
+}
+
+public func versionTimeText(d: PackageDoc): String {
+    let t = versionTimeMs(d)
+    if (t <= 0) {
+        return "时间未知"
+    }
+    versionTimePrefix(d) + DateTime.fromUnixTimeStamp(Duration.millisecond * t).inLocal().format("yyyy-MM-dd HH:mm")
+}
+
+// 详情页头部时间：优先「更新于」（真实事件），没有则退回版本时间文案
 func reqDateText(vs: Array<PackageDoc>): String {
     if (vs.size == 0) { return "未知" }
     let t = vs[0].updatedAt
-    if (t <= 0) { return "未知" }
-    DateTime.fromUnixTimeStamp(Duration.millisecond * t).inLocal().format("yyyy-MM-dd HH:mm")
+    if (t > 0) {
+        return "更新于 " + DateTime.fromUnixTimeStamp(Duration.millisecond * t).inLocal().format("yyyy-MM-dd HH:mm")
+    }
+    return versionTimeText(vs[0])
 }
 
 // 外链（新窗口打开）：用 target=_blank 的 <a>

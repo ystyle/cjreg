@@ -227,7 +227,16 @@ func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
 func registerGracefulShutdown(storm: Storm, cjxtApp: App): Unit {
     storm.registerShutdownHook({ =>
         println("cjreg: 收到退出信号，正在优雅关闭（停止服务 → 落盘 → 退出）...")
-        cjxtApp.stop()
+        // 停 HTTP/WS 时 cjxt 会抛 SocketException（会话正被关掉是常态）。
+        // 这里必须自己吞掉：钩子的异常一旦逃出去，库那侧就可能完不成落盘
+        // （badger-cj ≥ 本轮修复会隔离钩子异常，但我们不能依赖别人兜底）。
+        try {
+            cjxtApp.stop()
+            println("cjreg: HTTP 服务已停止，等待落盘…")
+        } catch (e: Exception) {
+            // 关服务的失败不影响落盘：数据库才是关键
+            println("cjreg: 停止 HTTP 服务时出错（忽略，继续落盘）: " + e.toString())
+        }
     })
     storm.registerSignalShutdown()
 }

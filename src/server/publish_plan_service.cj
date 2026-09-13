@@ -224,10 +224,11 @@ public class PublishPlanService {
             stack.add((id, true))
             // 依赖（从 indexJson 解析 dependencies）
             let doc = findDoc(all, id).getOrThrow()
-            for ((dep, require) in parseDependencyRefs(doc.indexJson)) {
+            for ((depOrg, dep, require) in parseDependencyRefs(doc.indexJson)) {
                 // 依赖按「满足声明版本要求里最新的那个」解析，并且同一包一个计划只出一个版本；
-                // 此前是 findByName 取「第一个同名 doc」，同样等于取最老版本
-                match (this.pickDepDoc(all, doc.organization, dep, require, chosen)) {
+                // 跨组织依赖（`ystyle::crc`）按前缀里的 org 找，没有前缀才跟随依赖方的 org
+                let org = if (depOrg != "") { depOrg } else { doc.organization }
+                match (this.pickDepDoc(all, org, dep, require, chosen)) {
                     case Some(dd) =>
                         if (!visited.contains(dd.id)) {
                             stack.add((dd.id, false))
@@ -251,27 +252,31 @@ public class PublishPlanService {
     // 从 indexJson 解析依赖名（保留旧签名：既有测试直接调它）
     func parseDependencyNames(indexJson: String): ArrayList<String> {
         let result = ArrayList<String>()
-        for ((name, _) in parseDependencyRefs(indexJson)) {
+        for ((_, name, _) in parseDependencyRefs(indexJson)) {
             result.add(name)
         }
         return result
     }
 
-    // 从 indexJson 解析依赖 (名字, 版本要求)：名字去掉 `org::` 前缀；要求可能是精确版本或 semver 范围
-    func parseDependencyRefs(indexJson: String): ArrayList<(String, String)> {
-        let result = ArrayList<(String, String)>()
+    // 从 indexJson 解析依赖 (org, 名字, 版本要求)。
+    // 依赖名可能带 `org::` 前缀（如 `ystyle::crc`）——**前缀必须保留**：跨组织依赖
+    // （snappy/badgercj → ystyle::crc）一旦丢掉前缀，就会去"依赖方自己的 org"里找，
+    // 找不到 → 这条依赖边直接消失 → 拓扑序被打乱（实测 snappy 被排到了 crc 前面，
+    // 等于先发依赖方）。org 为空表示"与依赖方同组织"。
+    func parseDependencyRefs(indexJson: String): ArrayList<(String, String, String)> {
+        let result = ArrayList<(String, String, String)>()
         let entries = parseNDJSON(indexJson)
         if (entries.size == 0) {
             return result
         }
         for (d in entries[0].dependencies) {
-            // 依赖名可能 org::name，取 name 部分
             let depName = d.name
             let idx = depName.indexOf("::")
             if (idx.isSome()) {
-                result.add((depName[idx.getOrThrow() + 2..depName.size], d.require))
+                let i = idx.getOrThrow()
+                result.add((depName[..i], depName[i + 2..], d.require))
             } else {
-                result.add((depName, d.require))
+                result.add(("", depName, d.require))
             }
         }
         return result

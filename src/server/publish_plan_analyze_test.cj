@@ -81,6 +81,28 @@ func analyzePlan_unknownVersionFallsBackToNewest() {
     store.storm.close()
 }
 
+// 跨组织依赖：依赖名带 `org::` 前缀时必须按前缀里的 org 找。
+// 丢掉前缀 → 去 snappy 自己的 org（""）里找 crc → 找不到 → 依赖边消失 → 拓扑序错
+// （实测 crc 被排到 snappy 后面，等于先发依赖方）。
+@Test
+func analyzePlan_crossOrgDependencyOrderedFirst() {
+    let store = PackageStore(Storm.inMemory())
+    store.save(planDoc("ystyle", "crc", "1.0.1", ArrayList<String>()))
+    let deps = ArrayList<String>()
+    deps.add("ystyle::crc")
+    store.save(planDoc("", "snappy", "1.0.2", deps))
+    let svc = PublishPlanService(store)
+    let roots = ArrayList<(String, String, String)>()
+    roots.add(("", "snappy", "1.0.2"))     // 只选 snappy：crc 必须由依赖展开带进来且排在它前面
+    let (items, cycle) = svc.analyze(roots)
+    @Expect(cycle, false)
+    @Expect(items.size, 2)
+    @Expect(items[0].name, "crc")
+    @Expect(items[0].version, "1.0.1")
+    @Expect(items[1].name, "snappy")
+    store.storm.close()
+}
+
 // 依赖展开时也必须带对版本：被依赖的包同样有多版本。
 // 显式选了 base 2.0.0 时，top 的依赖展开必须复用同一个版本（同包一个计划只出一个版本）。
 @Test

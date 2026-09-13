@@ -180,7 +180,7 @@ func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
     }
     let cjxtApp = App()
     cjxtApp
-        .configure(AppConfig(title: cfg.siteName, cssBundle: "/css/bundle.css?v=3"))
+        .configure(AppConfig(title: cfg.siteName, cssBundle: "/css/bundle.css?v=4"))
         .serveStatic("/css", "public/css")
         .UseComponent()
         .state<CjregState>({ =>
@@ -395,7 +395,7 @@ func cmdAdminUI(dataDir: String, cfg: CjregConfig): Int64 {
     let proxySvc = ProxyService(pkgStore, blobStore, UpstreamService(upStore))
     let cjxtApp = App()
     cjxtApp
-        .configure(AppConfig(title: cfg.siteName, cssBundle: "/css/bundle.css?v=3"))
+        .configure(AppConfig(title: cfg.siteName, cssBundle: "/css/bundle.css?v=4"))
         .serveStatic("/css", "public/css")
         .UseComponent()
         .state<CjregState>({ =>

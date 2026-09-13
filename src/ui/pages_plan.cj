@@ -88,6 +88,7 @@ class PublishPlansPage <: Component {
 
     func statusTag(s: String): IComponent {
         match (s) {
+            case "interrupted" => Tag([text("上次未收口")]).kind(ComponentKind.Danger)
             case "running" => Tag([text("执行中")]).kind(ComponentKind.Warning)
             case "completed" => Tag([text("已完成")]).kind(ComponentKind.Success)
             case "failed" => Tag([text("失败")]).kind(ComponentKind.Danger)
@@ -160,8 +161,13 @@ class PublishPlansPage <: Component {
             .stripe()
             .add(TableColumn<PlanRow>().label("ID").accessor({ r => r.doc.id.toString() }).width(50))
             .add(TableColumn<PlanRow>().label("计划名").accessor({ r => r.doc.name }).minWidth(140))
-            .add(TableColumn<PlanRow>().label("状态").width(90).render({ r, i =>
-                this.statusTag(r.doc.status)
+            .add(TableColumn<PlanRow>().label("状态").width(100).render({ r, i =>
+                // 同上：库里 running 但没线程在执行 = 上次没收口
+                let runIds = match (this.state) {
+                    case Some(s) => s.planRunIds.get()
+                    case None => ArrayList<Int64>()
+                }
+                this.statusTag(if (r.doc.status == "running" && !containsId(runIds, r.doc.id)) { "interrupted" } else { r.doc.status })
             }))
             .add(TableColumn<PlanRow>().label("目标上游").accessor({ r => r.upstream }).minWidth(140))
             .add(TableColumn<PlanRow>().label("进度").accessor({ r =>
@@ -528,6 +534,7 @@ class PublishPlanDetailPage <: Component {
 
     func statusTag(s: String): IComponent {
         match (s) {
+            case "interrupted" => Tag([text("上次未收口")]).kind(ComponentKind.Danger)
             case "running" => Tag([text("执行中")]).kind(ComponentKind.Warning)
             case "completed" => Tag([text("已完成")]).kind(ComponentKind.Success)
             case "failed" => Tag([text("失败")]).kind(ComponentKind.Danger)
@@ -1184,7 +1191,11 @@ class PublishPlanDetailPage <: Component {
                             .column(2)
                             .labelWidth("100px")
                             .add(DescriptionsItem().label("名称").children([text(plan.name)]))
-                            .add(DescriptionsItem().label("状态").children([this.statusTag(if (executing) { "running" } else { plan.status })]))
+                            .add(DescriptionsItem().label("状态").children([this.statusTag(
+                                // 库里写着 running、但进程里没有对应的执行线程 = 上一轮没收口
+                                // （进程被杀/回调抛异常）。显示「上次未收口」而不是「执行中」，
+                                // 免得用户以为还在跑、干等一个不存在的执行
+                                if (executing) { "running" } else if (plan.status == "running") { "interrupted" } else { plan.status })]))
                             .add(DescriptionsItem().label("目标上游").children([text(this.upstreamName(st, plan.targetUpstream))]))
                             .add(DescriptionsItem().label("进度").children([this.progressText(plan.completedCount, plan.totalCount)]))
                             .add(DescriptionsItem().label("发布项").children([text(this.itemBreakdown())]))

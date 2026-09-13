@@ -527,7 +527,7 @@ class PublicPackageDetail <: Component {
             items.add(this.infoItem("文档", [linkOut(p.documentation, "查看文档")]))
         }
         if (p.tarballSize > 0) {
-            items.add(this.infoItem("包大小", [text(this.formatSize(p.tarballSize))]))
+            items.add(this.infoItem("包大小", [text(formatBytesText(p.tarballSize))]))
         }
         items.add(this.infoItem("下载次数", [text(formatDownloadCount(totals))]))
         items.toArray()
@@ -556,14 +556,6 @@ class PublicPackageDetail <: Component {
         arr.toArray()
     }
 
-    func formatSize(bytes: Int64): String {
-        if (bytes <= 0) { return "0 B" }
-        let k = 1024
-        if (bytes < k) { return "${bytes} B" }
-        if (bytes < k * k) { return "${bytes / k} KB" }
-        if (bytes < k * k * k) { return "${bytes / (k * k)} MB" }
-        return "${bytes / (k * k * k)} GB"
-    }
 
     func depEntry(dep: DependencyEntry): IComponent {
         let go: ActionHandler = { c => c.route.push("/packages/${dep.name}"); PatchResult.ReRender }
@@ -680,6 +672,15 @@ class PublicPackageDetail <: Component {
                 verMain.add(Tag([text("最新")]).size(TagSize.Small).kind(ComponentKind.Success))
             }
             verMain.add(span([text(versionTimeText(v))], attrs: Some(HashMap<String, String>([("class", cls("version-date"))]))))
+            // 制品大小 + sha256 缩写（悬停看完整 sha）：和后台版本列表同一口径
+            let sizeText = versionSizeText(v)
+            if (!sizeText.isEmpty()) {
+                verMain.add(span([text(sizeText)], attrs: Some(HashMap<String, String>([("class", cls("version-size"))]))))
+            }
+            if (!v.sha256.isEmpty()) {
+                verMain.add(span([text("sha256 " + shortShaText(v.sha256))],
+                    attrs: Some(HashMap<String, String>([("class", cls("version-sha")), ("title", v.sha256)]))))
+            }
             versionItems.add(div(verMain.toArray(), attrs: Some(HashMap<String, String>([("class", cls("version-item"))]))))
         }
 
@@ -725,6 +726,32 @@ class PublicPackageDetail <: Component {
             ], attrs: Some(HashMap<String, String>([("class", cls("public-main"))]))),
         ])
     }
+}
+
+// 制品字节数 → 可读体积（包级：侧栏与版本历史共用）
+public func formatBytesText(bytes: Int64): String {
+    if (bytes <= 0) { return "0 B" }
+    let k = 1024
+    if (bytes < k) { return "${bytes} B" }
+    if (bytes < k * k) { return "${bytes / k} KB" }
+    if (bytes < k * k * k) { return "${bytes / (k * k)} MB" }
+    return "${bytes / (k * k * k)} GB"
+}
+
+// sha256 缩写（版本历史里展示；完整值挂 title 悬停）
+public func shortShaText(sha: String): String {
+    if (sha.size <= 12) {
+        return sha
+    }
+    return sha[0..12]
+}
+
+// 版本历史的制品大小文案：拿不到（老回源版本没补过 size）就空串，不留占位符
+public func versionSizeText(d: PackageDoc): String {
+    if (d.tarballSize <= 0) {
+        return ""
+    }
+    return formatBytesText(d.tarballSize)
 }
 
 // 版本时间：本地发布的版本是「发布于」（cjreg 就是发布方），

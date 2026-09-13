@@ -187,3 +187,7 @@
 
 /* 版本详情正文：README 可能很长，只让正文区滚动（对话框整体不滚，底部按钮保持在视口内） */
 .detail-scroll { max-height: 58vh; overflow-y: auto; padding-right: 6px; }
+
+/* 版本历史行右侧元信息：制品大小 + sha256 缩写（与后台版本列表同口径） */
+.version-size { color: #909399; font-size: 12px; margin-left: 12px; }
+.version-sha { color: #a8abb2; font-size: 12px; margin-left: 12px; font-family: 'Fira Code', 'Consolas', monospace; }

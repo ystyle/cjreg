@@ -12,6 +12,7 @@ package ystyle::cjreg.server
 
 import ystyle::cjreg.store.*
 import ystyle::cjreg.index.*
+import ystyle::cjreg.config.*
 import bstorm.*
 import std.collection.*
 
@@ -50,10 +51,10 @@ func analyzePlan_honorsRequestedVersion() {
     let svc = PublishPlanService(store)
     let roots = ArrayList<(String, String, String)>()
     roots.add(("", "demo", "1.1.0"))
-    let (items, cycle) = svc.analyze(roots)
-    @Expect(cycle, false)
-    @Expect(items.size, 1)
-    @Expect(items[0].version, "1.1.0")     // 修复前会得到 1.0.0
+    let a = svc.analyze(roots)
+    @Expect(a.hasCycle, false)
+    @Expect(a.items.size, 1)
+    @Expect(a.items[0].version, "1.1.0")     // 修复前会得到 1.0.0
     store.storm.close()
 }
 
@@ -63,9 +64,9 @@ func analyzePlan_emptyVersionPicksNewest() {
     let svc = PublishPlanService(store)
     let roots = ArrayList<(String, String, String)>()
     roots.add(("", "demo", ""))
-    let (items, _) = svc.analyze(roots)
-    @Expect(items.size, 1)
-    @Expect(items[0].version, "1.2.0")
+    let a = svc.analyze(roots)
+    @Expect(a.items.size, 1)
+    @Expect(a.items[0].version, "1.2.0")
     store.storm.close()
 }
 
@@ -75,9 +76,9 @@ func analyzePlan_unknownVersionFallsBackToNewest() {
     let svc = PublishPlanService(store)
     let roots = ArrayList<(String, String, String)>()
     roots.add(("", "demo", "9.9.9"))
-    let (items, _) = svc.analyze(roots)
-    @Expect(items.size, 1)
-    @Expect(items[0].version, "1.2.0")
+    let a = svc.analyze(roots)
+    @Expect(a.items.size, 1)
+    @Expect(a.items[0].version, "1.2.0")
     store.storm.close()
 }
 
@@ -94,12 +95,12 @@ func analyzePlan_crossOrgDependencyOrderedFirst() {
     let svc = PublishPlanService(store)
     let roots = ArrayList<(String, String, String)>()
     roots.add(("", "snappy", "1.0.2"))     // 只选 snappy：crc 必须由依赖展开带进来且排在它前面
-    let (items, cycle) = svc.analyze(roots)
-    @Expect(cycle, false)
-    @Expect(items.size, 2)
-    @Expect(items[0].name, "crc")
-    @Expect(items[0].version, "1.0.1")
-    @Expect(items[1].name, "snappy")
+    let a = svc.analyze(roots)
+    @Expect(a.hasCycle, false)
+    @Expect(a.items.size, 2)
+    @Expect(a.items[0].name, "crc")
+    @Expect(a.items[0].version, "1.0.1")
+    @Expect(a.items[1].name, "snappy")
     store.storm.close()
 }
 
@@ -117,13 +118,13 @@ func analyzePlan_dependencyExpansionKeepsVersions() {
     let roots = ArrayList<(String, String, String)>()
     roots.add(("", "top", "0.5.0"))
     roots.add(("", "base", "2.0.0"))
-    let (items, cycle) = svc.analyze(roots)
-    @Expect(cycle, false)
-    @Expect(items.size, 2)
-    @Expect(items[0].name, "base")          // 被依赖的先发
-    @Expect(items[0].version, "2.0.0")
-    @Expect(items[1].name, "top")
-    @Expect(items[1].version, "0.5.0")
+    let a = svc.analyze(roots)
+    @Expect(a.hasCycle, false)
+    @Expect(a.items.size, 2)
+    @Expect(a.items[0].name, "base")          // 被依赖的先发
+    @Expect(a.items[0].version, "2.0.0")
+    @Expect(a.items[1].name, "top")
+    @Expect(a.items[1].version, "0.5.0")
     store.storm.close()
 }
 
@@ -148,10 +149,142 @@ func analyzePlan_dependencySatisfiesDeclaredRange() {
     let svc = PublishPlanService(store)
     let roots = ArrayList<(String, String, String)>()
     roots.add(("", "top", "0.5.0"))
-    let (items, _) = svc.analyze(roots)
-    @Expect(items.size, 2)
-    @Expect(items[0].name, "base")
-    @Expect(items[0].version, "1.5.0")
-    @Expect(items[1].name, "top")
+    let a = svc.analyze(roots)
+    @Expect(a.items.size, 2)
+    @Expect(a.items[0].name, "base")
+    @Expect(a.items[0].version, "1.5.0")
+    @Expect(a.items[1].name, "top")
     store.storm.close()
+}
+
+// ===== 按目标仓索引分类（对齐 cjrepo 的 Analyze）=====
+//
+// 出过的故障：分类是写死的 `need_publish`，于是**目标仓早就有同版本的包也显示成「待发布」**
+// （实测：中心仓已有 ystyle::crc@1.0.0 / snappy@1.0.1，界面照样让它们"待发布"）。
+// 用户只能靠执行时换回 409 才知道「其实不用发」。
+
+func classFixture(): (PackageStore, PublishPlanService) {
+    let store = PackageStore(Storm.inMemory())
+    let svc = PublishPlanService(store)
+    (store, svc)
+}
+
+// 目标仓同版本 sha 一致 → already_exists，且默认不勾选
+@Test
+func classifyPlan_alreadyExistsWhenShaMatches() {
+    let (store, svc) = classFixture()
+    store.save(planDoc("ystyle", "crc", "1.0.0", ArrayList<String>()))
+    let up = Upstream(1, "official", "http://up.example", true, 0, "", true, 0, 0)
+    let roots = ArrayList<(String, String, String)>()
+    roots.add(("ystyle", "crc", "1.0.0"))
+    let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, org, name =>
+        // 目标仓同版本、同 sha
+        Some("{\"organization\":\"${org}\",\"name\":\"${name}\",\"version\":\"1.0.0\",\"sha256sum\":\"sha-crc-1.0.0\"}\n")
+    })
+    @Expect(a.targetChecked, true)
+    @Expect(a.targetError, "")
+    @Expect(a.items.size, 1)
+    @Expect(a.items[0].category == PlanCategory.AlreadyExists, true)
+    @Expect(a.items[0].selected, false)      // 默认不推：推上去也只会 409
+    @Expect(a.items[0].remoteSha256, "sha-crc-1.0.0")
+    store.storm.close()
+}
+
+// 目标仓同版本但 sha 不同 → conflict（默认不勾选：覆盖与否得人来定）
+@Test
+func classifyPlan_conflictWhenShaDiffers() {
+    let (store, svc) = classFixture()
+    store.save(planDoc("ystyle", "crc", "1.0.0", ArrayList<String>()))
+    let up = Upstream(1, "official", "http://up.example", true, 0, "", true, 0, 0)
+    let roots = ArrayList<(String, String, String)>()
+    roots.add(("ystyle", "crc", "1.0.0"))
+    let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ =>
+        Some("{\"name\":\"crc\",\"version\":\"1.0.0\",\"sha256sum\":\"different-sha\"}\n")
+    })
+    @Expect(a.items[0].category == PlanCategory.Conflict, true)
+    @Expect(a.items[0].selected, false)
+    @Expect(a.items[0].remoteSha256, "different-sha")
+    store.storm.close()
+}
+
+// 目标仓没有该版本 → 仍是 need_publish（真需要发，且默认勾选）
+@Test
+func classifyPlan_needPublishWhenAbsentUpstream() {
+    let (store, svc) = classFixture()
+    store.save(planDoc("ystyle", "crc", "1.0.1", ArrayList<String>()))
+    let up = Upstream(1, "official", "http://up.example", true, 0, "", true, 0, 0)
+    let roots = ArrayList<(String, String, String)>()
+    roots.add(("ystyle", "crc", "1.0.1"))
+    let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ =>
+        // 目标仓只有更老的版本
+        Some("{\"name\":\"crc\",\"version\":\"1.0.0\",\"sha256sum\":\"old\"}\n")
+    })
+    @Expect(a.items[0].category == PlanCategory.NeedPublish, true)
+    @Expect(a.items[0].selected, true)
+    @Expect(a.items[0].remoteSha256, "")
+    store.storm.close()
+}
+
+// 目标仓有**更高**版本 → version_optional（提示"可以不发"）
+@Test
+func classifyPlan_versionOptionalWhenUpstreamNewer() {
+    let (store, svc) = classFixture()
+    store.save(planDoc("", "demo", "1.0.0", ArrayList<String>()))
+    let up = Upstream(1, "official", "http://up.example", true, 0, "", true, 0, 0)
+    let roots = ArrayList<(String, String, String)>()
+    roots.add(("", "demo", "1.0.0"))
+    let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ =>
+        Some("{\"name\":\"demo\",\"version\":\"2.0.0\",\"sha256sum\":\"new\"}\n")
+    })
+    @Expect(a.items[0].category == PlanCategory.VersionOptional, true)
+    store.storm.close()
+}
+
+// 目标仓索引取不到 → 退回 need_publish，但**必须留下可见的说明**：
+// 静默退回会让人以为"对比过了、目标仓什么都没有"，然后去重复推已存在的版本
+@Test
+func classifyPlan_unreachableTargetIsVisible() {
+    let (store, svc) = classFixture()
+    store.save(planDoc("", "demo", "1.0.0", ArrayList<String>()))
+    let up = Upstream(1, "official", "http://up.example", true, 0, "", true, 0, 0)
+    let roots = ArrayList<(String, String, String)>()
+    roots.add(("", "demo", "1.0.0"))
+    let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ => None })
+    @Expect(a.targetChecked, false)
+    @Expect(a.targetError.isEmpty(), false)   // 必须说出来
+    @Expect(a.targetError.contains("索引"), true)
+    @Expect(a.items[0].category == PlanCategory.NeedPublish, true)
+    store.storm.close()
+}
+
+// 没给目标上游（老接口）→ 不做对比，也不报"对比失败"
+@Test
+func classifyPlan_noTargetKeepsLocalView() {
+    let (store, svc) = classFixture()
+    store.save(planDoc("", "demo", "1.0.0", ArrayList<String>()))
+    let roots = ArrayList<(String, String, String)>()
+    roots.add(("", "demo", "1.0.0"))
+    let a = svc.analyze(roots)
+    @Expect(a.targetChecked, false)
+    @Expect(a.targetError, "")
+    @Expect(a.items[0].category == PlanCategory.NeedPublish, true)
+    @Expect(a.items[0].selected, true)
+    store.storm.close()
+}
+
+// 包名显示：org::name@version（无组织就不带前缀）
+@Test
+func packageLabel_format() {
+    @Expect(packageLabel("ystyle", "crc", "1.0.0"), "ystyle::crc@1.0.0")
+    @Expect(packageLabel("", "snappy", "1.0.1"), "snappy@1.0.1")
+    @Expect(packageLabel("", "snappy", ""), "snappy")
+}
+
+// 分类 → 字符串（存储/接口取值必须与 cjrepo 一致）
+@Test
+func planCategoryName_values() {
+    @Expect(planCategoryName(PlanCategory.NeedPublish), "need_publish")
+    @Expect(planCategoryName(PlanCategory.AlreadyExists), "already_exists")
+    @Expect(planCategoryName(PlanCategory.Conflict), "conflict")
+    @Expect(planCategoryName(PlanCategory.VersionOptional), "version_optional")
 }

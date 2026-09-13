@@ -296,3 +296,22 @@ func executeReport_resumeWaitingIndex_doesNotRepush() {
     @Expect(items[0].status == PlanItemStatus.Completed, true)
     store.storm.close()
 }
+
+// 未勾选的「目标仓已有同版本」项：跳过原因必须说清楚
+// （只说"未勾选"会让人以为是自己漏点了，然后去手工勾上重复推同一个版本）
+@Test
+func executeReport_unselectedAlreadyExistsExplainsItself() {
+    let (store, blobs) = execFixture()
+    let items = ArrayList<PlanItem>()
+    let it = execItem(execDoc(store, blobs, "a", "1.0.0"), "a", "1.0.0", 1)
+    it.selected = false
+    it.category = PlanCategory.AlreadyExists
+    items.add(it)
+    let calls = Box<Int64>(0)
+    let ex = PublishExecutor(store, blobs)
+    let r = ex.execute(items, "http://127.0.0.1:1", "tok", poster: stubPoster(codesOf([200]), calls))
+    @Expect(calls.value, 0)
+    @Expect(r.skipped, 1)
+    @Expect(items[0].error.contains("目标仓已有同版本"), true)
+    store.storm.close()
+}

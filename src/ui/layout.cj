@@ -61,16 +61,27 @@ public func adminSidebar(activePath: String, siteName!: String = ""): IComponent
                 .onClick(go)
         )
     }
+    // 退出登录单独放一个暗色 Menu 里：MenuItem 一旦脱离 .el-menu，就拿不到 dark() 注入的
+    // `--el-menu-text-color` 等变量 → 渲染成浅色主题，在深色侧栏上「看不清」。
+    let logoutMenu = Menu().dark()
+    logoutMenu.add(logoutMenuItem())
     div([
         div([text(brandName + " 管理")],
             attrs: Some(HashMap<String, String>([("class", cls("admin-brand"))]))),
         menu,
-        logoutMenuItem(),
+        logoutMenu,
     ], attrs: Some(HashMap<String, String>([("class", cls("admin-sidebar"))])))
 }
 
+// 纵向卡片栈：给相邻卡片之间留出间距。
+// EP 的 .el-card 本身没有外边距，两张卡片直接做兄弟节点会**贴在一起**。
+public func cardStack(children: Array<IComponent>): IComponent {
+    div(children, attrs: Some(HashMap<String, String>([
+        ("style", "display:flex;flex-direction:column;gap:16px")])))
+}
+
 // 退出登录：清除会话鉴权上下文 + 登录态信号，回到登录页
-func logoutMenuItem(): IComponent {
+func logoutMenuItem(): MenuItem {
     let item = MenuItem("logout", [text("退出登录")])
     let go: ActionHandler = { c =>
         c.setContext("uid", "")

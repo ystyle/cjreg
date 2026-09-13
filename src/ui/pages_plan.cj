@@ -218,15 +218,14 @@ class PublishPlanCreatePage <: Component {
     var pollTimeout = Signal<Int64>(600)
     var pkgSearch = Signal<String>("")
     var selectedPkgs = Signal<ArrayList<Int64>>(ArrayList<Int64>())
-    // 包选择行数据（Table 信号）
-    var pkgRows = Signal<ArrayList<PkgChoice>>(ArrayList<PkgChoice>())
     var nameError = Signal<String>("")
     var upstreamError = Signal<String>("")
     var planForm = Form([])
+    // 搜索结果一次最多渲染多少行（剩下的靠搜索缩小范围）
+    let MaxPickerRows: Int64 = 30
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
-        refreshPkgs()
     }
 
     func backToList(ctx: ActionContext): PatchResult {
@@ -234,28 +233,113 @@ class PublishPlanCreatePage <: Component {
         PatchResult.ReRender
     }
 
-    // 包选择列表：全量包 + 搜索过滤 + 选中标记
-    func refreshPkgs(): Unit {
-        match (this.state) {
-            case Some(st) =>
-                let kw = this.pkgSearch.get()
-                let selected = this.selectedPkgs.get()
-                let data = ArrayList<PkgChoice>()
-                for (d in st.pkgStore.storm.all<PackageDoc>()) {
-                    if (d.deletedAt != 0) { continue }
-                    if (kw != "" && !d.name.contains(kw)) { continue }
-                    var isSel = false
-                    for (id in selected) {
-                        if (d.id == id) {
-                            isSel = true
-                            break
-                        }
-                    }
-                    data.add(PkgChoice(d, isSel))
-                }
-                this.pkgRows.set(data)
-            case None => ()
+    func pkgLabel(d: PackageDoc): String {
+        let prefix = if (d.organization.isEmpty()) { "" } else { d.organization + "/" }
+        "${prefix}${d.name}@${d.version}"
+    }
+
+    func isSelected(ids: ArrayList<Int64>, id: Int64): Bool {
+        for (x in ids) {
+            if (x == id) {
+                return true
+            }
         }
+        false
+    }
+
+    // 包选择区：搜索框 + 搜索结果（每条一个「添加」）+ 已选择列表（每条一个「移除」）。
+    //
+    // 两个关键点：
+    // 1. **只列本站为源站的包**（upstreamId == 0）。回源镜像（upstreamId != 0）是上游的包，
+    //    不能作为发布源推给别人；隐藏了多少个在提示里写明，免得看起来像"包丢了"。
+    // 2. 结果**不缓存到另一个信号**，而是在 render 里直接由 pkgSearch 算出：搜索框只做 bind，
+    //    输入即写信号 → 读它的 render 作用域自动重渲。旧实现用 Component.on("input", …) 触发
+    //    过滤是错的——前端对同一元素的监听是「先 action 后 bind」，过滤拿到的是**上一次**的
+    //    关键字，而 bind 之后没人再触发过滤 → 搜索看起来完全无效。
+    func pickerSections(): Array<IComponent> {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return []
+        }
+        let kw = this.pkgSearch.get().trimAscii().toAsciiLower()
+        let selected = this.selectedPkgs.get()
+        var localTotal: Int64 = 0
+        var mirrorTotal: Int64 = 0
+        var matched: Int64 = 0
+        let hits = ArrayList<PackageDoc>()
+        for (d in st.pkgStore.storm.all<PackageDoc>()) {
+            if (d.deletedAt != 0) {
+                continue
+            }
+            if (d.upstreamId != 0) {
+                mirrorTotal++
+                continue
+            }
+            localTotal++
+            if (kw != "" && !pkgLabel(d).toAsciiLower().contains(kw)) {
+                continue
+            }
+            matched++
+            if (hits.size < MaxPickerRows) {
+                hits.add(d)
+            }
+        }
+        let out = ArrayList<IComponent>()
+        out.add(div([text("选择要发布的包（依赖将自动按拓扑序纳入）")],
+            attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))))
+        out.add(Input().bind(this.pkgSearch).placeholder("搜索包名（只列本站为源站的包）"))
+        out.add(div([text("本站为源站 ${localTotal} 个 · 已隐藏回源镜像 ${mirrorTotal} 个（回源包不作为发布源）")],
+            attrs: Some(HashMap<String, String>([("class", cls("picker-hint"))]))))
+        if (hits.size == 0) {
+            let empty = if (localTotal == 0) {
+                "本站还没有自发布的包：回源镜像不作为发布源，请先发布到本仓"
+            } else {
+                "没有匹配的包"
+            }
+            out.add(div([text(empty)], attrs: Some(HashMap<String, String>([("class", cls("picker-empty"))]))))
+        } else {
+            let rows = ArrayList<IComponent>()
+            for (d in hits) {
+                let id = d.id
+                let sel = isSelected(selected, id)
+                let act: ActionHandler = { c => this.togglePkg(c, id) }
+                let btn = if (sel) {
+                    Button([text("已添加")]).size(ButtonSize.Small).disabled()
+                } else {
+                    Button([text("添加")]).size(ButtonSize.Small).kind(ButtonKind.Primary).onClick(act)
+                }
+                rows.add(div([text(pkgLabel(d)), btn],
+                    attrs: Some(HashMap<String, String>([("class", cls("picker-row"))]))))
+            }
+            out.add(div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("picker-list"))]))))
+        }
+        if (matched > hits.size) {
+            out.add(div([text("仅显示前 ${hits.size} 个（共 ${matched} 个匹配），用搜索缩小范围")],
+                attrs: Some(HashMap<String, String>([("class", cls("picker-hint"))]))))
+        }
+        out.add(div([text("已选择 ${selected.size} 个（依赖会自动补齐）")],
+            attrs: Some(HashMap<String, String>([("class", cls("picker-title"))]))))
+        if (selected.size == 0) {
+            out.add(div([text("尚未选择：从上面的结果里点「添加」")],
+                attrs: Some(HashMap<String, String>([("class", cls("picker-empty"))]))))
+        } else {
+            let rows = ArrayList<IComponent>()
+            for (id in selected) {
+                var label = "#${id}"
+                for (d in st.pkgStore.storm.all<PackageDoc>()) {
+                    if (d.id == id) {
+                        label = pkgLabel(d)
+                        break
+                    }
+                }
+                let act: ActionHandler = { c => this.togglePkg(c, id) }
+                rows.add(div([text(label),
+                    Button([text("移除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(act)],
+                    attrs: Some(HashMap<String, String>([("class", cls("picker-row"))]))))
+            }
+            out.add(div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("picker-list"))]))))
+        }
+        out.toArray()
     }
 
     func togglePkg(ctx: ActionContext, pkgId: Int64): PatchResult {
@@ -272,8 +356,8 @@ class PublishPlanCreatePage <: Component {
         if (!found) {
             next.add(pkgId)
         }
+        // 只改信号：结果与已选择列表都在 render 里由信号算出
         this.selectedPkgs.set(next)
-        this.refreshPkgs()
         PatchResult.ReRender
     }
 
@@ -333,20 +417,6 @@ class PublishPlanCreatePage <: Component {
         PatchResult.ReRender
     }
 
-    func renderPkgPicker(): IComponent {
-        Table<PkgChoice>()
-            .data(this.pkgRows)
-            .stripe()
-            .add(TableColumn<PkgChoice>().label("包").minWidth(300).render({ r, i =>
-                text("${if (r.doc.organization.isEmpty()) { "-" } else { r.doc.organization }}/${r.doc.name}@${r.doc.version}")
-            }))
-            .add(TableColumn<PkgChoice>().label("操作").width(110).render({ r, i =>
-                let id = r.doc.id
-                let toggleH: ActionHandler = { c => this.togglePkg(c, id) }
-                Button([text(if (r.selected) { "取消选择" } else { "选择" })]).size(ButtonSize.Small).kind(if (r.selected) { ButtonKind.Danger } else { ButtonKind.Primary }).onClick(toggleH)
-            }))
-    }
-
     public func render(): IComponent {
         let st = match (this.state) {
             case Some(x) => x
@@ -374,15 +444,10 @@ class PublishPlanCreatePage <: Component {
         this.planForm = form
         adminLayout("/admin/publish-plans", [
             div([text("创建发布计划")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
-            adminCard("向导", [
-                form,
-                div([
-                    div([text("选择要发布的包（依赖将自动纳入拓扑排序）")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
-                    Input().bind(this.pkgSearch).placeholder("搜索包名").on("input", { _ =>
-                        this.refreshPkgs()
-                        PatchResult.ReRender
-                    }),
-                    this.renderPkgPicker(),
+            cardStack([
+                adminCard("计划信息", [form]),
+                adminCard("选择要发布的包", [
+                    div(this.pickerSections()),
                     if (this.msg.get() != "") {
                         Tag([text(this.msg.get())]).kind(ComponentKind.Success)
                     } else {
@@ -576,6 +641,7 @@ class PublishPlanDetailPage <: Component {
                 }
                 adminLayout("/admin/publish-plans", [
                     div([text("发布计划详情")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
+                    cardStack([
                     adminCard("计划信息", [
                         Descriptions()
                             .border()
@@ -601,7 +667,8 @@ class PublishPlanDetailPage <: Component {
                             },
                         ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))]))),
                     ]),
-                    adminCard("发布项", [this.renderItems()]),
+                        adminCard("发布项", [this.renderItems()]),
+                    ]),
                 ])
             case None =>
                 adminLayout("/admin/publish-plans", [

@@ -191,3 +191,14 @@
 /* 版本历史行右侧元信息：制品大小 + sha256 缩写（与后台版本列表同口径） */
 .version-size { color: #909399; font-size: 12px; margin-left: 12px; }
 .version-sha { color: #a8abb2; font-size: 12px; margin-left: 12px; font-family: 'Fira Code', 'Consolas', monospace; }
+
+/* ===== 发布计划的包选择器（搜索结果 + 已选择列表） =====
+   注意：本文件的类名在编译期由 @importCSS 统一加哈希后缀（.picker-row → .picker-row_<hash>），
+   所以这里只写自己的类；EP 内部类（.el-input 等）写进来会变成 .el-input_<hash> 而**永远匹配不上**。 */
+.picker-title { font-weight: 600; color: #303133; margin: 14px 0 6px; }
+.picker-hint { font-size: 12px; color: #909399; margin: 6px 0; }
+.picker-empty { font-size: 13px; color: #909399; padding: 8px 0; }
+.picker-list { display: flex; flex-direction: column; border: 1px solid #ebeef5; border-radius: 8px; padding: 2px 12px; margin-bottom: 4px; max-height: 260px; overflow-y: auto; }
+.picker-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid #f5f7fa; }
+.picker-row:last-child { border-bottom: none; }
+.picker-name { font-size: 13px; color: #303133; word-break: break-all; }

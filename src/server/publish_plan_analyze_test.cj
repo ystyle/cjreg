@@ -370,3 +370,26 @@ func progressCount_keepsConflictAndEmptyCase() {
     @Expect(countRequired(items), 2)
     @Expect(progressTextOf(0, 0), "无需发布")
 }
+
+// 「检查索引」：只探一次目标仓索引，命中的项交给调用方标成已发布。
+// 这样"已推送成功、在等索引"的项不用逼用户再点一次执行、干等一个轮询周期（默认 60s）。
+@Test
+func checkVersionsInIndex_reportsReadyOnes() {
+    let targets = ArrayList<(String, String, String)>()
+    targets.add(("ystyle", "crc", "1.0.1"))     // 索引里有
+    targets.add(("", "snappy", "1.0.2"))        // 索引里没有
+    targets.add(("", "tsdb", "0.3.3"))          // 索引取不到
+    let r = checkVersionsInIndex(targets, { org, name =>
+        if (name == "tsdb") {
+            None
+        } else if (name == "crc") {
+            Some("{\"name\":\"crc\",\"version\":\"1.0.1\"}\n")
+        } else {
+            Some("{\"name\":\"snappy\",\"version\":\"1.0.1\"}\n")
+        }
+    })
+    @Expect(r.checked, 2)
+    @Expect(r.unreachable, 1)
+    @Expect(r.ready.size, 1)
+    @Expect(r.ready[0], 0)               // 只有 crc 那个下标
+}

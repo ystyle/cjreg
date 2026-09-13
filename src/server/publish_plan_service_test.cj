@@ -8,7 +8,8 @@ import std.unittest.testmacro.*
 import std.collection.*
 
 func makePlanService(): (PublishPlanService, PackageStore) {
-    let store = PackageStore(Storm.inMemory())
+    beginTestStores()
+    let store = PackageStore(testStorm())
     (PublishPlanService(store), store)
 }
 
@@ -42,8 +43,9 @@ func testAnalyzeTopologicalOrder() {
     let app = makePkgWithDeps(store, "test", "app", "1.0.0", ArrayList<String>(["mid", "base"]))
 
     let roots = ArrayList<(String, String, String)>([("test", "app", "1.0.0")])
-    let (items, cycle) = svc.analyze(roots)
-    @Expect(cycle, false)
+    let a = svc.analyze(roots)
+    let items = a.items
+    @Expect(a.hasCycle, false)
     @Expect(items.size, 3)
     // 拓扑：base 先于 mid 先于 app
     @Expect(items[0].name, "base")
@@ -59,14 +61,15 @@ func testAnalyzeNoRoot() {
     let (svc, store) = makePlanService()
     makePkgWithDeps(store, "test", "base", "1.0.0", ArrayList<String>())
     let roots = ArrayList<(String, String, String)>([("test", "missing", "1.0.0")])
-    let (items, cycle) = svc.analyze(roots)
-    @Expect(items.size, 0)
-    @Expect(cycle, false)
+    let a = svc.analyze(roots)
+    @Expect(a.items.size, 0)
+    @Expect(a.hasCycle, false)
 }
 
 @Test
 func testParseDependencyNames() {
-    let svc = PublishPlanService(PackageStore(Storm.inMemory()))
+    beginTestStores()
+    let svc = PublishPlanService(PackageStore(testStorm()))
     let json = "{\"dependencies\":[{\"name\":\"base\",\"require\":\"1.0.0\"},{\"name\":\"org::lib\",\"require\":\"1.0.0\"}]}"
     let deps = svc.parseDependencyNames(json)
     @Expect(deps.size, 2)

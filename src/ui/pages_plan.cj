@@ -235,8 +235,9 @@ class PublishPlanCreatePage <: Component {
     }
 
     func pkgLabel(d: PackageDoc): String {
-        let prefix = if (d.organization.isEmpty()) { "" } else { d.organization + "/" }
-        "${prefix}${d.name}@${d.version}"
+        // `org::name@version`（无组织时就是 `name@version`）。
+        // 早先写 `${org}/${name}`，无组织的包显示成 `/snappy@1.0.1`，看着像路径丢了前半截。
+        packageLabel(d.organization, d.name, d.version)
     }
 
     func isSelected(ids: ArrayList<Int64>, id: Int64): Bool {
@@ -398,9 +399,19 @@ class PublishPlanCreatePage <: Component {
                 roots.add((d.organization, d.name, d.version))
             }
         }
+        // 依赖分析（以选中包为根，计算拓扑序）+ **按目标仓索引分类**：
+        // 不做这一步的话，目标仓早已有同版本的包也会列成「待发布」，
+        // 用户只能靠执行时换回 409 才知道"其实不用发"。
         let planSvc = PublishPlanService(st.pkgStore)
-        let (items, hasCycle) = planSvc.analyze(roots)
-        if (hasCycle) {
+        let target = st.upStore.getById(targetId)
+        let proxy = st.proxySvc
+        let analysis = planSvc.analyze(roots, targetUpstream: target, fetchIndex: { up, org, name2 =>
+            match (proxy) {
+                case Some(p) => p.fetchUpstreamIndex(up, org, name2)
+                case None => Option<String>.None
+            }
+        })
+        if (analysis.hasCycle) {
             this.msg.set("依赖存在环")
             return PatchResult.ReRender
         }
@@ -408,11 +419,17 @@ class PublishPlanCreatePage <: Component {
         let uname = sessionUsername(ctx)
         let planId = st.adminData.createPlan(name, targetId, this.pollInterval.get(), this.pollTimeout.get(), nowMs())
         var order: Int64 = 0
-        for (it in items) {
-            st.adminData.addPlanItem(planId, it.pkgId, it.org, it.name, it.version, order, categoryOf(it.category), true)
+        for (it in analysis.items) {
+            // selected 由分类决定：目标仓已有同版本（同 sha / 不同 sha）默认不勾选
+            st.adminData.addPlanItem(planId, it.pkgId, it.org, it.name, it.version, order,
+                planCategoryName(it.category), it.selected)
             order++
         }
-        st.adminData.setPlanTotal(planId, items.size)
+        st.adminData.setPlanTotal(planId, analysis.items.size)
+        if (analysis.targetError != "") {
+            // 对比没做成必须留在计划上：否则「全部待发布」看起来像是真的比对过了
+            st.adminData.setPlanError(planId, analysis.targetError, nowMs())
+        }
         st.adminData.addLog(LogKind.Admin, uid, uname, "create plan ${name}", "ok", nowMs())
         ctx.route.push("/admin/publish-plans/${planId}")
         PatchResult.ReRender
@@ -516,6 +533,26 @@ class PublishPlanDetailPage <: Component {
             case "waiting_index" => Tag([text("等待索引")]).kind(ComponentKind.Warning)
             case "skipped" => Tag([text("未推送")]).kind(ComponentKind.Info)
             case _ => Tag([text("待发布")]).kind(ComponentKind.Info)
+        }
+    }
+
+    // 分类标签：把「目标仓已有」与「真需要发」区分开，别一律显示"待发布"
+    func categoryTag(c: String): IComponent {
+        match (c) {
+            case "already_exists" => Tag([text("已存在")]).kind(ComponentKind.Success)
+            case "conflict" => Tag([text("冲突")]).kind(ComponentKind.Danger)
+            case "version_optional" => Tag([text("可升版")]).kind(ComponentKind.Warning)
+            case _ => Tag([text("待发布")]).kind(ComponentKind.Primary)
+        }
+    }
+
+    // 分类说明（执行前就能看出「为什么不用发」）
+    func categoryHint(c: String): String {
+        match (c) {
+            case "already_exists" => "目标仓已有同版本同制品，不必再发"
+            case "conflict" => "目标仓已有同版本但制品不同：升版重发，或手工勾选强制覆盖"
+            case "version_optional" => "目标仓已有更高版本，可不发"
+            case _ => "目标仓没有该版本，需要发布"
         }
     }
 
@@ -668,6 +705,83 @@ class PublishPlanDetailPage <: Component {
         })
     }
 
+    // 勾选/取消勾选某一项：目标仓已有同版本的项默认不勾选（执行器据此跳过），
+    // 想强制覆盖/重发时必须能手工勾上，否则计划里那些项永远发不出去。
+    func toggleItem(ctx: ActionContext, docId: Int64, selected: Bool): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
+        }
+        let _ = st.adminData.setPlanItemSelected(docId, !selected)
+        this.refreshItems()
+        PatchResult.ReRender
+    }
+
+    // 重新分类：按当前目标仓索引重跑一遍 analyze（目标仓在这期间可能已经同步了，
+    // 或者是计划早于"目标仓对比"功能创建的）。只改分类与默认勾选，不动执行状态。
+    func reanalyze(ctx: ActionContext): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
+        }
+        let plan = match (st.adminData.getPlan(this.planId)) {
+            case Some(p) => p
+            case None =>
+                this.msg.set("计划不存在")
+                return PatchResult.ReRender
+        }
+        let target = st.upStore.getById(plan.targetUpstream)
+        if (target.isNone()) {
+            this.msg.set("目标上游不存在，无法对比")
+            return PatchResult.ReRender
+        }
+        // 用计划里的条目（org/name/version）当根重跑：与创建时同一份输入
+        let docs = st.adminData.listPlanItems(this.planId)
+        let roots = ArrayList<(String, String, String)>()
+        for (d in docs) {
+            roots.add((d.packageOrg, d.packageName, d.packageVersion))
+        }
+        let planSvc = PublishPlanService(st.pkgStore)
+        let proxy = st.proxySvc
+        let analysis = planSvc.analyze(roots, targetUpstream: target, fetchIndex: { up, org, name =>
+            match (proxy) {
+                case Some(p) => p.fetchUpstreamIndex(up, org, name)
+                case None => Option<String>.None
+            }
+        })
+        // 按 org::name@version 把分类写回原条目（依赖补齐可能带来新条目，这里只更新已存在的）
+        for (d in docs) {
+            for (it in analysis.items) {
+                if (it.name == d.packageName && it.org == d.packageOrg && it.version == d.packageVersion) {
+                    // 已完成/已推送的不回退勾选状态（那是执行记录）
+                    let sel = if (d.status == "completed" || d.status == "waiting_index") {
+                        d.selected
+                    } else {
+                        it.selected
+                    }
+                    let _ = st.adminData.setPlanItemCategory(d.id, planCategoryName(it.category), sel)
+                    break
+                }
+            }
+        }
+        if (analysis.targetError != "") {
+            let _ = st.adminData.setPlanError(this.planId, analysis.targetError, nowMs())
+            this.msg.set(analysis.targetError)
+        } else {
+            this.msg.set("已按目标仓索引重新分类")
+        }
+        this.refreshItems()
+        PatchResult.ReRender
+    }
+
     func refreshItems(): Unit {
         match (this.state) {
             case Some(st) =>
@@ -686,12 +800,26 @@ class PublishPlanDetailPage <: Component {
             .data(this.itemRows)
             .stripe()
             .add(TableColumn<PlanItemDoc>().label("序").accessor({ d => d.order.toString() }).width(50))
-            .add(TableColumn<PlanItemDoc>().label("包").accessor({ d => "${d.packageOrg}/${d.packageName}@${d.packageVersion}" }).minWidth(260))
-            .add(TableColumn<PlanItemDoc>().label("分类").accessor({ d => d.category }).width(120))
+            .add(TableColumn<PlanItemDoc>().label("包").accessor({ d =>
+                packageLabel(d.packageOrg, d.packageName, d.packageVersion)
+            }).minWidth(230))
+            .add(TableColumn<PlanItemDoc>().label("分类").width(90).render({ d, i =>
+                this.categoryTag(d.category)
+            }))
             .add(TableColumn<PlanItemDoc>().label("状态").width(90).render({ d, i =>
                 this.itemStatusTag(d.status)
             }))
-            .add(TableColumn<PlanItemDoc>().label("错误").accessor({ d => d.error }).minWidth(160).showOverflowTooltip())
+            .add(TableColumn<PlanItemDoc>().label("说明").accessor({ d =>
+                // 有执行错误就显示错误，否则显示分类含义 —— 空着等于让人自己猜
+                if (d.error != "") { d.error } else { this.categoryHint(d.category) }
+            }).minWidth(240).showOverflowTooltip())
+            .add(TableColumn<PlanItemDoc>().label("操作").width(90).render({ d, i =>
+                let id = d.id
+                let sel = d.selected
+                let act: ActionHandler = { c => this.toggleItem(c, id, sel) }
+                let label = if (sel) { "取消勾选" } else { "勾选" }
+                Button([text(label)]).size(ButtonSize.Small).onClick(act)
+            }))
     }
 
     public func render(): IComponent {
@@ -733,6 +861,13 @@ class PublishPlanDetailPage <: Component {
                         },
                         div([
                             Button([text("返回列表")]).onClick(backHandler),
+                            // 重新分类：按目标仓索引重跑对比（目标仓可能刚同步完；
+                            // 老计划也可能是在"目标仓对比"上线前建的，分类是旧的）
+                            if (!executing) {
+                                Button([text("重新分析")]).onClick(reanalyze)
+                            } else {
+                                div()
+                            },
                             if (canStart) {
                                 Button([text(if (resuming) { "继续执行（跳过已完成项）" } else { "开始执行" })])
                                     .kind(ButtonKind.Primary).onClick(doStart)
@@ -793,15 +928,6 @@ func planItemStatusName(s: PlanItemStatus): String {
     }
 }
 
-// 分类字符串（analyze 结果 → 存储）
-func categoryOf(c: PlanCategory): String {
-    match (c) {
-        case PlanCategory.NeedPublish => "need_publish"
-        case PlanCategory.VersionOptional => "version_optional"
-        case PlanCategory.AlreadyExists => "already_exists"
-        case PlanCategory.Conflict => "conflict"
-    }
-}
 
 // 数据目录（从状态推断：blob 存储路径）
 public func getDataDir(): String {

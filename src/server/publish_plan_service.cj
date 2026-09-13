@@ -4,6 +4,7 @@ package ystyle::cjreg.server
 
 import ystyle::cjreg.index.*
 import ystyle::cjreg.store.*
+import ystyle::cjreg.config.*
 import ystyle::cjreg.semver_range.*
 import stdx.encoding.json.stream.*
 import std.io.*
@@ -88,6 +89,11 @@ public class PlanItem {
     public var order: Int64
     public var selected: Bool
     public var error: String
+    // 目标仓对比所需的证据（都来自索引，供界面展示与人工判断）
+    public var localSha256: String       // 本地制品 sha
+    public var remoteSha256: String      // 目标仓同版本 sha（空 = 目标仓没有该版本）
+    public var requirement: String       // 作为依赖被纳入时，依赖方声明的版本要求
+    public var localVersions: ArrayList<String>  // 本地该包的全部版本（升序）
 
     public init(pkgId: Int64, name: String, org: String, version: String,
                 category: PlanCategory, order: Int64) {
@@ -100,6 +106,49 @@ public class PlanItem {
         this.order = order
         this.selected = true
         this.error = ""
+        this.localSha256 = ""
+        this.remoteSha256 = ""
+        this.requirement = ""
+        this.localVersions = ArrayList<String>()
+    }
+}
+
+// 分类 → 字符串（存储与接口取值，与 cjrepo 的 category 一致）
+public func planCategoryName(c: PlanCategory): String {
+    match (c) {
+        case PlanCategory.NeedPublish => "need_publish"
+        case PlanCategory.VersionOptional => "version_optional"
+        case PlanCategory.AlreadyExists => "already_exists"
+        case PlanCategory.Conflict => "conflict"
+    }
+}
+
+// 包的全名：`org::name@version`（无组织时省略前缀）。
+// 早先按 `org/name` 显示，界面上和"路径"混在一起，也看不出 org 与 name 的分界。
+public func packageLabel(org: String, name: String, version: String): String {
+    let n = if (org.isEmpty()) { name } else { org + "::" + name }
+    if (version.isEmpty()) {
+        n
+    } else {
+        n + "@" + version
+    }
+}
+
+// analyze 结果：条目 + 环检测 + **目标仓对比是否真的做成了**
+//
+// targetChecked 必须显式带出来：索引取不到时所有条目都会退回 need_publish，
+// 若不说，用户看到的就是一句「全部待发布」的假象（可能重复推已存在的版本）。
+public class PlanAnalysis {
+    public var items: ArrayList<PlanItem>
+    public var hasCycle: Bool
+    public var targetChecked: Bool
+    public var targetError: String
+
+    public init(items: ArrayList<PlanItem>, hasCycle: Bool, targetChecked: Bool, targetError: String) {
+        this.items = items
+        this.hasCycle = hasCycle
+        this.targetChecked = targetChecked
+        this.targetError = targetError
     }
 }
 
@@ -130,9 +179,17 @@ public class PublishPlanService {
         this.pkgStore = pkgStore
     }
 
-    // analyze：对给定包列表做依赖分析 + 拓扑排序
-    // 返回 (排序后的 PlanItem 列表, 环检测标志)
-    public func analyze(rootPkgs: ArrayList<(String, String, String)>): (ArrayList<PlanItem>, Bool) {
+    // analyze：对给定包列表做依赖分析 + 拓扑排序 + **按目标仓索引分类**
+    //
+    // targetUpstream 给定时会去目标仓取索引，把每个条目分成
+    //   need_publish    目标仓没有这个版本（真需要发）
+    //   already_exists  目标仓已有同版本且 sha 一致（不必再发；推也只会换回 409）
+    //   conflict        目标仓已有同版本但 sha 不同（要人工决策：升版 or 强制覆盖）
+    //   version_optional 目标仓/本地已有更合适的版本，可不发
+    // 没有这一步，界面上一切都是 need_publish —— 用户没法从计划里看出"哪些其实已经发过了"。
+    public func analyze(rootPkgs: ArrayList<(String, String, String)>,
+                        targetUpstream!: ?Upstream = None,
+                        fetchIndex!: (Upstream, String, String) -> ?String = { _, _, _ => None }): PlanAnalysis {
         // 1. 加载所有本地包
         let allDocs = this.pkgStore.listVersions("", "")
         let all = ArrayList<PackageDoc>()
@@ -187,7 +244,7 @@ public class PublishPlanService {
             }
         }
         if (roots.size == 0) {
-            return (ArrayList<PlanItem>(), false)
+            return PlanAnalysis(ArrayList<PlanItem>(), false, false, "")
         }
 
         // 3. 依赖图（从 indexJson 解析依赖名）→ 拓扑排序（后序 DFS）
@@ -196,6 +253,8 @@ public class PublishPlanService {
         var order = ArrayList<PackageDoc>()
         var hasCycle = false
         var stackTrace = ArrayList<Int64>()
+        // docId → 把它拉进来的依赖方版本要求（根包没有要求）
+        let requirements = HashMap<Int64, String>()
 
         // 递归 DFS（简化：用栈模拟）
         var stack = ArrayList<(Int64, Bool)>()  // (pkgId, processed)
@@ -230,6 +289,10 @@ public class PublishPlanService {
                 let org = if (depOrg != "") { depOrg } else { doc.organization }
                 match (this.pickDepDoc(all, org, dep, require, chosen)) {
                     case Some(dd) =>
+                        // 记下是哪个版本要求把它拉进来的（分类时判断 version_optional 用）
+                        if (!requirements.contains(dd.id)) {
+                            requirements[dd.id] = require
+                        }
                         if (!visited.contains(dd.id)) {
                             stack.add((dd.id, false))
                         }
@@ -238,15 +301,109 @@ public class PublishPlanService {
             }
         }
 
-        // 4. 生成 PlanItem（按拓扑顺序）
+        // 4. 目标仓索引：org::name → (version → sha)
+        //    取不到的包要记下来（None 只代表"取不到"，不代表"目标仓没有这个包"）
+        var targetChecked = false
+        var targetError = ""
+        let remote = HashMap<String, HashMap<String, String>>()
+        let unreachable = ArrayList<String>()
+        match (targetUpstream) {
+            case Some(up) =>
+                let fetched = HashSet<String>()
+                for (d in order) {
+                    let key = d.organization + "::" + d.name
+                    if (fetched.contains(key)) {
+                        continue
+                    }
+                    fetched.add(key)
+                    match (fetchIndex(up, d.organization, d.name)) {
+                        case Some(text) =>
+                            let m = HashMap<String, String>()
+                            for (e in parseNDJSON(text)) {
+                                m[e.version] = e.sha256sum
+                            }
+                            remote[key] = m
+                        case None => unreachable.add(packageLabel(d.organization, d.name, ""))
+                    }
+                }
+                targetChecked = unreachable.size == 0
+                if (unreachable.size > 0) {
+                    targetError = "目标仓索引取不到：${unreachable.size} 个包（${unreachable[0]} 等）" +
+                        "无法判断是否已存在，这些条目只能按「待发布」列出——执行时若目标仓已有同版本会得到 409"
+                }
+            case None => ()
+        }
+
+        // 5. 生成 PlanItem（按拓扑顺序）+ 按目标仓索引分类
         let items = ArrayList<PlanItem>()
         var n: Int64 = 1
         for (d in order) {
-            items.add(PlanItem(d.id, d.name, d.organization, d.version,
-                classify(d), n))
+            let it = PlanItem(d.id, d.name, d.organization, d.version, PlanCategory.NeedPublish, n)
+            it.localSha256 = extractSha256(d.indexJson)
+            it.localVersions = localVersionsOf(all, d.organization, d.name)
+            match (requirements.get(d.id)) {
+                case Some(r) => it.requirement = r
+                case None => ()
+            }
+            // 依赖方声明的要求没被满足 → 本地还有更合适的版本可选
+            if (!it.requirement.isEmpty() && !versionSatisfies(it.version, it.requirement)) {
+                match (bestMatch(it.localVersions, it.requirement)) {
+                    case Some(b) =>
+                        if (b != it.version) {
+                            it.category = PlanCategory.VersionOptional
+                        }
+                    case None => ()
+                }
+            }
+            let emptyRemote = HashMap<String, String>()
+            let remoteOf = match (remote.get(d.organization + "::" + d.name)) {
+                case Some(m) => m
+                case None => emptyRemote
+            }
+            classifyItem(it, remoteOf)
+            items.add(it)
             n++
         }
-        return (items, hasCycle)
+        return PlanAnalysis(items, hasCycle, targetChecked, targetError)
+    }
+
+    // 按目标仓索引给一个条目分类（对齐 cjrepo 的 Analyze）：
+    //   目标仓有该版本且 sha 一致 → already_exists（默认不勾选：推上去也只会 409）
+    //   目标仓有该版本但 sha 不同 → conflict（默认不勾选：要不要覆盖得人来定）
+    //   目标仓没有该版本、但有更高版本 → version_optional（提示"可以不发"）
+    func classifyItem(it: PlanItem, remote: HashMap<String, String>): Unit {
+        match (remote.get(it.version)) {
+            case Some(remoteSha) =>
+                it.remoteSha256 = remoteSha
+                if (!remoteSha.isEmpty() && remoteSha == it.localSha256) {
+                    it.category = PlanCategory.AlreadyExists
+                    it.selected = false
+                } else if (!remoteSha.isEmpty() && remoteSha != it.localSha256) {
+                    it.category = PlanCategory.Conflict
+                    it.selected = false
+                }
+            case None =>
+                var best = ""
+                for ((v, _) in remote) {
+                    if (best.isEmpty() || compareVersions(v, best) > 0) {
+                        best = v
+                    }
+                }
+                if (!best.isEmpty() && compareVersions(it.version, best) < 0) {
+                    it.category = PlanCategory.VersionOptional
+                }
+        }
+    }
+
+    // 本地该包（同 org 同 name）的全部版本，升序
+    func localVersionsOf(all: ArrayList<PackageDoc>, org: String, name: String): ArrayList<String> {
+        let vs = ArrayList<String>()
+        for (d in all) {
+            if (d.name == name && d.organization == org && d.deletedAt == 0) {
+                insertSorted(vs, d.version)
+            }
+        }
+        vs
     }
 
     // 从 indexJson 解析依赖名（保留旧签名：既有测试直接调它）
@@ -351,14 +508,41 @@ public class PublishPlanService {
         }
         return false
     }
-
-    // 分类（简化：本地有即已存在；真实逻辑按中心仓对比，M5 简化为本地视角）
-    func classify(d: PackageDoc): PlanCategory {
-        PlanCategory.NeedPublish
-    }
 }
 
 // 从 analyze 请求体解析 packages 列表 [{organization,name,version}]
+// 从 analyze 请求体里读 target_upstream（0/缺省 = 不做目标仓对比）
+public func parseTargetUpstream(body: String): Int64 {
+    let bb = ByteBuffer()
+    bb.write(body.toArray())
+    let r = JsonReader(bb)
+    var target: Int64 = 0
+    try {
+        while (let Some(v) <- r.peek()) {
+            match (v) {
+                case BeginObject =>
+                    r.startObject()
+                    while (r.peek() != EndObject) {
+                        let n = r.readName()
+                        if (n == "target_upstream") {
+                            target = r.readValue<Int64>()
+                        } else {
+                            r.skip()
+                        }
+                    }
+                    r.endObject()
+                    return target
+                case _ => r.skip()
+            }
+        }
+    } catch (e: Exception) {
+        // 解析不出来就是"没指定目标仓"（分类退回本地视角），但要留痕：
+        // 静默吞掉会让人以为"对比过了、目标仓什么都没有"
+        println("[cjreg] analyze 请求体解析 target_upstream 失败: " + e.toString())
+    }
+    target
+}
+
 public func parsePackagesBody(body: String, out: ArrayList<(String, String, String)>): Unit {
     let bb = ByteBuffer()
     bb.write(body.toArray())
@@ -501,7 +685,7 @@ public class PublishExecutor {
             }
             if (!it.selected) {
                 it.status = PlanItemStatus.Skipped
-                it.error = "未勾选：不推送"
+                it.error = unselectedReason(it)
                 report.skipped++
                 onItem(it, true, it.error)
                 idx++
@@ -659,6 +843,19 @@ public class PublishExecutor {
             idx++
         }
         return report
+    }
+}
+
+// 未勾选条目的跳过原因：按分类说清「为什么默认不发」，别让"未勾选"看起来像用户漏点了
+func unselectedReason(it: PlanItem): String {
+    match (it.category) {
+        case PlanCategory.AlreadyExists =>
+            "目标仓已有同版本同制品，默认不发（要在详情页勾选才会强制重发）"
+        case PlanCategory.Conflict =>
+            "目标仓已有同版本但制品不同，默认不发（升版后重发，或手工勾选强制覆盖）"
+        case PlanCategory.VersionOptional =>
+            "目标仓已有更合适的版本，默认不发（要发就手工勾选）"
+        case PlanCategory.NeedPublish => "未勾选：不推送"
     }
 }
 

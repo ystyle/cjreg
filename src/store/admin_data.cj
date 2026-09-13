@@ -652,6 +652,18 @@ public class AdminDataStore {
             case None => return false
         }
     }
+
+    // 重新分类（详情页「重新分析」用）：只改分类与勾选，**不动执行状态**
+    public func setPlanItemCategory(id: Int64, category: String, selected: Bool): Bool {
+        match (this.storm.get<PlanItemDoc>(id)) {
+            case Some(d) =>
+                d.category = category
+                d.selected = selected
+                this.storm.save(d)
+                return true
+            case None => return false
+        }
+    }
 }
 
 // 日志升序比较（时间 → id），配合 sort(..., descending!: true) 得到「最新在前」

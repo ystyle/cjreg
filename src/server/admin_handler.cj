@@ -1032,6 +1032,8 @@ public class AdminService {
     }
 
     // ===== 发布计划 analyze =====
+    // body: {packages:[{organization,name,version}], target_upstream?}
+    // 给了 target_upstream 就按目标仓索引分类（need_publish/already_exists/conflict/version_optional）
     public func analyzePlan(ctx: TangHttpContext): Unit {
         if (!requireAdmin(ctx)) {
             return
@@ -1043,18 +1045,36 @@ public class AdminService {
             writeJson(ctx, 400u16, "{\"error\":\"packages required\"}")
             return
         }
-        let (items, cycle) = this.planSvc.analyze(roots)
+        let targetId = parseTargetUpstream(body)
+        let analysis = this.analyzeWithTarget(roots, targetId)
         let sb = StringBuilder()
-        sb.append("{\"publish_order\":[")
-        for (i in 0..items.size) {
+        sb.append("{\"target_checked\":${analysis.targetChecked},")
+        sb.append("\"target_error\":\"${escapeJsonStr(analysis.targetError)}\",")
+        sb.append("\"publish_order\":[")
+        for (i in 0..analysis.items.size) {
             if (i > 0) {
                 sb.append(",")
             }
-            let it = items[i]
-            sb.append("{\"name\":\"${it.name}\",\"org\":\"${it.org}\",\"version\":\"${it.version}\",\"order\":${it.order}}")
+            let it = analysis.items[i]
+            sb.append("{\"name\":\"${it.name}\",\"org\":\"${it.org}\",\"version\":\"${it.version}\",")
+            sb.append("\"order\":${it.order},\"category\":\"${planCategoryName(it.category)}\",")
+            sb.append("\"selected\":${it.selected},\"local_sha256\":\"${it.localSha256}\",")
+            sb.append("\"remote_sha256\":\"${it.remoteSha256}\",\"requirement\":\"${escapeJsonStr(it.requirement)}\"}")
         }
-        sb.append("],\"hasCycle\":${cycle}}")
+        sb.append("],\"hasCycle\":${analysis.hasCycle}}")
         writeJson(ctx, 200u16, sb.toString())
+    }
+
+    // 按目标上游做 analyze（targetId <= 0 或上游不存在 = 不做目标仓对比）
+    public func analyzeWithTarget(roots: ArrayList<(String, String, String)>, targetId: Int64): PlanAnalysis {
+        let target = if (targetId > 0) { this.upstreamStore.getById(targetId) } else { Option<Upstream>.None }
+        let proxy = this.proxySvc
+        this.planSvc.analyze(roots, targetUpstream: target, fetchIndex: { up, org, name =>
+            match (proxy) {
+                case Some(p) => p.fetchUpstreamIndex(up, org, name)
+                case None => Option<String>.None
+            }
+        })
     }
 
     // 发布计划执行：POST /api/admin/publish-plans/execute
@@ -1108,8 +1128,9 @@ public class AdminService {
         // 目标仓鉴权：显式 target_token 优先，否则按 URL 匹配上游表取该上游 authToken
         // （token 属敏感信息，审计只记「是否使用显式 token」，不落明文）
         let token = resolveTargetToken(targetToken, targetUrl, this.upstreamStore.listAll())
-        // 先 analyze 得拓扑 items
-        let (items, _) = this.planSvc.analyze(roots)
+        // 先 analyze 得拓扑 items（legacy 接口不带目标仓，分类不参与执行）
+        let analysis = this.planSvc.analyze(roots)
+        let items = analysis.items
         if (items.size == 0) {
             writeAudit(this.adminData, LogKind.Admin, planActorId, planActorName, "execute_publish_plan", "failed",
                 targetUrl, ctx, error: "no packages found locally")

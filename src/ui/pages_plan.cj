@@ -640,7 +640,18 @@ class PublishPlanDetailPage <: Component {
             case Some(a) => a
             case None => return
         }
-        let executor = PublishExecutor(st.pkgStore, DiskBlobStore("${getDataDir()}/blobs"))
+        // 制品库必须用**启动时注入的那个**（main.cj 按 -d/--data-dir 构造）。
+        // 早先这里硬编码 DiskBlobStore("./data/blobs")：容器里工作目录是 /app、真实数据目录是 /data，
+        // 于是执行器对着 /app/data/blobs（空目录）找制品 → **每一项都报「制品缺失」**，
+        // 而 /pkg 下载一切正常，看起来像"包坏了"。
+        let blobs = match (st.blobStore) {
+            case Some(b) => b
+            case None =>
+                this.msg.set("内部错误：制品库未注入，无法执行发布计划")
+                st.planBusy.set(false)
+                return
+        }
+        let executor = PublishExecutor(st.pkgStore, blobs)
         let total = items.size
         let done = Box<Int64>(0)
         let okCount = Box<Int64>(0)
@@ -1048,11 +1059,6 @@ func planItemStatusName(s: PlanItemStatus): String {
     }
 }
 
-
-// 数据目录（从状态推断：blob 存储路径）
-public func getDataDir(): String {
-    "./data"
-}
 
 // ===== 日志页 =====
 // 审计日志：类型/结果筛选 + 关键字搜索 + 分页 + 按类型清理（清理动作自身入审计）

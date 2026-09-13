@@ -832,7 +832,9 @@ class PublishPlanDetailPage <: Component {
                 let blocked = !canOverwrite &&
                     (d.category == "already_exists" || d.category == "conflict")
                 if (blocked) {
-                    Tag([text("需升版")]).kind(ComponentKind.Warning)
+                    // 冲突：唯一出路是升版；已存在：本来就不用发，只是"想重传也没门"
+                    let why = if (d.category == "conflict") { "需升版" } else { "不可覆盖" }
+                    Tag([text(why)]).kind(ComponentKind.Warning)
                 } else {
                     let id = d.id
                     let sel = d.selected

@@ -28,9 +28,20 @@ public class CjregState <: AppState {
     public var currentUser: Signal<Option<User>> = Signal<Option<User>>(Option<User>.None)
     public var sessionToken: Signal<String> = Signal<String>("")
     // 计划执行进度（异步执行时 pushUpdate 更新，详情页订阅渲染）
+    //
+    // planBusy 是"当前会话是否在跑"的旧标志，只作辅助；**判断某计划是否真的在执行**
+    // 一律看 planRunIds（进程级、由执行线程登记/注销）。踩过的坑：planBusy 只在
+    // 收口的 pushUpdate 回调里被清掉，回调一抛（会话在重连/已销毁）它就永远是 true，
+    // 界面于是永远显示「执行中」、按钮全被 canStart 挡掉——计划彻底点不动。
     public var planBusy = Signal<Bool>(false)
     public var planProgress = Signal<String>("")
     public var planStatus = Signal<String>("")
+    // 正在执行的计划 id（执行线程登记；进程重启自然清空，与"线程没了"的事实一致）
+    public var planRunIds = Signal<ArrayList<Int64>>(ArrayList<Int64>())
+    // 已请求停止的计划 id（执行器每项/每轮等待都会看一眼）
+    public var planCancelIds = Signal<ArrayList<Int64>>(ArrayList<Int64>())
+    // 「重新分析」起始时刻（判断卡死用：超过阈值就当上一轮已死，允许重来）
+    public var planAnalyzeSince = Signal<Int64>(0)
 
     public init(pkgStore: PackageStore, userStore: BstormUserStore,
                 upStore: BstormUpstreamStore, adminData: AdminDataStore, auth: AuthService,

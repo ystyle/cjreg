@@ -570,7 +570,8 @@ class PublishPlanDetailPage <: Component {
             this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
-        if (st.planBusy.get()) {
+        if (containsId(st.planRunIds.get(), this.planId)) {
+            this.msg.set("该计划正在执行中")
             return PatchResult.ReRender
         }
         let sid = ctx.getSessionId()
@@ -611,6 +612,9 @@ class PublishPlanDetailPage <: Component {
                             return PatchResult.ReRender
                         }
                         st.adminData.updatePlanStatus(this.planId, "running", 0, nowMs())
+                        // 清掉上一轮的停止请求，并登记本轮（进程级：界面据此判断"真的在跑"）
+                        removePlanId(st, this.planId, true)
+                        addPlanId(st, this.planId, false)
                         st.planBusy.set(true)
                         st.planStatus.set("running")
                         st.planProgress.set("0/${execItems.size}")
@@ -635,14 +639,20 @@ class PublishPlanDetailPage <: Component {
     //   409            → 目标仓已有同版本不同制品 → 该项跳过（不是失败），继续下一项
     //   >=500 / 网络   → 执行器内部退避重试，仍失败才判该项失败
     func runExecution(st: CjregState, sid: String, items: ArrayList<PlanItem>, docIds: HashMap<Int64, Int64>, up: Upstream, pollIntervalSec: Int64, pollTimeoutSec: Int64): Unit {
+        // 执行期间登记在 planRunIds 里（界面据此判断"真的在跑"）。**所有出口都要注销**，
+        // 否则计划会永远显示「执行中」——实测踩过：收口回调一抛就是这种下场。
         let app = match (st.app) {
             case Some(a) => a
-            case None => return
+            case None =>
+                removePlanId(st, this.planId, false)
+                st.planBusy.set(false)
+                return
         }
         let executor = match (buildPlanExecutor(st.pkgStore, st.blobStore)) {
             case Some(e) => e
             case None =>
                 this.msg.set("内部错误：制品库未注入，无法执行发布计划")
+                removePlanId(st, this.planId, false)
                 st.planBusy.set(false)
                 return
         }
@@ -651,7 +661,10 @@ class PublishPlanDetailPage <: Component {
         let okCount = Box<Int64>(0)
         var report = ExecuteReport()
         try {
-        report = executor.execute(items, up.url, up.authToken, onItem: { it, _, err =>
+        report = executor.execute(items, up.url, up.authToken, shouldCancel: { =>
+            // 用户在详情页点了「停止执行」：每项开推前、以及等索引的每一轮都会问一次
+            containsId(st.planCancelIds.get(), this.planId)
+        }, onItem: { it, _, err =>
             // **先即时落盘**：单条状态与计划进度都必须进 DB，不能只留在执行线程的内存里、
             // 也不能只挂在 pushUpdate 上——页面一关（WS 会话没了）pushUpdate 就不再执行，
             // 结果是「计划永远 running、单条永远 Pending」，重启后分不清哪些已经发过。
@@ -726,6 +739,14 @@ class PublishPlanDetailPage <: Component {
         // "这个计划跑完了吗、跑成什么样"。改成无论成败都记一条（发布态审计）。
         st.adminData.addLog(LogKind.Publish, 0, "",
             "plan ${this.planId} ${finalStatus}", if (report.failed > 0) { "failed" } else { "ok" }, nowMs())
+        // **先直接复位执行登记**（不放在 pushUpdate 回调里）：回调可能因为会话在重连/
+        // 已销毁而抛异常，那样登记就永远留在"执行中"，界面再无按钮可用。
+        removePlanId(st, this.planId, false)
+        removePlanId(st, this.planId, true)
+        st.planBusy.set(false)
+        if (report.aborted && report.abortReason == "用户已停止执行") {
+            st.adminData.addLog(LogKind.Publish, 0, "", "plan ${this.planId} 用户停止", "ok", nowMs())
+        }
         try {
             let _ = app.pushUpdate(sid, { pctx =>
                 let s = pctx.getState<CjregState>()
@@ -739,6 +760,26 @@ class PublishPlanDetailPage <: Component {
             // 界面没刷到没关系（上面已落盘）；但不能把异常抛出去把线程搞死
             println("[cjreg] 发布计划收口推送失败（plan ${this.planId}，状态已落盘为 ${finalStatus}）: " + e.toString())
         }
+    }
+
+    // 请求停止执行：只置标志，执行器在"下一项开推前"和"等索引的每一轮"看到就收口。
+    // 正在进行的 HTTP 推送没法中断（包已经在路上了），所以是"尽快停"而不是"立刻断"。
+    func stopExecution(ctx: ActionContext): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
+        }
+        if (!containsId(st.planRunIds.get(), this.planId)) {
+            this.msg.set("该计划当前没有在执行")
+            return PatchResult.ReRender
+        }
+        addPlanId(st, this.planId, true)
+        this.msg.set("已请求停止：正在收尾（已推出去的项会保留）")
+        PatchResult.ReRender
     }
 
     // 勾选/取消勾选某一项：目标仓已有同版本的项默认不勾选（执行器据此跳过），
@@ -787,12 +828,22 @@ class PublishPlanDetailPage <: Component {
             this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
+        // 卡死自愈：标志为真但已经跑了很久（上一轮线程死了/网络挂住），允许重来并留痕，
+        // 不然用户点多少次都没反应、也不知道为什么
         if (this.analyzing.get()) {
-            return PatchResult.ReRender       // 已在跑，别叠加
+            let since = st.planAnalyzeSince.get()
+            let now = nowMs()
+            if (since > 0 && now - since < 180000) {
+                this.msg.set("正在对比目标仓索引…（已 ${(now - since) / 1000}s，请稍候）")
+                return PatchResult.ReRender
+            }
+            println("[cjreg] 重新分析：上一轮疑似卡死（已 ${if (since > 0) { (now - since) / 1000 } else { -1 }}s），重新开始")
         }
         let sid = ctx.getSessionId()
         this.analyzing.set(true)
+        st.planAnalyzeSince.set(nowMs())
         this.msg.set("正在对比目标仓索引…")
+        println("[cjreg] 重新分析开始：plan=${this.planId}")
         spawn { =>
             this.reanalyzeAsync(st, sid)
         }
@@ -849,7 +900,19 @@ class PublishPlanDetailPage <: Component {
                 let _ = st.adminData.setPlanError(this.planId, analysis.targetError, nowMs())
                 summary = analysis.targetError
             } else {
-                summary = "已按目标仓索引重新分类 ${updated} 项"
+                // 文案带上计数：否则连续两次分析得到同一句话，看起来像"点了没反应"
+                var need: Int64 = 0
+                var exists: Int64 = 0
+                var conflict: Int64 = 0
+                for (it in analysis.items) {
+                    match (it.category) {
+                        case PlanCategory.AlreadyExists => exists++
+                        case PlanCategory.Conflict => conflict++
+                        case _ => need++
+                    }
+                }
+                summary = "已重新分类 ${updated} 项（需发布 ${need} · 目标仓已有 ${exists}" +
+                    (if (conflict > 0) { " · 冲突 ${conflict}" } else { "" }) + "）"
             }
         } catch (e: Exception) {
             // 异步线程里的异常没人接：不接住的话界面会永远停在"分析中…"
@@ -861,18 +924,24 @@ class PublishPlanDetailPage <: Component {
 
     // 收尾：清"分析中"、刷表格（必须在 pushUpdate 里做，否则到不了前端）
     func finishAnalyze(st: CjregState, sid: String, summary: String): Unit {
+        // **先直接复位 analyzing**：原来只在 pushUpdate 回调里复位，回调一抛（会话重连/已销毁）
+        // 这个标志就永远停在 true，之后每次点「重新分析」都在入口静默 return —— 用户看到的就是
+        // 「点了没用、什么提示都没有」。实测踩过。
+        this.analyzing.set(false)
+        st.planAnalyzeSince.set(0)
         let app = match (st.app) {
             case Some(a) => a
-            case None =>
-                this.analyzing.set(false)
-                return
+            case None => return
         }
-        let _ = app.pushUpdate(sid, { pctx =>
-            this.analyzing.set(false)
-            this.msg.set(summary)
-            this.refreshItems()
-            PatchResult.ReRender
-        })
+        try {
+            let _ = app.pushUpdate(sid, { pctx =>
+                this.msg.set(summary)
+                this.refreshItems()
+                PatchResult.ReRender
+            })
+        } catch (e: Exception) {
+            println("[cjreg] 重新分析结果推送失败（plan ${this.planId}，分类已落盘）: " + e.toString())
+        }
     }
 
     func refreshItems(): Unit {
@@ -972,10 +1041,15 @@ class PublishPlanDetailPage <: Component {
             case None => return div([text("加载中...")])
         }
         let backHandler: ActionHandler = { c => this.backToList(c) }
-        let executing = st.planBusy.get()
+        // "是否真的在执行"看进程级登记（planRunIds），不看会话级的 planBusy——
+        // 后者可能因为收口回调抛异常而永远停在 true，把界面锁死（实测踩过）。
+        let executing = containsId(st.planRunIds.get(), this.planId)
+        let cancelling = containsId(st.planCancelIds.get(), this.planId)
         match (st.adminData.getPlan(this.planId)) {
             case Some(plan) =>
-                let canStart = !executing && plan.status != "running" && plan.status != "completed"
+                // 这里**不再**要求 plan.status != "running"：库里状态可能是上一轮没收口留下的
+                // "running"（进程被杀/回调抛异常），此时也该允许用户重新执行或停止。
+                let canStart = !executing && plan.status != "completed"
                 let resuming = plan.status == "paused" || plan.status == "failed"
                 let progressLine = if (executing) {
                     div([text("执行中: ${st.planProgress.get()}")])
@@ -1024,6 +1098,17 @@ class PublishPlanDetailPage <: Component {
                             } else {
                                 div()
                             },
+                            // 执行中（尤其"等目标仓索引"最长等于计划的 pollTimeout，默认 10 分钟）
+                            // 必须给用户一个出口：不点它就只能干等
+                            if (executing) {
+                                if (cancelling) {
+                                    Button([text("停止中…")]).disabled()
+                                } else {
+                                    Button([text("停止执行")]).kind(ButtonKind.Danger).onClick(stopExecution)
+                                }
+                            } else {
+                                div()
+                            },
                             if (this.msg.get() != "") {
                                 Tag([text(this.msg.get())]).kind(ComponentKind.Success)
                             } else {
@@ -1065,6 +1150,50 @@ public func buildPlanExecutor(pkgStore: PackageStore, blobStore: ?BlobStore): ?P
     match (blobStore) {
         case Some(b) => Some(PublishExecutor(pkgStore, b))
         case None => None
+    }
+}
+
+// 计划 id 是否在登记列表里
+func containsId(ids: ArrayList<Int64>, id: Int64): Bool {
+    for (x in ids) {
+        if (x == id) {
+            return true
+        }
+    }
+    false
+}
+
+// 登记 / 注销：cancel = false → planRunIds（正在执行）；true → planCancelIds（已请求停止）。
+// 用"换一个新列表再 set"而不是原地改：信号要看到新值才会触发重渲。
+func addPlanId(st: CjregState, planId: Int64, cancel: Bool): Unit {
+    let src = if (cancel) { st.planCancelIds.get() } else { st.planRunIds.get() }
+    if (containsId(src, planId)) {
+        return
+    }
+    let next = ArrayList<Int64>()
+    for (x in src) {
+        next.add(x)
+    }
+    next.add(planId)
+    if (cancel) {
+        st.planCancelIds.set(next)
+    } else {
+        st.planRunIds.set(next)
+    }
+}
+
+func removePlanId(st: CjregState, planId: Int64, cancel: Bool): Unit {
+    let src = if (cancel) { st.planCancelIds.get() } else { st.planRunIds.get() }
+    let next = ArrayList<Int64>()
+    for (x in src) {
+        if (x != planId) {
+            next.add(x)
+        }
+    }
+    if (cancel) {
+        st.planCancelIds.set(next)
+    } else {
+        st.planRunIds.set(next)
     }
 }
 

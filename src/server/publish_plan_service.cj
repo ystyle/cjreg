@@ -10,6 +10,11 @@ import stdx.encoding.json.stream.*
 import std.io.*
 import std.collection.*
 
+// 索引等待结果（waitIndexReady 的返回码）
+let WAIT_READY: Int64 = 1
+let WAIT_TIMEOUT: Int64 = 0
+let WAIT_CANCELLED: Int64 = -1
+
 // 发布计划项状态
 public enum PlanItemStatus {
     | Pending
@@ -746,7 +751,8 @@ public class PublishExecutor {
                         },
                         indexProbe!: ?(String, String) -> ?String = None,
                         pollIntervalSec!: Int64 = 0,
-                        pollTimeoutSec!: Int64 = 0): ExecuteReport {
+                        pollTimeoutSec!: Int64 = 0,
+                        shouldCancel!: () -> Bool = { => false }): ExecuteReport {
         let report = ExecuteReport()
         report.total = items.size
         let MaxRetries: Int64 = 3
@@ -781,6 +787,11 @@ public class PublishExecutor {
         var idx: Int64 = 0
         while (idx < sorted.size) {
             let it = sorted[idx]
+            // 用户点了「停止执行」→ 收口成"中止"：剩下的项走已有的 aborted 分支统一记「未推送」
+            if (!report.aborted && shouldCancel()) {
+                report.aborted = true
+                report.abortReason = "用户已停止执行"
+            }
             // 依赖里有"发失败"或"索引一直没出现"的项 → 这项现在发上去也是缺依赖，直接说明原因
             var blockedBy: Int64 = 0
             for (d in transitivePlanDeps(it.pkgId, edges)) {
@@ -903,18 +914,28 @@ public class PublishExecutor {
                 // 拓扑序里下一条依赖这一条，而中心仓的索引/缓存同步可能很慢
                 // （几分钟到几小时）。不等就推下一条，会出现「依赖还没出现在索引里」
                 // 的假失败，或者推到一半自己把自己卡住。
-                var ready = true
+                var waitCode = WAIT_READY
                 match (indexProbe) {
                     case Some(probe) =>
                         if (pollIntervalSec > 0 && pollTimeoutSec > 0) {
                             it.status = PlanItemStatus.WaitingIndex
                             onItem(it, true, "等待目标仓索引就绪")
-                            ready = waitIndexReady(probe, doc.organization, doc.name, doc.version,
-                                pollIntervalSec, pollTimeoutSec)
+                            waitCode = waitIndexReady(probe, doc.organization, doc.name, doc.version,
+                                pollIntervalSec, pollTimeoutSec, shouldCancel: shouldCancel)
                         }
                     case None => ()
                 }
-                if (ready) {
+                if (waitCode == WAIT_CANCELLED) {
+                    // 用户在等索引期间点了停止：内容已经推上去了，记「等索引」并中止，
+                    // 续跑时也是从这里接着等（不会重推）
+                    it.status = PlanItemStatus.WaitingIndex
+                    it.error = "等待索引期间用户停止执行：已推送成功，续跑会继续等"
+                    report.waitingIndex++
+                    unavailable.add(it.pkgId)
+                    report.aborted = true
+                    report.abortReason = "用户已停止执行（${doc.name}@${doc.version} 已推送成功，正在等目标仓索引）"
+                    onItem(it, false, it.error)
+                } else if (waitCode == WAIT_READY) {
                     report.success++
                     it.status = PlanItemStatus.Completed
                     it.error = ""
@@ -1026,21 +1047,27 @@ func isRetryable(code: Int64): Bool {
 
 // 轮询目标仓索引直到出现「该包该版本」：每次等 pollIntervalSec 秒，最多等 pollTimeoutSec 秒。
 // 返回 false 表示超时（内容可能已经推上去了，只是索引还没同步）。
+// pollTimeoutSec 可能是几分钟到几十分钟（中心仓同步很慢），所以每轮都要看一眼
+// 「用户是不是点了停止」——否则点了停止也得等满整个超时才有反应。
 func waitIndexReady(probe: (String, String) -> ?String, org: String, name: String, version: String,
-                    pollIntervalSec: Int64, pollTimeoutSec: Int64): Bool {
+                    pollIntervalSec: Int64, pollTimeoutSec: Int64,
+                    shouldCancel!: () -> Bool = { => false }): Int64 {
     var waited: Int64 = 0
     while (waited < pollTimeoutSec) {
+        if (shouldCancel()) {
+            return WAIT_CANCELLED
+        }
         sleep(Duration.second * pollIntervalSec)
         waited += pollIntervalSec
         match (probe(org, name)) {
             case Some(text) =>
                 if (indexHasVersion(text, name, version)) {
-                    return true
+                    return WAIT_READY
                 }
             case None => ()
         }
     }
-    false
+    WAIT_TIMEOUT
 }
 
 // 目标仓索引里是否已有该版本（索引是 NDJSON，逐行解析而不是做子串匹配——

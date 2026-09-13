@@ -904,7 +904,9 @@ public class AdminService {
                 }
             }
         } catch (e: Exception) {
-            ()
+            // 请求体不是合法 JSON：下面只会回 400「name and url required」，
+            // 那会把「JSON 语法错」说成「字段没填」——留痕以免误诊（响应不变）
+            eprintln("[cjreg] 新增上游请求体解析失败（按字段缺失处理）: " + e.toString())
         }
         let priority = parsePriority(priorityStr)
         if (name.isEmpty() || url.isEmpty()) {
@@ -1092,7 +1094,9 @@ public class AdminService {
                 }
             }
         } catch (e: Exception) {
-            ()
+            // 同新增上游：坏 JSON 只会回 400「packages and target_url required」，
+            // 会把语法错说成字段缺失——留痕以免误诊（响应不变）
+            eprintln("[cjreg] 执行发布计划请求体解析失败（按字段缺失处理）: " + e.toString())
         }
         let (planActorId, planActorName) = this.actorOf(ctx)
         if (roots.size == 0 || targetUrl.isEmpty()) {

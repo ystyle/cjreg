@@ -459,3 +459,59 @@ func executeReport_blockingIsTransitive() {
     @Expect(items[2].status == PlanItemStatus.Skipped, true)
     store.storm.close()
 }
+
+// ===== 停止执行（用户点了「停止」）=====
+//
+// 等目标仓索引最长可达计划的 pollTimeout（默认 600s），必须能中途停：
+// 执行器在"每项开推前"和"等索引的每一轮"都会问一次 shouldCancel。
+
+// 等索引期间取消 → 该项记「等索引」（内容已推出去，续跑接着等），计划中止
+@Test
+func executeReport_cancelDuringIndexWait() {
+    let (store, blobs) = execFixture()
+    let items = ArrayList<PlanItem>()
+    items.add(execItem(execDoc(store, blobs, "a", "1.0.0"), "a", "1.0.0", 1))
+    items.add(execItem(execDoc(store, blobs, "b", "1.0.0"), "b", "1.0.0", 2))
+    let calls = Box<Int64>(0)
+    let cancel = Box<Bool>(false)
+    let probe: (String, String) -> ?String = { _, _ =>
+        cancel.value = true          // 第一轮等待里就"点停止"
+        Some("{\"name\":\"a\",\"version\":\"0.9.0\"}\n")
+    }
+    let ex = PublishExecutor(store, blobs)
+    let r = ex.execute(items, "http://127.0.0.1:1", "tok",
+        poster: stubPoster(codesOf([200]), calls), indexProbe: probe,
+        pollIntervalSec: 1, pollTimeoutSec: 30,
+        shouldCancel: { => cancel.value })
+    @Expect(r.aborted, true)
+    @Expect(r.abortReason.contains("停止"), true)
+    @Expect(items[0].status == PlanItemStatus.WaitingIndex, true)   // 已推成功，续跑接着等
+    @Expect(items[1].status == PlanItemStatus.Skipped, true)        // 后面的项不再推
+    @Expect(calls.value, 1)
+    store.storm.close()
+}
+
+// 每项开推前取消 → 直接停手，剩余项记「未推送」
+@Test
+func executeReport_cancelBeforeNextItem() {
+    let (store, blobs) = execFixture()
+    let items = ArrayList<PlanItem>()
+    items.add(execItem(execDoc(store, blobs, "a", "1.0.0"), "a", "1.0.0", 1))
+    items.add(execItem(execDoc(store, blobs, "b", "1.0.0"), "b", "1.0.0", 2))
+    let calls = Box<Int64>(0)
+    let cancel = Box<Bool>(false)
+    // 第一项推成功后（没有 indexProbe，所以不算等索引）置取消 → 第二项开推前停手
+    let ex = PublishExecutor(store, blobs)
+    let r = ex.execute(items, "http://127.0.0.1:1", "tok",
+        poster: { u, b, t =>
+            cancel.value = true
+            calls.value++
+            (true, 200, "")
+        },
+        shouldCancel: { => cancel.value })
+    @Expect(r.aborted, true)
+    @Expect(r.success, 1)
+    @Expect(items[1].status == PlanItemStatus.Skipped, true)
+    @Expect(calls.value, 1)
+    store.storm.close()
+}

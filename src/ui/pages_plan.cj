@@ -650,7 +650,9 @@ class PublishPlanDetailPage <: Component {
         let total = items.size
         let done = Box<Int64>(0)
         let okCount = Box<Int64>(0)
-        let report = executor.execute(items, up.url, up.authToken, onItem: { it, _, err =>
+        var report = ExecuteReport()
+        try {
+        report = executor.execute(items, up.url, up.authToken, onItem: { it, _, err =>
             // **先即时落盘**：单条状态与计划进度都必须进 DB，不能只留在执行线程的内存里、
             // 也不能只挂在 pushUpdate 上——页面一关（WS 会话没了）pushUpdate 就不再执行，
             // 结果是「计划永远 running、单条永远 Pending」，重启后分不清哪些已经发过。
@@ -664,13 +666,19 @@ class PublishPlanDetailPage <: Component {
                 case None => ()
             }
             let _ = st.adminData.updatePlanStatus(this.planId, "running", okCount.value, nowMs())
-            // 再推给前端刷新界面（纯 UI，失败也不影响已落盘的进度）
-            let _ = app.pushUpdate(sid, { pctx =>
-                let s = pctx.getState<CjregState>()
-                s.planProgress.set("${done.value}/${total}")
-                this.refreshItems()
-                PatchResult.ReRender
-            })
+            // 再推给前端刷新界面（纯 UI，失败也不影响已落盘的进度）。
+            // 这一层必须自己吞异常：pushUpdate 抛出来会把整个执行线程带走——
+            // 后面的项不再处理、计划级收口也不执行，计划就永远停在「执行中」。
+            try {
+                let _ = app.pushUpdate(sid, { pctx =>
+                    let s = pctx.getState<CjregState>()
+                    s.planProgress.set("${done.value}/${total}")
+                    this.refreshItems()
+                    PatchResult.ReRender
+                })
+            } catch (e: Exception) {
+                println("[cjreg] 发布计划进度推送失败（plan ${this.planId}，进度已落盘）: " + e.toString())
+            }
         }, indexProbe: { org, name =>
             // 拓扑序下一条依赖它：推完必须确认**目标仓索引里真的能查到该版本**再往下走
             // （中心仓索引同步偶尔很慢，这里按计划的轮询间隔等，超时就暂停而不是判失败）
@@ -679,6 +687,13 @@ class PublishPlanDetailPage <: Component {
                 case None => Option<String>.None
             }
         }, pollIntervalSec: pollIntervalSec, pollTimeoutSec: pollTimeoutSec)
+        } catch (e: Exception) {
+            // 执行线程里没人接异常：以前抛出来就**连收口都不执行**，计划永远停在「执行中」
+            // （实测：4 项全部已失败落盘，计划状态还是 running）。现在必须收口成 failed 并写明原因。
+            println("[cjreg] 发布计划执行异常（plan ${this.planId}）: " + e.toString())
+            report.failed++
+            report.errors.add("执行线程异常：${e.toString()}")
+        }
         // 中止 → paused（可续跑）；否则按成败收口
         let finalStatus = if (report.aborted) {
             "paused"
@@ -704,17 +719,23 @@ class PublishPlanDetailPage <: Component {
         if (summary != "") {
             let _ = st.adminData.setPlanError(this.planId, summary, nowMs())
         }
-        if (report.aborted) {
-            st.adminData.addLog(LogKind.Publish, 0, "", "plan ${this.planId} paused", "failed", nowMs())
+        // 审计：以前只有"暂停"写一条，正常/失败收口什么都不留 —— 事后翻日志看不出
+        // "这个计划跑完了吗、跑成什么样"。改成无论成败都记一条（发布态审计）。
+        st.adminData.addLog(LogKind.Publish, 0, "",
+            "plan ${this.planId} ${finalStatus}", if (report.failed > 0) { "failed" } else { "ok" }, nowMs())
+        try {
+            let _ = app.pushUpdate(sid, { pctx =>
+                let s = pctx.getState<CjregState>()
+                s.planBusy.set(false)
+                s.planStatus.set(finalStatus)
+                this.msg.set(summary)
+                this.refreshItems()
+                PatchResult.ReRender
+            })
+        } catch (e: Exception) {
+            // 界面没刷到没关系（上面已落盘）；但不能把异常抛出去把线程搞死
+            println("[cjreg] 发布计划收口推送失败（plan ${this.planId}，状态已落盘为 ${finalStatus}）: " + e.toString())
         }
-        let _ = app.pushUpdate(sid, { pctx =>
-            let s = pctx.getState<CjregState>()
-            s.planBusy.set(false)
-            s.planStatus.set(finalStatus)
-            this.msg.set(summary)
-            this.refreshItems()
-            PatchResult.ReRender
-        })
     }
 
     // 勾选/取消勾选某一项：目标仓已有同版本的项默认不勾选（执行器据此跳过），

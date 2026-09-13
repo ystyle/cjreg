@@ -315,3 +315,40 @@ func executeReport_unselectedAlreadyExistsExplainsItself() {
     @Expect(items[0].error.contains("目标仓已有同版本"), true)
     store.storm.close()
 }
+
+// 未勾选的「冲突」项：目标仓不允许覆盖（官方中心仓）时必须明说"只能升版" ——
+// 说成"未勾选"或"可强制覆盖"都会把人引到注定 409 的操作上
+@Test
+func executeReport_unselectedConflictOnOfficialSaysUpgrade() {
+    let (store, blobs) = execFixture()
+    let items = ArrayList<PlanItem>()
+    let it = execItem(execDoc(store, blobs, "a", "1.0.0"), "a", "1.0.0", 1)
+    it.selected = false
+    it.category = PlanCategory.Conflict
+    it.overwriteAllowed = false
+    items.add(it)
+    let calls = Box<Int64>(0)
+    let ex = PublishExecutor(store, blobs)
+    let r = ex.execute(items, "http://127.0.0.1:1", "tok", poster: stubPoster(codesOf([200]), calls))
+    @Expect(r.skipped, 1)
+    @Expect(items[0].error.contains("升版"), true)
+    store.storm.close()
+}
+
+// 自建仓（允许覆盖）时，冲突项的说明则是"勾选可强制覆盖"
+@Test
+func executeReport_unselectedConflictOnOwnRepoMentionsOverwrite() {
+    let (store, blobs) = execFixture()
+    let items = ArrayList<PlanItem>()
+    let it = execItem(execDoc(store, blobs, "a", "1.0.0"), "a", "1.0.0", 1)
+    it.selected = false
+    it.category = PlanCategory.Conflict
+    it.overwriteAllowed = true
+    items.add(it)
+    let calls = Box<Int64>(0)
+    let ex = PublishExecutor(store, blobs)
+    let r = ex.execute(items, "http://127.0.0.1:1", "tok", poster: stubPoster(codesOf([200]), calls))
+    @Expect(r.skipped, 1)
+    @Expect(items[0].error.contains("覆盖"), true)
+    store.storm.close()
+}

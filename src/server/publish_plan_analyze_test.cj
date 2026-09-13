@@ -288,3 +288,56 @@ func planCategoryName_values() {
     @Expect(planCategoryName(PlanCategory.Conflict), "conflict")
     @Expect(planCategoryName(PlanCategory.VersionOptional), "version_optional")
 }
+
+// ===== 目标仓「能不能覆盖」决定冲突条目还有没有救 =====
+//
+// 官方中心仓不可逆、同版本一律 409 → 冲突只能升版重发；自建仓（team 模式）可覆盖。
+// 不区分这一点的话，界面把「冲突」写成"由人来定"，等于给了一个注定失败的按钮。
+
+@Test
+func classifyPlan_officialTargetCannotOverwrite() {
+    let (store, svc) = classFixture()
+    store.save(planDoc("ystyle", "crc", "1.0.0", ArrayList<String>()))
+    let official = Upstream(1, "official", "https://pkg.cangjie-lang.cn/registry", true, 0, "", true, 0, 0)
+    let roots = ArrayList<(String, String, String)>()
+    roots.add(("ystyle", "crc", "1.0.0"))
+    let a = svc.analyze(roots, targetUpstream: official, fetchIndex: { _, _, _ =>
+        Some("{\"name\":\"crc\",\"version\":\"1.0.0\",\"sha256sum\":\"different-sha\"}\n")
+    })
+    @Expect(a.items[0].category == PlanCategory.Conflict, true)
+    @Expect(a.items[0].overwriteAllowed, false)
+    store.storm.close()
+}
+
+@Test
+func classifyPlan_privateTargetAllowsOverwrite() {
+    let (store, svc) = classFixture()
+    store.save(planDoc("ystyle", "crc", "1.0.0", ArrayList<String>()))
+    let privateRepo = Upstream(2, "cjrepo", "http://192.168.3.6:8066", true, 0, "", false, 0, 0)
+    let roots = ArrayList<(String, String, String)>()
+    roots.add(("ystyle", "crc", "1.0.0"))
+    let a = svc.analyze(roots, targetUpstream: privateRepo, fetchIndex: { _, _, _ =>
+        Some("{\"name\":\"crc\",\"version\":\"1.0.0\",\"sha256sum\":\"different-sha\"}\n")
+    })
+    @Expect(a.items[0].category == PlanCategory.Conflict, true)
+    @Expect(a.items[0].overwriteAllowed, true)
+    store.storm.close()
+}
+
+@Test
+func targetOverwritable_onlyOfficialIsForbidden() {
+    @Expect(targetOverwritable(Some(Upstream(1, "official", "u", true, 0, "", true, 0, 0))), false)
+    @Expect(targetOverwritable(Some(Upstream(2, "cjrepo", "u", true, 0, "", false, 0, 0))), true)
+    @Expect(targetOverwritable(None), false)
+}
+
+// 冲突文案：官方仓只能升版，自建仓可以勾选覆盖
+@Test
+func categoryHint_conflictDependsOnOverwrite() {
+    let official = categoryHint(PlanCategory.Conflict, false)
+    @Expect(official.contains("不允许覆盖"), true)
+    @Expect(official.contains("升版"), true)
+    let own = categoryHint(PlanCategory.Conflict, true)
+    @Expect(own.contains("勾选"), true)
+    @Expect(categoryHint(PlanCategory.NeedPublish, false).contains("需要发布"), true)
+}

@@ -116,7 +116,9 @@ class PublishPlansPage <: Component {
                 this.pendingDeleteId = p.id
                 this.pendingDeleteName = p.name
                 this.confirmVisible.set(true)
-            case None => ()
+            case None =>
+                // 静默什么也不做的话，用户点「删除」会像按钮坏了
+                this.msg.set("计划 #${id} 不存在（可能已被删除），请刷新列表")
         }
         PatchResult.ReRender
     }
@@ -143,6 +145,9 @@ class PublishPlansPage <: Component {
         }
         this.confirmVisible.set(false)
         this.pendingDeleteId = 0
+        // 必须重拉列表：只弹提示不刷新的话，被删的那行还挂在表上，
+        // 看起来像"没删掉"（实测：提示"已删除计划 X"，行还在，刷新页面才消失）
+        this.refresh()
         PatchResult.ReRender
     }
 

@@ -60,7 +60,11 @@ func logoutMenuItem(): IComponent {
         c.setContext("token", "")
         try {
             c.getState<CjregState>().currentUser.set(Option<User>.None)
-        } catch (e: Exception) { () }
+        } catch (e: Exception) {
+            // 组件回调（用户点击「退出登录」）里吞异常：登录态信号没清掉也毫无线索，
+            // 页面照样跳登录页，问题只在后续请求里以「还是登录着」的形式冒出来。
+            println("[cjreg] 退出登录清空 currentUser 失败: " + e.toString())
+        }
         c.route.push("/admin/login")
         PatchResult.ReRender
     }

@@ -296,7 +296,10 @@ class UserPortalPage <: Component {
         clearSessionContext(ctx)
         try {
             ctx.getState<CjregState>().currentUser.set(Option<User>.None)
-        } catch (e: Exception) { () }
+        } catch (e: Exception) {
+            // 同 layout.cj 的退出登录：用户回调里吞异常，登录态没清干净也查不到原因。
+            println("[cjreg] 用户门户退出登录清空 currentUser 失败: " + e.toString())
+        }
         ctx.route.push("/user/login")
         PatchResult.ReRender
     }

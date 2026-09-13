@@ -247,7 +247,9 @@ func skipObject(r: JsonReader): Unit {
         }
         r.endObject()
     } catch (e: Exception) {
-        ()
+        // 这是「坏对象跳过」的恢复路径：恢复本身再失败会让 reader 停在半途，
+        // parseNDJSON 外层直接 return result，索引被静默截断后端给客户端。
+        println("[cjreg] NDJSON 跳过坏对象失败（索引可能被截断）: " + e.toString())
     }
 }
 

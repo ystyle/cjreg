@@ -22,6 +22,30 @@ CJREG_SEED_DEMO=1 ./target/release/bin/ystyle::cjreg serve -d .smoke/auth-data -
 服务配置走 `<数据目录>/cjreg.toml`（或 `-c/--config`）：`[server] public_url / port / permission_mode / require_auth`；
 权限模式与对外地址都改这个文件（没有环境变量配置项，`CJREG_SEED_DEMO` 只是开发调试开关）。
 
+## 生产部署（docker，私有仓）
+
+团队日常用的**私有中心仓**就是从本仓部署的（docker compose 项目 `cjreg`）：宿主 **8066** → 容器 8060，
+数据卷 `cjreg/data` → `/data`，`restart: unless-stopped`，对外 `http://192.168.3.6:8066`。
+
+> **凭据、客户端配置（`~/.cjpm/` 三文件切换）、发版闸门**统一记在工作区 `../AGENTS.md` 的「私有仓（cjreg）」章节
+> ——刻意不写在本文件里：本文件受 git 跟踪，口令有被提交/推送的风险。
+
+更新生产实例：
+
+```shell
+eval "$(cjvs env zsh)" && eval "$(cjvs stdx-env zsh)"
+cjpm build -j 16
+CJREG_PORT=8066 docker compose build && CJREG_PORT=8066 docker compose up -d
+```
+
+- ⚠️ **必须显式传 `CJREG_PORT=8066`**：`docker-compose.yml` 是 `"${CJREG_PORT:-8060}:8060"`，不传会改成 8060。
+- 镜像只打包**宿主编译产物**（`Dockerfile` 里 `COPY ${CJREG_BIN} /app/cjreg`），所以必须先 `cjpm build`。
+- 部署后硬校验：`docker exec cjreg sha256sum /app/cjreg` 应等于 `sha256sum target/release/bin/ystyle::cjreg`。
+- 重置管理员口令需先停容器独占数据目录：`docker compose stop` → `./target/release/bin/ystyle::cjreg admin reset-password -d data --username admin --password '<新口令>'` → `CJREG_PORT=8066 docker compose start`。
+
+**发布权限模式**：生产实例用 `permission_mode = "team"`（`effectivePermission` 里平台管理员直通 overwrite=3），
+所以**同一版本可以反复发**——这是预演发布必需的；`open` 模式对同版本不同 sha 会返 409 且不覆盖。
+
 ## agent-browser 在沙箱的使用说明
 
 本工作区（DSH sandbox）里 `$HOME` 只读，agent-browser 有几个坑必须绕过。以下均来自实测。

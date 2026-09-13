@@ -247,6 +247,9 @@ public func httpGet(url: String, token: String): ?Array<Byte> {
             client.close()
             return None
         } catch (e: Exception) {
+            // 传输层失败（DNS/TLS/超时/连接被拒）此前被完全吞掉，调用方只看到 None，
+            // 于是「上游不可达」被静默降级成「包不存在」（ProxyOutcome.UpstreamError 从未被返回）。
+            println("[cjreg] 回源 GET 失败 " + currentUrl + ": " + e.toString())
             try {
                 client.close()
             } catch (e2: Exception) {
@@ -295,6 +298,9 @@ public func httpPostBinary(url: String, body: Array<Byte>, token: String): (Bool
         client.close()
         return (code >= 200 && code < 300, code)
     } catch (e: Exception) {
+        // 此前只回 (false, 0)，上层把它渲染成「推送失败 HTTP 0」——状态码 0 不是真实
+        // HTTP 码，真正的失败原因（TLS/超时/连接被拒）全被吞掉，无法定位。
+        println("[cjreg] 推送 POST 失败 " + url + ": " + e.toString())
         try {
             client.close()
         } catch (e2: Exception) {
@@ -331,7 +337,9 @@ public class DiskBlobStore <: BlobStore {
         try {
             Directory.create(dir, recursive: true)
         } catch (e: Exception) {
-            ()
+            // 制品目录建不出来（权限/磁盘满）此前完全静默：后续每次 put 才各自报错，
+            // 根因丢失。这里是持久化路径的起点，必须让失败可见。
+            println("[cjreg] 制品目录创建失败 " + dir + ": " + e.toString())
         }
     }
 
@@ -356,6 +364,9 @@ public class DiskBlobStore <: BlobStore {
             f.close()
             return Some(bytes)
         } catch (e: Exception) {
+            // 制品在盘上但读失败（被截断/权限/IO 错）此前被当成「制品不存在」，
+            // 上层据此报「制品缺失（sha=…）」——把 IO 故障误报成数据丢失。
+            println("[cjreg] 制品读取失败 " + path + ": " + e.toString())
             return None
         }
     }

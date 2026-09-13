@@ -266,7 +266,33 @@ func executeReport_indexTimeout_pausesAndStops() {
     @Expect(r.abortReason.contains("索引"), true)
     @Expect(r.success, 0)
     @Expect(r.failed, 0)
-    @Expect(items[0].status == PlanItemStatus.Skipped, true)
+    // 超时的那一项保持「等待索引」而不是「未推送」：它其实已经推成功了，
+    // 续跑时必须能据此知道**不要再推**（重推只会换回 409）
+    @Expect(items[0].status == PlanItemStatus.WaitingIndex, true)
     @Expect(items[1].status == PlanItemStatus.Skipped, true)
+    store.storm.close()
+}
+
+// 续跑：上次「等待索引」的项**不再重推**，只继续等索引；等到了就完成
+@Test
+func executeReport_resumeWaitingIndex_doesNotRepush() {
+    let (store, blobs) = execFixture()
+    let items = ArrayList<PlanItem>()
+    let it = execItem(execDoc(store, blobs, "a", "1.0.0"), "a", "1.0.0", 1)
+    it.status = PlanItemStatus.WaitingIndex   // 上次已推成功、在等索引
+    items.add(it)
+    let calls = Box<Int64>(0)
+    let probe: (String, String) -> ?String = { _, _ =>
+        Some("{\"name\":\"a\",\"version\":\"1.0.0\"}\n")
+    }
+    let ex = PublishExecutor(store, blobs)
+    let r = ex.execute(items, "http://127.0.0.1:1", "tok",
+        poster: stubPoster(codesOf([200]), calls), indexProbe: probe,
+        pollIntervalSec: 1, pollTimeoutSec: 10)
+    @Expect(calls.value, 0)                   // 关键：没有再推一次
+    @Expect(r.success, 1)
+    @Expect(r.failed, 0)
+    @Expect(r.aborted, false)
+    @Expect(items[0].status == PlanItemStatus.Completed, true)
     store.storm.close()
 }

@@ -244,7 +244,8 @@ func executeReport_waitsForIndexReady() {
     store.storm.close()
 }
 
-// 索引迟迟不出现 → 暂停（不是失败：内容已经推上去了）+ 后面的项不再推
+// 索引迟迟不出现 → 这一项记「等索引」、计划转 paused（可续跑），
+// 但**不中止整个计划**：与它无关的项照发（新版语义；旧的"一超时就全停"已废弃）
 @Test
 func executeReport_indexTimeout_pausesAndStops() {
     let (store, blobs) = execFixture()
@@ -252,24 +253,24 @@ func executeReport_indexTimeout_pausesAndStops() {
     items.add(execItem(execDoc(store, blobs, "a", "1.0.0"), "a", "1.0.0", 1))
     items.add(execItem(execDoc(store, blobs, "b", "1.0.0"), "b", "1.0.0", 2))
     let calls = Box<Int64>(0)
-    let probes = Box<Int64>(0)
     let probe: (String, String) -> ?String = { _, _ =>
-        probes.value++
+        // 目标仓索引里始终只有 a 的旧版本：a 等不到，b 与 a 无关、索引里正常可见
         Some("{\"name\":\"a\",\"version\":\"0.9.0\"}\n")
     }
     let ex = PublishExecutor(store, blobs)
     let r = ex.execute(items, "http://127.0.0.1:1", "tok",
         poster: stubPoster(codesOf([200]), calls), indexProbe: probe,
         pollIntervalSec: 1, pollTimeoutSec: 1)
-    @Expect(calls.value, 1)                 // 第二项没有被推
-    @Expect(r.aborted, true)
-    @Expect(r.abortReason.contains("索引"), true)
+    // 探头永远只报 a 的旧版本 → a、b 两项都等不到自己的版本（两项都已推成功）
+    @Expect(r.waitingIndex, 2)
+    @Expect(r.aborted, false)               // 不再中止整个计划
     @Expect(r.success, 0)
     @Expect(r.failed, 0)
     // 超时的那一项保持「等待索引」而不是「未推送」：它其实已经推成功了，
     // 续跑时必须能据此知道**不要再推**（重推只会换回 409）
     @Expect(items[0].status == PlanItemStatus.WaitingIndex, true)
-    @Expect(items[1].status == PlanItemStatus.Skipped, true)
+    @Expect(items[1].status == PlanItemStatus.WaitingIndex, true)
+    @Expect(calls.value, 2)                 // 两项都推过（各一次，没有重推）
     store.storm.close()
 }
 
@@ -350,5 +351,111 @@ func executeReport_unselectedConflictOnOwnRepoMentionsOverwrite() {
     let r = ex.execute(items, "http://127.0.0.1:1", "tok", poster: stubPoster(codesOf([200]), calls))
     @Expect(r.skipped, 1)
     @Expect(items[0].error.contains("覆盖"), true)
+    store.storm.close()
+}
+
+// ===== 依赖感知：某个包没就绪时，只卡住依赖它的项 =====
+//
+// 出过的事故（实测）：tsdb 推上去后中心仓审核没过，索引里一直不出现 0.3.3 →
+// 上一版代码在索引超时时 `aborted = true` **中止整个计划**，把根本不依赖 tsdb 的
+// bstorm 一起卡死了。同一条链上的另一个根（彼此无依赖）本来就该照发。
+
+// 造一个带依赖声明的包（依赖同计划里的 iface）
+func execDocWithDep(store: PackageStore, blobs: MemoryBlobStore, name: String, version: String,
+                    depName: String, depRequire: String): Int64 {
+    let sha = "sha-${name}-${version}"
+    let d = PackageDoc()
+    d.name = name
+    d.version = version
+    let entry = PackageIndex()
+    entry.name = name
+    entry.version = version
+    entry.sha256sum = sha
+    entry.dependencies.add(DependencyEntry(depName, depRequire, "", "", ""))
+    d.indexJson = generateNDJSON(ArrayList<PackageIndex>([entry]))
+    store.save(d)
+    blobs.put(sha, Array<Byte>(16, repeat: 7))
+    d.id
+}
+
+// 索引超时不再中止整个计划：无关项照发，只有依赖它的项被跳过
+@Test
+func executeReport_indexTimeout_onlyBlocksDependents() {
+    let (store, blobs) = execFixture()
+    let items = ArrayList<PlanItem>()
+    // base（被 top 依赖，索引一直不出现）+ top（依赖 base）+ other（与两者无关）
+    let baseId = execDoc(store, blobs, "base", "1.0.0")
+    let topId = execDocWithDep(store, blobs, "top", "1.0.0", "base", "1.0.0")
+    let otherId = execDoc(store, blobs, "other", "1.0.0")
+    items.add(execItem(baseId, "base", "1.0.0", 1))
+    items.add(execItem(topId, "top", "1.0.0", 2))
+    items.add(execItem(otherId, "other", "1.0.0", 3))
+    let calls = Box<Int64>(0)
+    // 目标仓索引里永远没有 base 1.0.0（审核没过）；其它包正常可见
+    let probe: (String, String) -> ?String = { _, name =>
+        if (name == "base") {
+            Some("{\"name\":\"base\",\"version\":\"0.9.0\"}\n")
+        } else {
+            Some("{\"name\":\"${name}\",\"version\":\"1.0.0\"}\n")
+        }
+    }
+    let ex = PublishExecutor(store, blobs)
+    let r = ex.execute(items, "http://127.0.0.1:1", "tok",
+        poster: stubPoster(codesOf([200, 200, 200]), calls), indexProbe: probe,
+        pollIntervalSec: 1, pollTimeoutSec: 1)
+    @Expect(r.waitingIndex, 1)                       // base 在等索引
+    @Expect(r.aborted, false)                        // 不再中止整个计划
+    @Expect(r.success, 1)                            // other 照发成功
+    @Expect(r.skipped, 1)                            // top 被依赖阻塞
+    @Expect(items[0].status == PlanItemStatus.WaitingIndex, true)
+    @Expect(items[1].status == PlanItemStatus.Skipped, true)
+    @Expect(items[1].error.contains("依赖"), true)
+    @Expect(items[1].error.contains("base"), true)
+    @Expect(items[2].status == PlanItemStatus.Completed, true)
+    @Expect(calls.value, 2)                          // base + other 各推一次，top 没推
+    store.storm.close()
+}
+
+// 推送失败的项同样阻塞它的依赖方（缺依赖的包发上去也是白搭）
+@Test
+func executeReport_failedDep_blocksDependentsContinuesOthers() {
+    let (store, blobs) = execFixture()
+    let items = ArrayList<PlanItem>()
+    let baseId = execDoc(store, blobs, "base", "1.0.0")
+    let topId = execDocWithDep(store, blobs, "top", "1.0.0", "base", "1.0.0")
+    let otherId = execDoc(store, blobs, "other", "1.0.0")
+    items.add(execItem(baseId, "base", "1.0.0", 1))
+    items.add(execItem(topId, "top", "1.0.0", 2))
+    items.add(execItem(otherId, "other", "1.0.0", 3))
+    let calls = Box<Int64>(0)
+    // base 400（不重试）→ top 必须被跳过；other 200
+    let ex = PublishExecutor(store, blobs)
+    let r = ex.execute(items, "http://127.0.0.1:1", "tok", poster: stubPoster(codesOf([400, 200]), calls))
+    @Expect(r.failed, 1)
+    @Expect(r.success, 1)
+    @Expect(items[1].error.contains("依赖 base@1.0.0 未在目标仓就绪"), true)
+    @Expect(calls.value, 2)                          // top 没有被推
+    store.storm.close()
+}
+
+// 依赖链传递性：a ← b ← c，a 没就绪 → b、c 都不发
+@Test
+func executeReport_blockingIsTransitive() {
+    let (store, blobs) = execFixture()
+    let items = ArrayList<PlanItem>()
+    let aId = execDoc(store, blobs, "a", "1.0.0")
+    let bId = execDocWithDep(store, blobs, "b", "1.0.0", "a", "1.0.0")
+    let cId = execDocWithDep(store, blobs, "c", "1.0.0", "b", "1.0.0")
+    items.add(execItem(aId, "a", "1.0.0", 1))
+    items.add(execItem(bId, "b", "1.0.0", 2))
+    items.add(execItem(cId, "c", "1.0.0", 3))
+    let calls = Box<Int64>(0)
+    let ex = PublishExecutor(store, blobs)
+    // a 400 失败 → b、c 都被阻塞，只有 a 被推一次
+    let r = ex.execute(items, "http://127.0.0.1:1", "tok", poster: stubPoster(codesOf([400]), calls))
+    @Expect(r.failed, 1)
+    @Expect(r.skipped, 2)
+    @Expect(calls.value, 1)
+    @Expect(items[2].status == PlanItemStatus.Skipped, true)
     store.storm.close()
 }

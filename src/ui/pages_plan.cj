@@ -594,12 +594,11 @@ class PublishPlanDetailPage <: Component {
                             it.status = toPlanItemStatus(d.status)
                             if (!(it.status == PlanItemStatus.Completed)) {
                                 pending++
-                                // 只把「真正要重新推送」的项标成 running；等待索引的项上次已推成功，
-                                // 标成 running 会让界面看不出「其实在等索引」、重启后也丢失这层信息
-                                if (!(it.status == PlanItemStatus.WaitingIndex)) {
-                                    let _ = st.adminData.updatePlanItem(d.id, "running", "", nowMs())
-                                }
                             }
+                            // 这里**不再**把待执行项一律标成 running：running 在界面上是「推送中」，
+                            // 而执行器是逐项推的——批量标成推送中会让排在后面的项看起来也在发
+                            // （实测：tsdb 在等索引的十分钟里，还没轮到的 bstorm 一直显示「推送中」）。
+                            // 真实状态由执行器每项开始时写。
                             execItems.add(it)
                             docIds[d.packageId] = d.id
                         }
@@ -694,8 +693,9 @@ class PublishPlanDetailPage <: Component {
             report.failed++
             report.errors.add("执行线程异常：${e.toString()}")
         }
-        // 中止 → paused（可续跑）；否则按成败收口
-        let finalStatus = if (report.aborted) {
+        // 收口：中止或"有项在等目标仓索引" → paused（可续跑）；否则按成败收。
+        // 等索引不算失败：内容已经推上去了，只是目标仓还没同步出来（中心仓同步慢或审核没过）。
+        let finalStatus = if (report.aborted || report.waitingIndex > 0) {
             "paused"
         } else if (report.failed == 0 && report.total > 0) {
             "completed"
@@ -704,13 +704,16 @@ class PublishPlanDetailPage <: Component {
         }
         let summary = if (report.aborted) {
             report.abortReason
+        } else if (report.waitingIndex > 0) {
+            "已推送 ${report.success} 项，${report.waitingIndex} 项在等目标仓索引就绪" +
+                "（超时未出现：同步慢或审核没过），依赖它们的项本次未推送；稍后点「继续执行」接着等"
         } else if (report.failed > 0) {
             "失败 ${report.failed} 项：${if (report.errors.size > 0) { report.errors[0] } else { "" }}"
         } else if (report.success == 0 && report.skipped > 0) {
             // 「全部跳过」不能悄悄收成「已完成」：那看起来像发过了，实际一个字节都没传
             "本次没有实际上传：${report.skipped} 项都已在目标仓存在（409）或未勾选，目标仓版本与本地一致"
         } else if (report.skipped > 0) {
-            "成功 ${report.success} 项，跳过 ${report.skipped} 项（目标仓已有或未勾选）"
+            "成功 ${report.success} 项，跳过 ${report.skipped} 项（目标仓已有、未勾选或依赖未就绪）"
         } else {
             ""
         }

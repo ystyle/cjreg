@@ -452,29 +452,6 @@ public class PublishPlanService {
         return result
     }
 
-    // 从 indexJson 解析依赖 (org, 名字, 版本要求)。
-    // 依赖名可能带 `org::` 前缀（如 `ystyle::crc`）——**前缀必须保留**：跨组织依赖
-    // （snappy/badgercj → ystyle::crc）一旦丢掉前缀，就会去"依赖方自己的 org"里找，
-    // 找不到 → 这条依赖边直接消失 → 拓扑序被打乱（实测 snappy 被排到了 crc 前面，
-    // 等于先发依赖方）。org 为空表示"与依赖方同组织"。
-    func parseDependencyRefs(indexJson: String): ArrayList<(String, String, String)> {
-        let result = ArrayList<(String, String, String)>()
-        let entries = parseNDJSON(indexJson)
-        if (entries.size == 0) {
-            return result
-        }
-        for (d in entries[0].dependencies) {
-            let depName = d.name
-            let idx = depName.indexOf("::")
-            if (idx.isSome()) {
-                let i = idx.getOrThrow()
-                result.add((depName[..i], depName[i + 2..], d.require))
-            } else {
-                result.add(("", depName, d.require))
-            }
-        }
-        return result
-    }
 
     // 选一个依赖文档：在**满足声明版本要求**的候选里取最新；要求为空或无满足者则取最新。
     // chosen 保证同一个包在一个计划里只出一个版本（已选过就直接复用）。
@@ -651,10 +628,94 @@ public class ExecuteReport {
     public var total: Int64 = 0
     public var skipped: Int64 = 0
     public var failed: Int64 = 0
+    // 推成功了但目标仓索引还没出现该版本（内容在、依赖它的项还不能发）。
+    // 这类项**不是失败**：目标仓同步慢或审核没过，稍后续跑继续等。
+    public var waitingIndex: Int64 = 0
     // 中止：认证/权限/配额这类「后续必然同样失败」的情况，立刻停手
     public var aborted: Bool = false
     public var abortReason: String = ""
     public var errors: ArrayList<String> = ArrayList<String>()
+}
+
+// 从 indexJson 解析依赖 (org, 名字, 版本要求)。
+// 依赖名可能带 `org::` 前缀（如 `ystyle::crc`）——**前缀必须保留**：跨组织依赖
+// （snappy/badgercj → ystyle::crc）一旦丢掉前缀，就会去"依赖方自己的 org"里找，
+// 找不到 → 这条依赖边直接消失 → 拓扑序被打乱（实测 snappy 被排到了 crc 前面，
+// 等于先发依赖方）。org 为空表示"与依赖方同组织"。
+//
+// 自由函数（不是成员）：analyze 的拓扑排序与执行器的"依赖未就绪就别发"两处都要用。
+public func parseDependencyRefs(indexJson: String): ArrayList<(String, String, String)> {
+    let result = ArrayList<(String, String, String)>()
+    let entries = parseNDJSON(indexJson)
+    if (entries.size == 0) {
+        return result
+    }
+    for (d in entries[0].dependencies) {
+        let depName = d.name
+        let idx = depName.indexOf("::")
+        if (idx.isSome()) {
+            let i = idx.getOrThrow()
+            result.add((depName[..i], depName[i + 2..], d.require))
+        } else {
+            result.add(("", depName, d.require))
+        }
+    }
+    return result
+}
+
+// 计划内的依赖关系：item.pkgId → 它（直接）依赖的、**也在本计划里**的 pkgId 列表。
+//
+// 用途：某个包发失败/索引一直没就绪时，**只有依赖它的项**该被卡住；
+// 计划里与它无关的项（例如同一条链上的另一个根）照发不误。
+// 早先是一超时就中止整个计划 —— 实测踩过：tsdb 的索引因中心仓审核没过一直不出现，
+// 把根本不依赖 tsdb 的 bstorm 一起卡死了。
+func planDependencyEdges(items: ArrayList<PlanItem>, pkgStore: PackageStore): HashMap<Int64, ArrayList<Int64>> {
+    let key2id = HashMap<String, Int64>()
+    for (it in items) {
+        key2id[it.org + "::" + it.name] = it.pkgId
+    }
+    let edges = HashMap<Int64, ArrayList<Int64>>()
+    for (it in items) {
+        let deps = ArrayList<Int64>()
+        match (pkgStore.getById(it.pkgId)) {
+            case Some(doc) =>
+                for ((depOrg, depName, _) in parseDependencyRefs(doc.indexJson)) {
+                    let org = if (depOrg != "") { depOrg } else { doc.organization }
+                    match (key2id.get(org + "::" + depName)) {
+                        case Some(id) => if (id != it.pkgId && !deps.contains(id)) {
+                            deps.add(id)
+                        }
+                        case None => ()
+                    }
+                }
+            case None => ()
+        }
+        edges[it.pkgId] = deps
+    }
+    edges
+}
+
+// pkgId 在本计划内直接/间接依赖的全部 pkgId
+func transitivePlanDeps(id: Int64, edges: HashMap<Int64, ArrayList<Int64>>): ArrayList<Int64> {
+    let out = ArrayList<Int64>()
+    let seen = HashSet<Int64>()
+    let stack = ArrayList<Int64>([id])
+    while (stack.size > 0) {
+        let cur = stack[stack.size - 1]
+        stack.remove(stack.size - 1..stack.size)
+        match (edges.get(cur)) {
+            case Some(ds) =>
+                for (d in ds) {
+                    if (!seen.contains(d)) {
+                        seen.add(d)
+                        out.add(d)
+                        stack.add(d)
+                    }
+                }
+            case None => ()
+        }
+    }
+    out
 }
 
 // 发布计划执行引擎：按拓扑顺序把本地包推送到目标上游
@@ -708,9 +769,38 @@ public class PublishExecutor {
             i++
         }
 
+        // 计划内依赖关系 + "目标仓里还没就绪"的项集合。
+        // 只有（直接/间接）依赖这些项的项才该被卡住，与它们无关的项照发。
+        let edges = planDependencyEdges(sorted, this.pkgStore)
+        let unavailable = HashSet<Int64>()
+        let labelOf = HashMap<Int64, String>()
+        for (it in sorted) {
+            labelOf[it.pkgId] = packageLabel(it.org, it.name, it.version)
+        }
+
         var idx: Int64 = 0
         while (idx < sorted.size) {
             let it = sorted[idx]
+            // 依赖里有"发失败"或"索引一直没出现"的项 → 这项现在发上去也是缺依赖，直接说明原因
+            var blockedBy: Int64 = 0
+            for (d in transitivePlanDeps(it.pkgId, edges)) {
+                if (unavailable.contains(d)) {
+                    blockedBy = d
+                    break
+                }
+            }
+            if (blockedBy != 0) {
+                it.status = PlanItemStatus.Skipped
+                let bad = match (labelOf.get(blockedBy)) {
+                    case Some(s) => s
+                    case None => "#${blockedBy}"
+                }
+                it.error = "依赖 ${bad} 未在目标仓就绪，本次不推送（它发成功后重新执行本计划即可）"
+                report.skipped++
+                onItem(it, true, it.error)
+                idx++
+                continue
+            }
             if (report.aborted) {
                 // 中止后剩余项统一记成「未推送（计划已中止）」，避免看起来像各自失败了
                 it.status = PlanItemStatus.Skipped
@@ -830,15 +920,16 @@ public class PublishExecutor {
                     it.error = ""
                     onItem(it, true, "")
                 } else {
-                    // 索引迟迟不出现 → **暂停**而不是判失败：内容其实已经推上去了，
-                    // 只是还没同步；用户稍后点「继续执行」会跳过已完成项、从这里接上。
-                    // 状态保持 WaitingIndex（不是 Skipped）：续跑时据此**不再重推**，只继续等。
+                    // 索引迟迟不出现 → 这一项记「等索引」而不是失败：内容其实已经推上去了，
+                    // 只是还没同步（中心仓同步慢、或审核没过）。续跑时据此**不再重推**，只继续等。
+                    //
+                    // **不中止整个计划**：只有依赖它的项会被卡住（下面的 blockedBy 逻辑），
+                    // 与它无关的项该发还是要发。以前这里 `aborted = true`，实测把不依赖
+                    // 出问题那一项的包（bstorm 之于 tsdb）一起卡死了。
                     it.status = PlanItemStatus.WaitingIndex
                     it.error = "等待索引就绪超时（${pollTimeoutSec}s）：${doc.name}@${doc.version} 还没出现在目标仓索引里（已推送成功，续跑会继续等）"
-                    report.skipped++
-                    report.aborted = true
-                    report.abortReason = "等待 ${doc.name}@${doc.version} 索引就绪超时" +
-                        "（已等 ${pollTimeoutSec}s）：中心仓同步可能较慢，稍后点「继续执行」接着等"
+                    report.waitingIndex++
+                    unavailable.add(it.pkgId)
                     report.errors.add("${doc.name}@${doc.version}: ${it.error}")
                     onItem(it, false, it.error)
                 }
@@ -873,6 +964,8 @@ public class PublishExecutor {
                             it.error = "推送失败（网络/连接）：${text}"
                         }
                         report.failed++
+                        // 它没进目标仓：依赖它的项这次也不该发（发了就是缺依赖的包）
+                        unavailable.add(it.pkgId)
                         report.errors.add("${doc.name}@${doc.version}: ${it.error}")
                         onItem(it, false, it.error)
                 }

@@ -46,6 +46,37 @@ CJREG_PORT=8066 docker compose build && CJREG_PORT=8066 docker compose up -d
 **发布权限模式**：生产实例用 `permission_mode = "team"`（`effectivePermission` 里平台管理员直通 overwrite=3），
 所以**同一版本可以反复发**——这是预演发布必需的；`open` 模式对同版本不同 sha 会返 409 且不覆盖。
 
+## 展示元数据与 README（制品提取）
+
+**为什么服务端要解压制品**：官方发布协议是「meta-data.json 段 + .cjp 段」，README **不在** meta 里；
+索引协议（NDJSON）只有 `name/version/deps/sha256sum/yanked`，`description/license/authors/repository/tag/category`
+**都不在**索引里。于是「回源聚合落库」的包只有索引字段——列表页描述全空、详情页没有 README。
+破解办法只有一个：制品（`.cjp` = gzip + tar）内部带着 `README.md` 与 `cjpm.toml`，解压即可拿到
+（`src/protocol/artifact.cj`：gzip 走 `stdx.compress.zlib`，tar 走自研 `ystyle::tar`）。
+
+三处入口（都只**填空字段**，绝不覆盖已有值；不改 `updatedAt`，免得搅乱「最近更新」排序）：
+
+1. **发布/覆盖**（`publish_service.cj` 的 `readmeOf`）：从制品提 README 落 `doc.readme`。
+   提取失败**绝不阻断发布**——只打日志按空 README 入库（这是硬约束）。
+2. **下载/回源**（`server.cj` 的 `/pkg/:name/:version` → `enrichDocByVersion`）：制品流经本地时顺手补齐
+   该版本的 README 与展示字段；已补齐的文档不再重复解压。
+3. **存量回捞**（CLI）：`./target/release/bin/ystyle::cjreg admin sync-metadata -d data [--all]`
+   - 默认只管**每个包的最新版本**（列表页展示用），`--all` 处理所有版本；
+   - 制品优先取本地 blob，没有就回源下载（落 blob，供发布计划复用）；
+   - 与 `reset-password` 一样**必须先停容器**（Badger 独占数据目录）：
+
+     ```shell
+     docker compose stop
+     ./target/release/bin/ystyle::cjreg admin sync-metadata -d data
+     CJREG_PORT=8066 docker compose start
+     ```
+
+   - 输出末尾给出余额（README/描述/协议仍缺几个）。`category`/`tag` 等**制作者在 cjpm.toml 里没写就是没有**，
+     属于数据现状而非缺陷。
+
+> 2026-09-13：生产数据首次回捞结果 = 66 个包、补齐 65 个（唯一没补的是本地测试包 `docker::dtest`，
+> 它的制品是占位字节不是真 gzip）；公开列表描述从 1/66 变为 65/66。
+
 ## agent-browser 在沙箱的使用说明
 
 本工作区（DSH sandbox）里 `$HOME` 只读，agent-browser 有几个坑必须绕过。以下均来自实测。

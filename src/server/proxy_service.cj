@@ -139,12 +139,18 @@ public class ProxyService {
     }
 
     // 取制品：本地 blob 有 → 返回；否则回源
+    // 纯取字节（展示字段补齐由调用方决定：下载路由 / admin sync-metadata 各做一次，避免重复解压）
     public func fetchArtifact(org: String, name: String, version: String): (ProxyOutcome, ?Array<Byte>, String) {
         // 本地 blob 查询（通过本地包的 sha）
         let versions = this.pkgStore.listVersions(org, name)
         for (d in versions) {
             if (d.version == version && d.deletedAt == 0) {
-                let sha = extractSha256(d.indexJson)
+                // sha256 是独立列（发布校验值 / 索引 sha256sum），优先用它；
+                // 老文档可能只有 indexJson，退回从索引条目里取
+                var sha = d.sha256
+                if (sha.isEmpty()) {
+                    sha = extractSha256(d.indexJson)
+                }
                 if (!sha.isEmpty()) {
                     let blob = this.blobStore.get(sha)
                     if (blob.isSome()) {
@@ -334,12 +340,17 @@ public class DiskBlobStore <: BlobStore {
 
     public init(dir: String) {
         this.dir = dir
+        if (exists(dir)) {
+            return
+        }
         try {
             Directory.create(dir, recursive: true)
         } catch (e: Exception) {
-            // 制品目录建不出来（权限/磁盘满）此前完全静默：后续每次 put 才各自报错，
-            // 根因丢失。这里是持久化路径的起点，必须让失败可见。
-            println("[cjreg] 制品目录创建失败 " + dir + ": " + e.toString())
+            // 竞态下别的进程刚建好 → 不算失败；真建不出来（权限/磁盘满）才报 —— 这是持久化路径的
+            // 起点，静默会让后续每次 put 各自报错、丢掉根因。
+            if (!exists(dir)) {
+                println("[cjreg] 制品目录创建失败 " + dir + ": " + e.toString())
+            }
         }
     }
 

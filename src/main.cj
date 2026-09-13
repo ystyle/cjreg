@@ -25,7 +25,7 @@ func printUsage(): Unit {
     println("命令:")
     println("  serve   启动私有中心仓 HTTP 服务（发布/下载/索引 + 管理 API）")
     println("  init    初始化数据目录（空数据目录创建首个管理员 + 默认官方上游）")
-    println("  admin   应急管理（reset-password --username <u> --password <p>）")
+    println("  admin   管理命令（reset-password 应急重置口令 / sync-metadata 回捞展示字段与 README）")
     println()
     println("选项:")
     println("  -d, --data <dir>     数据目录（默认 ./data）")
@@ -46,6 +46,7 @@ main(args: Array<String>): Int64 {
         Full("config", r'c', RequiredValue),
         Long("username", RequiredValue),
         Long("password", RequiredValue),
+        Long("all", NoValue),
         Full("help", r'h', NoValue)
     ]
     var result: ParsedArguments
@@ -114,7 +115,7 @@ main(args: Array<String>): Int64 {
             if (result.nonOptions.size >= 2) {
                 sub = result.nonOptions[1]
             }
-            return cmdAdmin(dataDir, sub, username, password)
+            return cmdAdmin(dataDir, sub, username, password, result.options.contains("all"))
         case "admin-ui" =>
             return cmdAdminUI(dataDir, cfg)
         case _ =>
@@ -307,13 +308,19 @@ func cmdInit(dataDir: String, username: String, password: String, port: UInt16):
     return 0
 }
 
-// admin：应急管理（reset-password）——管理端锁死（管理员被禁用/降级）后的兜底通道
-// 语义：重置口令 + 强制 isAdmin=true + isActive=true；信任凭证 = 本地数据目录持有者
-func cmdAdmin(dataDir: String, sub: String, username: String, password: String): Int64 {
-    let usage = "用法: cjreg admin reset-password --username <用户名> --password <新口令> [-d <数据目录>]"
+// admin：应急管理 + 存量数据回捞
+//   reset-password：管理端锁死（管理员被禁用/降级）后的兜底通道
+//     语义：重置口令 + 强制 isAdmin=true + isActive=true；信任凭证 = 本地数据目录持有者
+//   sync-metadata：把索引聚合包缺的展示字段/README 从制品（.cjp）里回捞补齐
+func cmdAdmin(dataDir: String, sub: String, username: String, password: String, all: Bool): Int64 {
+    let usage = "用法: cjreg admin reset-password --username <用户名> --password <新口令> [-d <数据目录>]\n" +
+        "      cjreg admin sync-metadata [-d <数据目录>] [--all]"
     if (sub.isEmpty() || sub == "help") {
         println(usage)
         return 2
+    }
+    if (sub == "sync-metadata") {
+        return cmdSyncMetadata(dataDir, all)
     }
     if (sub != "reset-password") {
         println("cjreg: 未知的 admin 子命令 ${sub}")
@@ -340,6 +347,32 @@ func cmdAdmin(dataDir: String, sub: String, username: String, password: String):
             println("cjreg: 用户 ${username} 不存在（应急恢复不创建新用户）")
             return 1
     }
+}
+
+// admin sync-metadata：存量包展示字段/README 回捞
+//
+// 为什么需要：索引协议（NDJSON）只带 name/version/deps/sha256sum，回源聚合落库的包
+// 描述/协议/作者/README 全空（列表页一片空白）；老版本的发布路径也没提取 README。
+// 这些信息只在制品（.cjp = gzip+tar）内部，所以命令做的是：取制品 → 解压 → 补空字段。
+//   默认只管每个包的最新版本（列表页展示它）；--all 处理所有版本。
+func cmdSyncMetadata(dataDir: String, all: Bool): Int64 {
+    let stores = openStores(dataDir)
+    if (stores.isNone()) {
+        return 1
+    }
+    let (pkgStore, _, upStore) = stores.getOrThrow()
+    let blobStore: BlobStore = DiskBlobStore(dataDir + "/blobs")
+    let upSvc = UpstreamService(upStore)
+    let proxy = ProxyService(pkgStore, blobStore, upSvc)
+    println("cjreg: 开始回捞展示字段/README（范围：${if (all) { "所有版本" } else { "每个包的最新版本" }}）")
+    let report = syncPackageMetadata(pkgStore, blobStore, proxy, all)
+    pkgStore.storm.close()  // 必须 close 才落盘（badger flush）
+    println("cjreg: 回捞完成 —— 包 ${report.packages} 个，待补版本 ${report.candidates} 个，" +
+        "补齐 ${report.enriched} 个，制品无新增可补内容 ${report.unchanged} 个，制品取不到 ${report.unresolved} 个")
+    println("cjreg: 补完后仍缺 —— README ${report.missingReadme} 个，" +
+        "描述 ${report.missingDesc} 个，协议 ${report.missingLicense} 个，" +
+        "任一展示字段为空 ${report.stillIncomplete} 个（分类/标签等制作者没写就是没有）")
+    return if (report.unresolved > 0) { 1 } else { 0 }
 }
 
 // admin-ui：启动 cjxt 管理界面（直接访问同进程 store/service）

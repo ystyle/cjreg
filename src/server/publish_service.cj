@@ -211,7 +211,7 @@ public class PublishService {
         let doc = PackageDoc()
         let now = nowMsUtc()
         fillPackageDoc(doc, metaInfo, String.fromUtf8(pd.metaData), actualSha, pd.tarball.size,
-            publisherIdOf(publisher), now, now)
+            readmeOf(pd, metaInfo), publisherIdOf(publisher), now, now)
         this.store.save(doc)
         return PublishResult(PublishOutcome.Ok, doc.id, "published")
     }
@@ -223,10 +223,26 @@ public class PublishService {
         let now = nowMsUtc()
         let created = if (doc.createdAt > 0) { doc.createdAt } else { now }
         let owner = if (doc.publisherId != 0) { doc.publisherId } else { publisherIdOf(publisher) }
-        fillPackageDoc(doc, metaInfo, String.fromUtf8(pd.metaData), sha, pd.tarball.size, owner, now, created)
+        fillPackageDoc(doc, metaInfo, String.fromUtf8(pd.metaData), sha, pd.tarball.size,
+            readmeOf(pd, metaInfo), owner, now, created)
         this.store.save(doc)
         return PublishResult(PublishOutcome.Ok, doc.id, "overwritten")
     }
+}
+
+// 制品 → README（发布/覆盖共用）
+// 官方 meta-data.json 不含 README、索引协议也不含展示字段 → 只能从 .cjp 里提取（对齐 cjrepo）。
+// 提取失败绝不阻断发布：记录后按空 README 入库（详情页退化为无 README，而不是发布失败）。
+func readmeOf(pd: PublishData, metaInfo: MetaInfo): String {
+    let files = extractArtifactFiles(pd.tarball)
+    if (!files.ok()) {
+        println("[cjreg] README 提取失败 ${metaInfo.org}::${metaInfo.name}@${metaInfo.version}: ${files.error}")
+        return ""
+    }
+    if (files.readme.isEmpty()) {
+        println("[cjreg] 制品内无 README ${metaInfo.org}::${metaInfo.name}@${metaInfo.version}（${files.note}）")
+    }
+    return files.readme
 }
 
 // meta-data.json 关键字段（发布校验用）
@@ -509,7 +525,7 @@ public func checkReadPermission(store: PackageStore, adminData: AdminDataStore, 
 
 // 用 meta 填充包文档（新发布/覆盖共用）：deletedAt 归零、记录 created/updated 时间、清掉回源痕迹
 func fillPackageDoc(doc: PackageDoc, metaInfo: MetaInfo, indexJson: String, sha: String, tarballSize: Int64,
-                    publisherId: Int64, now: Int64, createdAt: Int64): Unit {
+                    readme: String, publisherId: Int64, now: Int64, createdAt: Int64): Unit {
     doc.organization = metaInfo.org
     doc.name = metaInfo.name
     doc.version = metaInfo.version
@@ -531,7 +547,7 @@ func fillPackageDoc(doc: PackageDoc, metaInfo: MetaInfo, indexJson: String, sha:
     doc.publisherId = publisherId
     doc.upstreamId = 0
     doc.upstreamName = ""
-    doc.readme = ""
+    doc.readme = readme
     doc.deletedAt = 0
     doc.createdAt = createdAt
     doc.updatedAt = now

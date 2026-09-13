@@ -4,6 +4,7 @@ package ystyle::cjreg.server
 
 import ystyle::cjreg.index.*
 import ystyle::cjreg.store.*
+import ystyle::cjreg.semver_range.*
 import stdx.encoding.json.stream.*
 import std.io.*
 import std.collection.*
@@ -140,13 +141,49 @@ public class PublishPlanService {
         }
         // 2. 找根包文档
         var roots = ArrayList<PackageDoc>()
+        // 每个包在一个计划里只出一个版本：org::name → 已选 docId
+        var chosen = HashMap<String, Int64>()
         for (r in rootPkgs) {
-            let (org, name, _) = r
+            let (org, name, ver) = r
+            // 按 org+name+**version** 精确匹配；version 为空时取该包**最新**版本。
+            //
+            // 此前写成 `let (org, name, _) = r` 再取「第一个匹配到的 doc」——doc 顺序
+            // 近似按 id 升序，于是拿到的总是**最老**的版本（实测：请求 badgercj 1.6.18 /
+            // snappy 1.0.1 / bstorm 1.4.8 / tsdb 0.3.2，返回的是 1.0.0 时代那批）。
+            // 界面是按 doc id 选包的，plan 随后又按该 doc 的 id 取制品推送 → 用界面发版
+            // 会**发出旧版本**。这里必须尊重调用方给的版本。
+            var hit: ?PackageDoc = None
+            var newest: ?PackageDoc = None
             for (d in all) {
-                if (d.name == name && d.organization == org) {
-                    roots.add(d)
+                if (d.name != name || d.organization != org || d.deletedAt != 0) {
+                    continue
+                }
+                if (ver != "" && d.version == ver) {
+                    hit = Some(d)
                     break
                 }
+                match (newest) {
+                    case Some(n) =>
+                        if (compareVersions(d.version, n.version) > 0) {
+                            newest = Some(d)
+                        }
+                    case None => newest = Some(d)
+                }
+            }
+            match (hit) {
+                case Some(d) =>
+                    roots.add(d)
+                    chosen[org + "::" + name] = d.id
+                case None =>
+                    match (newest) {
+                        case Some(d) =>
+                            if (ver != "") {
+                                eprintln("[cjreg] 发布计划：未找到 ${org}::${name}@${ver}，回退该包最新版 ${d.version}")
+                            }
+                            roots.add(d)
+                            chosen[org + "::" + name] = d.id
+                        case None => ()
+                    }
             }
         }
         if (roots.size == 0) {
@@ -187,12 +224,15 @@ public class PublishPlanService {
             stack.add((id, true))
             // 依赖（从 indexJson 解析 dependencies）
             let doc = findDoc(all, id).getOrThrow()
-            let deps = parseDependencyNames(doc.indexJson)
-            for (dep in deps) {
-                // 找到本地同名依赖
-                let depDoc = findByName(all, doc.organization, dep)
-                if (depDoc.isSome() && !visited.contains(depDoc.getOrThrow().id)) {
-                    stack.add((depDoc.getOrThrow().id, false))
+            for ((dep, require) in parseDependencyRefs(doc.indexJson)) {
+                // 依赖按「满足声明版本要求里最新的那个」解析，并且同一包一个计划只出一个版本；
+                // 此前是 findByName 取「第一个同名 doc」，同样等于取最老版本
+                match (this.pickDepDoc(all, doc.organization, dep, require, chosen)) {
+                    case Some(dd) =>
+                        if (!visited.contains(dd.id)) {
+                            stack.add((dd.id, false))
+                        }
+                    case None => ()
                 }
             }
         }
@@ -208,9 +248,18 @@ public class PublishPlanService {
         return (items, hasCycle)
     }
 
-    // 从 indexJson 解析依赖名（简化：从 index 条目 dependencies）
+    // 从 indexJson 解析依赖名（保留旧签名：既有测试直接调它）
     func parseDependencyNames(indexJson: String): ArrayList<String> {
         let result = ArrayList<String>()
+        for ((name, _) in parseDependencyRefs(indexJson)) {
+            result.add(name)
+        }
+        return result
+    }
+
+    // 从 indexJson 解析依赖 (名字, 版本要求)：名字去掉 `org::` 前缀；要求可能是精确版本或 semver 范围
+    func parseDependencyRefs(indexJson: String): ArrayList<(String, String)> {
+        let result = ArrayList<(String, String)>()
         let entries = parseNDJSON(indexJson)
         if (entries.size == 0) {
             return result
@@ -220,12 +269,55 @@ public class PublishPlanService {
             let depName = d.name
             let idx = depName.indexOf("::")
             if (idx.isSome()) {
-                result.add(depName[idx.getOrThrow() + 2..depName.size])
+                result.add((depName[idx.getOrThrow() + 2..depName.size], d.require))
             } else {
-                result.add(depName)
+                result.add((depName, d.require))
             }
         }
         return result
+    }
+
+    // 选一个依赖文档：在**满足声明版本要求**的候选里取最新；要求为空或无满足者则取最新。
+    // chosen 保证同一个包在一个计划里只出一个版本（已选过就直接复用）。
+    func pickDepDoc(all: ArrayList<PackageDoc>, org: String, name: String, require: String,
+                    chosen: HashMap<String, Int64>): ?PackageDoc {
+        let key = org + "::" + name
+        match (chosen.get(key)) {
+            case Some(id) => return findDoc(all, id)
+            case None => ()
+        }
+        var newestOk: ?PackageDoc = None
+        var newestAny: ?PackageDoc = None
+        for (d in all) {
+            if (d.name != name || d.organization != org || d.deletedAt != 0) {
+                continue
+            }
+            match (newestAny) {
+                case Some(n) =>
+                    if (compareVersions(d.version, n.version) > 0) {
+                        newestAny = Some(d)
+                    }
+                case None => newestAny = Some(d)
+            }
+            if (require == "" || versionSatisfies(d.version, require)) {
+                match (newestOk) {
+                    case Some(n) =>
+                        if (compareVersions(d.version, n.version) > 0) {
+                            newestOk = Some(d)
+                        }
+                    case None => newestOk = Some(d)
+                }
+            }
+        }
+        let picked = match (newestOk) {
+            case Some(d) => Some(d)
+            case None => newestAny
+        }
+        match (picked) {
+            case Some(d) => chosen[key] = d.id
+            case None => ()
+        }
+        picked
     }
 
     func findDoc(all: ArrayList<PackageDoc>, id: Int64): ?PackageDoc {

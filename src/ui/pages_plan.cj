@@ -513,6 +513,7 @@ class PublishPlanDetailPage <: Component {
             case "completed" => Tag([text("成功")]).kind(ComponentKind.Success)
             case "failed" => Tag([text("失败")]).kind(ComponentKind.Danger)
             case "running" => Tag([text("推送中")]).kind(ComponentKind.Warning)
+            case "waiting_index" => Tag([text("等待索引")]).kind(ComponentKind.Warning)
             case "skipped" => Tag([text("未推送")]).kind(ComponentKind.Info)
             case _ => Tag([text("待发布")]).kind(ComponentKind.Info)
         }
@@ -550,7 +551,11 @@ class PublishPlanDetailPage <: Component {
                             it.status = toPlanItemStatus(d.status)
                             if (!(it.status == PlanItemStatus.Completed)) {
                                 pending++
-                                let _ = st.adminData.updatePlanItem(d.id, "running", "", nowMs())
+                                // 只把「真正要重新推送」的项标成 running；等待索引的项上次已推成功，
+                                // 标成 running 会让界面看不出「其实在等索引」、重启后也丢失这层信息
+                                if (!(it.status == PlanItemStatus.WaitingIndex)) {
+                                    let _ = st.adminData.updatePlanItem(d.id, "running", "", nowMs())
+                                }
                             }
                             execItems.add(it)
                             docIds[d.packageId] = d.id
@@ -766,6 +771,7 @@ func toPlanItemStatus(s: String): PlanItemStatus {
         case "completed" => PlanItemStatus.Completed
         case "failed" => PlanItemStatus.Failed
         case "running" => PlanItemStatus.Pending
+        case "waiting_index" => PlanItemStatus.WaitingIndex
         case "skipped" => PlanItemStatus.Skipped
         case _ => PlanItemStatus.Pending
     }
@@ -777,7 +783,7 @@ func planItemStatusName(s: PlanItemStatus): String {
         case PlanItemStatus.Failed => "failed"
         case PlanItemStatus.Skipped => "skipped"
         case PlanItemStatus.Publishing => "running"
-        case PlanItemStatus.WaitingIndex => "pending"
+        case PlanItemStatus.WaitingIndex => "waiting_index"
         case PlanItemStatus.Pending => "pending"
     }
 }

@@ -558,25 +558,33 @@ public class PublishExecutor {
                 body.add(b)
             }
             let url = buildPackagePublishURL(targetUrl, doc.name, doc.organization)
-            it.status = PlanItemStatus.Publishing
-            onItem(it, true, "推送中")
-
-            var ok = false
+            // 续跑语义：状态是「等待索引」的项上一次**已经推成功了**，只是索引还没同步。
+            // 这种项不能重推——同版本重推只会换回 409，还会被误判成「目标仓已有同版本不同制品」，
+            // 于是直接进入等待分支，继续等依赖就绪。
+            let alreadyPushed = (it.status == PlanItemStatus.WaitingIndex)
+            var ok = alreadyPushed
             var code: Int64 = 0
             var text = ""
-            var attempt: Int64 = 0
-            while (attempt < MaxRetries) {
-                attempt++
-                let (o, c, t) = poster(url, body.toArray(), token)
-                ok = o
-                code = c
-                text = t
-                if (ok || !isRetryable(code)) {
-                    break
-                }
-                if (attempt < MaxRetries) {
-                    // 退避：500ms / 1s（服务器故障多为瞬时）
-                    sleep(Duration.millisecond * 500 * attempt)
+            if (alreadyPushed) {
+                it.status = PlanItemStatus.WaitingIndex
+                onItem(it, true, "已推送过，继续等目标仓索引就绪")
+            } else {
+                it.status = PlanItemStatus.Publishing
+                onItem(it, true, "推送中")
+                var attempt: Int64 = 0
+                while (attempt < MaxRetries) {
+                    attempt++
+                    let (o, c, t) = poster(url, body.toArray(), token)
+                    ok = o
+                    code = c
+                    text = t
+                    if (ok || !isRetryable(code)) {
+                        break
+                    }
+                    if (attempt < MaxRetries) {
+                        // 退避：500ms / 1s（服务器故障多为瞬时）
+                        sleep(Duration.millisecond * 500 * attempt)
+                    }
                 }
             }
             if (ok) {
@@ -602,13 +610,14 @@ public class PublishExecutor {
                     onItem(it, true, "")
                 } else {
                     // 索引迟迟不出现 → **暂停**而不是判失败：内容其实已经推上去了，
-                    // 只是还没同步；用户稍后点「继续执行」会跳过已完成项、从这里接上
-                    it.status = PlanItemStatus.Skipped
-                    it.error = "等待索引就绪超时（${pollTimeoutSec}s）：${doc.name}@${doc.version} 还没出现在目标仓索引里"
+                    // 只是还没同步；用户稍后点「继续执行」会跳过已完成项、从这里接上。
+                    // 状态保持 WaitingIndex（不是 Skipped）：续跑时据此**不再重推**，只继续等。
+                    it.status = PlanItemStatus.WaitingIndex
+                    it.error = "等待索引就绪超时（${pollTimeoutSec}s）：${doc.name}@${doc.version} 还没出现在目标仓索引里（已推送成功，续跑会继续等）"
                     report.skipped++
                     report.aborted = true
                     report.abortReason = "等待 ${doc.name}@${doc.version} 索引就绪超时" +
-                        "（已等 ${pollTimeoutSec}s）：中心仓同步可能较慢，稍后点「继续执行」接着发"
+                        "（已等 ${pollTimeoutSec}s）：中心仓同步可能较慢，稍后点「继续执行」接着等"
                     report.errors.add("${doc.name}@${doc.version}: ${it.error}")
                     onItem(it, false, it.error)
                 }

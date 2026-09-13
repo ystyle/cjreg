@@ -548,14 +548,10 @@ class PublishPlanDetailPage <: Component {
         }
     }
 
-    // 分类说明（执行前就能看出「为什么不用发」）
-    func categoryHint(c: String): String {
-        match (c) {
-            case "already_exists" => "目标仓已有同版本同制品，不必再发"
-            case "conflict" => "目标仓已有同版本但制品不同：升版重发，或手工勾选强制覆盖"
-            case "version_optional" => "目标仓已有更高版本，可不发"
-            case _ => "目标仓没有该版本，需要发布"
-        }
+    // 分类说明（执行前就能看出「为什么不用发」/「发不出去该怎么办」）。
+    // 文案与执行器的跳过原因共用服务端那一份，避免两处说法不一致。
+    func itemHint(c: String, overwriteAllowed: Bool): String {
+        categoryHint(toPlanCategory(c), overwriteAllowed)
     }
 
     // 开始执行：异步线程推送，逐项通过 App.pushUpdate 推送进度
@@ -586,6 +582,8 @@ class PublishPlanDetailPage <: Component {
                             if (!d.selected) { continue }
                             let it = PlanItem(d.packageId, d.packageName, d.packageOrg, d.packageVersion, toPlanCategory(d.category), d.order)
                             it.selected = d.selected
+                            // 目标仓是否允许覆盖：决定跳过原因怎么说（中心仓只能升版重发）
+                            it.overwriteAllowed = targetOverwritable(Some(up))
                             // 带上库里已有的状态：续跑时执行器据此跳过已完成的项
                             it.status = toPlanItemStatus(d.status)
                             if (!(it.status == PlanItemStatus.Completed)) {
@@ -797,7 +795,20 @@ class PublishPlanDetailPage <: Component {
         }
     }
 
+    // 目标仓能不能覆盖已有同版本（官方中心仓不能 → 冲突条目只能升版重发）
+    func targetOverwriteAllowed(): Bool {
+        match (this.state) {
+            case Some(st) =>
+                match (st.adminData.getPlan(this.planId)) {
+                    case Some(plan) => targetOverwritable(st.upStore.getById(plan.targetUpstream))
+                    case None => false
+                }
+            case None => false
+        }
+    }
+
     func renderItems(): IComponent {
+        let canOverwrite = this.targetOverwriteAllowed()
         Table<PlanItemDoc>()
             .data(this.itemRows)
             .stripe()
@@ -813,14 +824,22 @@ class PublishPlanDetailPage <: Component {
             }))
             .add(TableColumn<PlanItemDoc>().label("说明").accessor({ d =>
                 // 有执行错误就显示错误，否则显示分类含义 —— 空着等于让人自己猜
-                if (d.error != "") { d.error } else { this.categoryHint(d.category) }
-            }).minWidth(240).showOverflowTooltip())
-            .add(TableColumn<PlanItemDoc>().label("操作").width(90).render({ d, i =>
-                let id = d.id
-                let sel = d.selected
-                let act: ActionHandler = { c => this.toggleItem(c, id, sel) }
-                let label = if (sel) { "取消勾选" } else { "勾选" }
-                Button([text(label)]).size(ButtonSize.Small).onClick(act)
+                if (d.error != "") { d.error } else { this.itemHint(d.category, canOverwrite) }
+            }).minWidth(280).showOverflowTooltip())
+            .add(TableColumn<PlanItemDoc>().label("操作").width(100).render({ d, i =>
+                // 目标仓不允许覆盖（官方中心仓）且条目已存在/冲突时，勾选也只会换回 409：
+                // 直接告诉用户唯一出路是升版，不给一个注定失败的按钮
+                let blocked = !canOverwrite &&
+                    (d.category == "already_exists" || d.category == "conflict")
+                if (blocked) {
+                    Tag([text("需升版")]).kind(ComponentKind.Warning)
+                } else {
+                    let id = d.id
+                    let sel = d.selected
+                    let act: ActionHandler = { c => this.toggleItem(c, id, sel) }
+                    let label = if (sel) { "取消勾选" } else { "勾选" }
+                    Button([text(label)]).size(ButtonSize.Small).onClick(act)
+                }
             }))
     }
 

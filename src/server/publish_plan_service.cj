@@ -94,6 +94,11 @@ public class PlanItem {
     public var remoteSha256: String      // 目标仓同版本 sha（空 = 目标仓没有该版本）
     public var requirement: String       // 作为依赖被纳入时，依赖方声明的版本要求
     public var localVersions: ArrayList<String>  // 本地该包的全部版本（升序）
+    // 目标仓能不能覆盖「已有同版本」：
+    //   官方中心仓 → **不能**（同版本一律 409，发布不可逆）→ 冲突只剩"升版重发"一条路
+    //   自建仓（cjreg/cjrepo）→ 看它的 permission_mode，team 模式允许覆盖 → 可手工勾选强制重传
+    // 没有这个判断时，「冲突由人来定」其实是个假选择：中心仓上勾了也只会换回 409。
+    public var overwriteAllowed: Bool
 
     public init(pkgId: Int64, name: String, org: String, version: String,
                 category: PlanCategory, order: Int64) {
@@ -110,6 +115,15 @@ public class PlanItem {
         this.remoteSha256 = ""
         this.requirement = ""
         this.localVersions = ArrayList<String>()
+        this.overwriteAllowed = false
+    }
+}
+
+// 目标仓是否允许覆盖已有同版本（官方仓明确不允许；自建仓由自身权限模式决定）
+public func targetOverwritable(up: ?Upstream): Bool {
+    match (up) {
+        case Some(u) => !u.isOfficial
+        case None => false
     }
 }
 
@@ -355,6 +369,7 @@ public class PublishPlanService {
                     case None => ()
                 }
             }
+            it.overwriteAllowed = targetOverwritable(targetUpstream)
             let emptyRemote = HashMap<String, String>()
             let remoteOf = match (remote.get(d.organization + "::" + d.name)) {
                 case Some(m) => m
@@ -846,13 +861,43 @@ public class PublishExecutor {
     }
 }
 
+// 条目的「为什么这样分类 / 该怎么办」——界面「说明」列与跳过原因共用一份文案，
+// 免得界面说"可勾选覆盖"、执行器又说别的。
+public func categoryHint(c: PlanCategory, overwriteAllowed: Bool): String {
+    match (c) {
+        case PlanCategory.NeedPublish => "目标仓没有该版本，需要发布"
+        case PlanCategory.AlreadyExists =>
+            if (overwriteAllowed) {
+                "目标仓已有同版本同制品，无需发布（要重传就勾选强制覆盖）"
+            } else {
+                "目标仓已有同版本同制品，无需发布"
+            }
+        case PlanCategory.Conflict =>
+            if (overwriteAllowed) {
+                "目标仓已有同版本但制品不同：勾选可强制覆盖（该仓允许覆盖），或升版重发"
+            } else {
+                "目标仓已有同版本但制品不同，且该仓不允许覆盖 —— 只能升版后重发"
+            }
+        case PlanCategory.VersionOptional => "目标仓已有更高版本，可不发"
+    }
+}
+
 // 未勾选条目的跳过原因：按分类说清「为什么默认不发」，别让"未勾选"看起来像用户漏点了
 func unselectedReason(it: PlanItem): String {
     match (it.category) {
         case PlanCategory.AlreadyExists =>
-            "目标仓已有同版本同制品，默认不发（要在详情页勾选才会强制重发）"
+            if (it.overwriteAllowed) {
+                "目标仓已有同版本同制品，默认不发（勾选可强制重传）"
+            } else {
+                "目标仓已有同版本同制品，无需发布，本次未推送"
+            }
         case PlanCategory.Conflict =>
-            "目标仓已有同版本但制品不同，默认不发（升版后重发，或手工勾选强制覆盖）"
+            if (it.overwriteAllowed) {
+                "目标仓已有同版本但制品不同，默认不发（勾选可强制覆盖）"
+            } else {
+                // 中心仓：同版本一律 409，没法覆盖 —— 唯一出路是升版
+                "目标仓不允许覆盖同版本（如官方中心仓），必须升版后重发，本次未推送"
+            }
         case PlanCategory.VersionOptional =>
             "目标仓已有更合适的版本，默认不发（要发就手工勾选）"
         case PlanCategory.NeedPublish => "未勾选：不推送"

@@ -202,3 +202,7 @@
 .picker-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid #f5f7fa; }
 .picker-row:last-child { border-bottom: none; }
 .picker-name { font-size: 13px; color: #303133; word-break: break-all; }
+
+/* 卡片底部的操作按钮行（计划详情等）：与上面的信息表之间要有一条分隔线，
+   否则按钮紧贴表格边框，看着像表格的一部分。 */
+.card-actions { display: flex; gap: 12px; align-items: center; margin-top: 14px; padding-top: 12px; border-top: 1px solid #ebeef5; }

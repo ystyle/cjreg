@@ -341,3 +341,32 @@ func categoryHint_conflictDependsOnOverwrite() {
     @Expect(own.contains("勾选"), true)
     @Expect(categoryHint(PlanCategory.NeedPublish, false).contains("需要发布"), true)
 }
+
+// ===== 进度口径：分母是"需要发布的项数"，不含目标仓已有的 =====
+//
+// 出过的故障：进度显示 0/6，而 6 项里有 4 项目标仓早就有了（默认不勾选、也不会发），
+// 用户看到"6 个要发"就以为计划要大发一批。
+@Test
+func progressCount_excludesAlreadyExists() {
+    let items = ArrayList<PlanItem>()
+    let a = PlanItem(1, "crc", "ystyle", "1.0.0", PlanCategory.AlreadyExists, 1)
+    let b = PlanItem(2, "snappy", "", "1.0.1", PlanCategory.AlreadyExists, 2)
+    let c = PlanItem(3, "tsdb", "", "0.3.3", PlanCategory.NeedPublish, 3)
+    let d = PlanItem(4, "bstorm", "", "1.4.9", PlanCategory.NeedPublish, 4)
+    items.add(a)
+    items.add(b)
+    items.add(c)
+    items.add(d)
+    @Expect(countRequired(items), 2)
+    @Expect(progressTextOf(0, 2), "0/2")
+}
+
+// 冲突项仍需处理（升版），算进分母；确实一项都不用发时直说
+@Test
+func progressCount_keepsConflictAndEmptyCase() {
+    let items = ArrayList<PlanItem>()
+    items.add(PlanItem(1, "x", "", "1.0.0", PlanCategory.Conflict, 1))
+    items.add(PlanItem(2, "y", "", "1.0.0", PlanCategory.VersionOptional, 2))
+    @Expect(countRequired(items), 2)
+    @Expect(progressTextOf(0, 0), "无需发布")
+}

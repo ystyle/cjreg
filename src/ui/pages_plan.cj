@@ -640,18 +640,13 @@ class PublishPlanDetailPage <: Component {
             case Some(a) => a
             case None => return
         }
-        // 制品库必须用**启动时注入的那个**（main.cj 按 -d/--data-dir 构造）。
-        // 早先这里硬编码 DiskBlobStore("./data/blobs")：容器里工作目录是 /app、真实数据目录是 /data，
-        // 于是执行器对着 /app/data/blobs（空目录）找制品 → **每一项都报「制品缺失」**，
-        // 而 /pkg 下载一切正常，看起来像"包坏了"。
-        let blobs = match (st.blobStore) {
-            case Some(b) => b
+        let executor = match (buildPlanExecutor(st.pkgStore, st.blobStore)) {
+            case Some(e) => e
             case None =>
                 this.msg.set("内部错误：制品库未注入，无法执行发布计划")
                 st.planBusy.set(false)
                 return
         }
-        let executor = PublishExecutor(st.pkgStore, blobs)
         let total = items.size
         let done = Box<Int64>(0)
         let okCount = Box<Int64>(0)
@@ -1032,6 +1027,20 @@ func toPlanCategory(s: String): PlanCategory {
         case "already_exists" => PlanCategory.AlreadyExists
         case "conflict" => PlanCategory.Conflict
         case _ => PlanCategory.NeedPublish
+    }
+}
+
+// 构造发布计划执行器：**制品库只能来自注入**（main.cj 按 -d/--data-dir 构造的那个）。
+//
+// 这里踩过一次：原来图省事写 `DiskBlobStore("./data/blobs")`（`getDataDir()` 是写死 "./data" 的桩）。
+// 宿主仓库里工作目录就是仓库根、`./data` 恰好对，所以本地看着没问题；**容器里工作目录是 /app、
+// 真实数据目录是 /data** → 执行器对着 /app/data/blobs（空目录）找制品，于是**每一项都报
+// 「制品缺失（sha=…）」**，而同一时刻 /pkg/:name/:version 下载一切正常，看起来像包坏了。
+// 抽成函数是为了让这条约束有回归测试（不能只靠"看代码"）。
+public func buildPlanExecutor(pkgStore: PackageStore, blobStore: ?BlobStore): ?PublishExecutor {
+    match (blobStore) {
+        case Some(b) => Some(PublishExecutor(pkgStore, b))
+        case None => None
     }
 }
 

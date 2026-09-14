@@ -180,6 +180,13 @@ func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
             }
         }
         let _ = adminData.setPlanTotal(planDoc.id, required)
+        // 索引等待语义变更的兼容迁移：老语义是「每 pollInterval 秒探一次、到 pollTimeout 就
+        // 放弃等待」，出厂默认 60s/600s；新语义是固定阶梯 + 默认不超时（0 = 一直等）。
+        // 只把**从没改过配置**的老计划迁到新默认，用户自己填过的值不动。
+        if (legacyPollDefaults(planDoc.pollInterval, planDoc.pollTimeout)) {
+            let _ = adminData.setPlanPollTimeout(planDoc.id, 0)
+            println("cjreg: 计划 ${planDoc.id}（${planDoc.name}）索引等待上限迁移为 0（一直等）")
+        }
         if (planDoc.status == "running") {
             let _ = adminData.updatePlanStatus(planDoc.id, "paused", completed, nowMs())
             let _ = adminData.setPlanError(planDoc.id,

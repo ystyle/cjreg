@@ -14,6 +14,66 @@ import std.collection.*
 let WAIT_READY: Int64 = 1
 let WAIT_TIMEOUT: Int64 = 0
 let WAIT_CANCELLED: Int64 = -1
+// 探测本身失败（401/403/429/5xx/网络）：内容已推上去，但"索引里有"这件事问不出来
+let WAIT_FATAL: Int64 = -2
+
+// 等待目标仓索引的节奏（秒）：先短探一次（同进程的私有仓索引是即时生效的，不必先等一分钟），
+// 然后 1 分钟、3 分钟、5 分钟，之后每 5 分钟一轮 —— 与 `cangjie-publish` 技能里的
+// 「发布后 1、3、5 分钟各查一次」一致，只是**不设次数上限**（中心仓同步几十分钟到几天都正常）。
+let IndexWaitLadder: Array<Int64> = [5, 60, 180, 300]
+let IndexWaitSteadySec: Int64 = 300
+
+// 索引等待上限的**出厂默认值**（旧语义：轮询间隔 60s / 总超时 600s）。
+// 老计划里出现这一对就是"没配过"，按新语义迁移成 0（一直等）；
+// 用户自己填过别的值（哪怕只是改了其中一个）则原样保留。
+public func legacyPollDefaults(pollInterval: Int64, pollTimeout: Int64): Bool {
+    pollInterval == 60 && pollTimeout == 600
+}
+
+// 目标仓索引探测结果：把 HTTP 状态码和正文一起带出来。
+//
+// 只返回 `?String` 会把两类完全不同的事抹平成同一个 None：
+//   404 → 索引里还没有该版本（同步没到，继续等；也可能是目标仓确实没有这个包）
+//   401/403/429/5xx/传输失败 → 没问到，再等也不会变好
+// 判据对齐官方返回码表：200 成功 / 400 参数 / 401 认证 / 403 权限 / 404 不存在 /
+// 409 冲突 / 429 频率 / >=500 服务器故障。
+public class IndexProbe {
+    public var status: Int64      // 0 = 传输层失败（DNS/TLS/超时/连接被拒）
+    public var body: String
+    public var detail: String     // 传输层失败原因（进文案）
+
+    public init(status: Int64, body: String, detail!: String = "") {
+        this.status = status
+        this.body = body
+        this.detail = detail
+    }
+
+    // 2xx：正文可用
+    public func ok(): Bool {
+        this.status >= 200 && this.status < 300
+    }
+
+    // 探测本身失败（不是"目标仓没有"，而是"没问到"）：继续等不会变好
+    public func fatal(): Bool {
+        this.status == 0 || this.status == 400 || this.status == 401 ||
+            this.status == 403 || this.status == 429 || this.status >= 500
+    }
+
+    // 认证/权限/频率超限：与推送阶段同一判据 —— 继续跑整个计划也是白费
+    public func planFatal(): Bool {
+        this.status == 401 || this.status == 403 || this.status == 429
+    }
+
+    public func describe(): String {
+        if (this.status == 0) {
+            if (this.detail.isEmpty()) {
+                return "网络不可达"
+            }
+            return "网络不可达：${this.detail}"
+        }
+        "HTTP ${this.status}"
+    }
+}
 
 // 发布计划项状态
 public enum PlanItemStatus {
@@ -263,7 +323,8 @@ public class PublishPlanService {
     // 没有这一步，界面上一切都是 need_publish —— 用户没法从计划里看出"哪些其实已经发过了"。
     public func analyze(rootPkgs: ArrayList<(String, String, String)>,
                         targetUpstream!: ?Upstream = None,
-                        fetchIndex!: (Upstream, String, String) -> ?String = { _, _, _ => None }): PlanAnalysis {
+                        fetchIndex!: (Upstream, String, String) -> IndexProbe =
+                            { _, _, _ => IndexProbe(0, "", detail: "未接入目标仓索引探测") }): PlanAnalysis {
         // 1. 加载所有本地包
         let allDocs = this.pkgStore.listVersions("", "")
         let all = ArrayList<PackageDoc>()
@@ -376,11 +437,13 @@ public class PublishPlanService {
         }
 
         // 4. 目标仓索引：org::name → (version → sha)
-        //    取不到的包要记下来（None 只代表"取不到"，不代表"目标仓没有这个包"）
+        //    探测失败（401/403/429/5xx/网络）的包要记下来（"没问到" ≠ "目标仓没有这个包"）；
+        //    404 则是**查过了、目标仓没有这个包**，按空索引处理（界面显示「无此包」而不是「未对照」）
         var targetChecked = false
         var targetError = ""
         let remote = HashMap<String, HashMap<String, String>>()
         let unreachable = ArrayList<String>()
+        var failDetail = ""
         match (targetUpstream) {
             case Some(up) =>
                 let fetched = HashSet<String>()
@@ -390,20 +453,28 @@ public class PublishPlanService {
                         continue
                     }
                     fetched.add(key)
-                    match (fetchIndex(up, d.organization, d.name)) {
-                        case Some(text) =>
-                            let m = HashMap<String, String>()
-                            for (e in parseNDJSON(text)) {
-                                m[e.version] = e.sha256sum
-                            }
-                            remote[key] = m
-                        case None => unreachable.add(packageLabel(d.organization, d.name, ""))
+                    let probe = fetchIndex(up, d.organization, d.name)
+                    if (probe.ok()) {
+                        let m = HashMap<String, String>()
+                        for (e in parseNDJSON(probe.body)) {
+                            m[e.version] = e.sha256sum
+                        }
+                        remote[key] = m
+                    } else if (probe.status == 404) {
+                        // 目标仓没有这个包：与"没查到"分开记账
+                        remote[key] = HashMap<String, String>()
+                    } else {
+                        unreachable.add(packageLabel(d.organization, d.name, ""))
+                        if (failDetail.isEmpty()) {
+                            failDetail = probe.describe()
+                        }
                     }
                 }
                 targetChecked = unreachable.size == 0
                 if (unreachable.size > 0) {
-                    targetError = "目标仓索引取不到：${unreachable.size} 个包（${unreachable[0]} 等）" +
-                        "无法判断是否已存在，这些条目只能按「待发布」列出——执行时若目标仓已有同版本会得到 409"
+                    targetError = "目标仓索引取不到：${unreachable.size} 个包（${unreachable[0]} 等，" +
+                        "${failDetail}）无法判断是否已存在，这些条目只能按「待发布」列出" +
+                        "——执行时若目标仓已有同版本会得到 409"
                 }
             case None => ()
         }
@@ -704,9 +775,10 @@ public func parseDependencyRefs(indexJson: String): ArrayList<(String, String, S
 
 // 「检查索引」的结果
 public class IndexCheckResult {
-    public var checked: Int64 = 0          // 探测了几个
-    public var unreachable: Int64 = 0      // 目标仓索引取不到的个数
+    public var checked: Int64 = 0          // 探测到了几个（含"目标仓确实没有"的 404）
+    public var unreachable: Int64 = 0      // 探测本身失败的个数（401/403/429/5xx/网络）
     public var ready: ArrayList<Int64> = ArrayList<Int64>()   // 已在目标仓索引里的输入下标
+    public var detail: String = ""         // 探测失败的最近一次原因（进文案）
 
     public init() {}
 }
@@ -714,20 +786,29 @@ public class IndexCheckResult {
 // 一次性检查若干 (org, name, version) 是否已出现在目标仓索引里。
 //
 // 用途：计划里那些「已推送成功、在等索引」的项，不该逼用户再点一次「继续执行」干等
-// 一个轮询周期（默认 60s，超时 600s）。这里只探一次：命中的就可以直接标成发布完成。
+// 一个轮询周期。这里只探一次：命中的就可以直接标成发布完成。
 // 「目标仓到底有没有」永远是**现查**的（不在包记录上打标记），所以这个动作随时可重放。
+//
+// 探测失败与"目标仓没有这个版本"必须分开计数：404 是"确实没有"（继续等/等审核），
+// 401/429/5xx 是"没问到"（得先解决认证/频率/服务问题），混在一起会让人以为在等一件不会发生的事。
 public func checkVersionsInIndex(targets: ArrayList<(String, String, String)>,
-                                 probe: (String, String) -> ?String): IndexCheckResult {
+                                 probe: (String, String) -> IndexProbe): IndexCheckResult {
     let r = IndexCheckResult()
     for (i in 0..targets.size) {
         let (org, name, version) = targets[i]
-        match (probe(org, name)) {
-            case Some(text) =>
-                r.checked++
-                if (indexHasVersion(text, name, version)) {
-                    r.ready.add(i)
-                }
-            case None => r.unreachable++
+        let res = probe(org, name)
+        if (res.ok()) {
+            r.checked++
+            if (indexHasVersion(res.body, name, version)) {
+                r.ready.add(i)
+            }
+        } else if (res.status == 404) {
+            r.checked++
+        } else {
+            r.unreachable++
+            if (r.detail.isEmpty()) {
+                r.detail = res.describe()
+            }
         }
     }
     r
@@ -814,9 +895,11 @@ public class PublishExecutor {
                         poster!: (String, Array<Byte>, String) -> (Bool, Int64, String) = { u, b, t =>
                             httpPostBinary(u, b, t)
                         },
-                        indexProbe!: ?(String, String) -> ?String = None,
-                        pollIntervalSec!: Int64 = 0,
+                        indexProbe!: ?(String, String) -> IndexProbe = None,
                         pollTimeoutSec!: Int64 = 0,
+                        // 等待节奏可注入：单测用秒级阶梯，生产用 IndexWaitLadder
+                        indexWaitLadder!: Array<Int64> = IndexWaitLadder,
+                        indexWaitSteadySec!: Int64 = IndexWaitSteadySec,
                         shouldCancel!: () -> Bool = { => false }): ExecuteReport {
         let report = ExecuteReport()
         report.total = items.size
@@ -977,17 +1060,28 @@ public class PublishExecutor {
             if (ok) {
                 // 推送成功后还要**等目标仓索引就绪**才算完成：
                 // 拓扑序里下一条依赖这一条，而中心仓的索引/缓存同步可能很慢
-                // （几分钟到几小时）。不等就推下一条，会出现「依赖还没出现在索引里」
-                // 的假失败，或者推到一半自己把自己卡住。
+                // （几十分钟到几天，审核还可能更久）。不等就推下一条，会出现「依赖还没出现在
+                // 索引里」的假失败，或者推到一半自己把自己卡住。
+                //
+                // 默认**不设总超时**（pollTimeoutSec <= 0）：没出现就是还没同步到，继续等；
+                // 只有探测本身失败（401/403/429/5xx/网络）或用户点停止才收工。
+                let lastProbe = Box<IndexProbe>(IndexProbe(404, ""))
                 var waitCode = WAIT_READY
                 match (indexProbe) {
                     case Some(probe) =>
-                        if (pollIntervalSec > 0 && pollTimeoutSec > 0) {
-                            it.status = PlanItemStatus.WaitingIndex
-                            onItem(it, true, "等待目标仓索引就绪")
-                            waitCode = waitIndexReady(probe, doc.organization, doc.name, doc.version,
-                                pollIntervalSec, pollTimeoutSec, shouldCancel: shouldCancel)
-                        }
+                        it.status = PlanItemStatus.WaitingIndex
+                        onItem(it, true, "等待目标仓索引就绪")
+                        waitCode = waitIndexReady(probe, doc.organization, doc.name, doc.version,
+                            pollTimeoutSec, shouldCancel: shouldCancel,
+                            ladder: indexWaitLadder, steadySec: indexWaitSteadySec,
+                            onWaiting: { waited, step, res =>
+                                lastProbe.value = res
+                                // 每轮把「已等多久 / 下一轮什么时候再探」写进条目说明：
+                                // 否则界面只有一句「等待索引」，看不出是在正常等还是卡住了
+                                let mins = waited / 60
+                                onItem(it, true,
+                                    "等待目标仓索引就绪（已等 ${mins} 分钟，${step} 秒后再探；最近一次：${res.describe()}）")
+                            })
                     case None => ()
                 }
                 if (waitCode == WAIT_CANCELLED) {
@@ -1005,15 +1099,34 @@ public class PublishExecutor {
                     it.status = PlanItemStatus.Completed
                     it.error = ""
                     onItem(it, true, "")
+                } else if (waitCode == WAIT_FATAL) {
+                    // 索引探测本身失败（401/403/429/5xx/网络）：内容已经推上去了，只是"索引里有"
+                    // 这件事问不出来 → 记「等索引」而不是失败（重推只会换回 409）。
+                    let res = lastProbe.value
+                    it.status = PlanItemStatus.WaitingIndex
+                    it.error = "索引确认失败（${res.describe()}）：已推送成功，稍后点「检查索引」再确认"
+                    report.waitingIndex++
+                    unavailable.add(it.pkgId)
+                    report.errors.add("${doc.name}@${doc.version}: ${it.error}")
+                    if (res.planFatal()) {
+                        // 认证/权限/频率超限：与推送阶段同一判据 —— 继续跑整个计划也是白费。
+                        // 已推送成功的项不受影响，暂停后可以「检查索引」或次日「继续执行」。
+                        report.aborted = true
+                        report.abortReason = "目标仓 ${res.describe()}：计划已暂停（已推送的项不受影响）"
+                        onItem(it, false, it.error)
+                    } else {
+                        onItem(it, true, it.error)
+                    }
                 } else {
-                    // 索引迟迟不出现 → 这一项记「等索引」而不是失败：内容其实已经推上去了，
-                    // 只是还没同步（中心仓同步慢、或审核没过）。续跑时据此**不再重推**，只继续等。
+                    // 走到这里只有一种情况：配置了「索引等待上限」且等满了（可选保险丝）。
+                    // 记「等索引」不是失败：内容其实已经推上去了，只是还没同步（中心仓同步慢、
+                    // 或审核没过）。续跑时据此**不再重推**，只继续等。
                     //
                     // **不中止整个计划**：只有依赖它的项会被卡住（下面的 blockedBy 逻辑），
                     // 与它无关的项该发还是要发。以前这里 `aborted = true`，实测把不依赖
                     // 出问题那一项的包（bstorm 之于 tsdb）一起卡死了。
                     it.status = PlanItemStatus.WaitingIndex
-                    it.error = "等待索引就绪超时（${pollTimeoutSec}s）：${doc.name}@${doc.version} 还没出现在目标仓索引里（已推送成功，续跑会继续等）"
+                    it.error = "已等满索引等待上限（${pollTimeoutSec}s）：${doc.name}@${doc.version} 还没出现在目标仓索引里（已推送成功，续跑会继续等；可把上限设为 0 表示一直等）"
                     report.waitingIndex++
                     unavailable.add(it.pkgId)
                     report.errors.add("${doc.name}@${doc.version}: ${it.error}")
@@ -1110,26 +1223,47 @@ func isRetryable(code: Int64): Bool {
     code == 0 || code >= 500
 }
 
-// 轮询目标仓索引直到出现「该包该版本」：每次等 pollIntervalSec 秒，最多等 pollTimeoutSec 秒。
-// 返回 false 表示超时（内容可能已经推上去了，只是索引还没同步）。
-// pollTimeoutSec 可能是几分钟到几十分钟（中心仓同步很慢），所以每轮都要看一眼
-// 「用户是不是点了停止」——否则点了停止也得等满整个超时才有反应。
-func waitIndexReady(probe: (String, String) -> ?String, org: String, name: String, version: String,
-                    pollIntervalSec: Int64, pollTimeoutSec: Int64,
-                    shouldCancel!: () -> Bool = { => false }): Int64 {
+// 轮询目标仓索引直到出现「该包该版本」。
+//
+// 节奏：先短探一次（5s）→ 1 分钟 → 3 分钟 → 5 分钟 → 之后每 5 分钟一轮，**默认不设总超时**：
+// 「索引里还没有」不是失败，中心仓索引/缓存同步慢是常态（几十分钟到几天，审核还可能更久），
+// 让它一直等才是对的；人随时可以点「停止执行」，探测到 401/403/429/5xx/网络失败也会提前收工
+// （那些再等也不会变好）。
+//
+// pollTimeoutSec > 0 时作为**总等待上限**（可选保险丝）；<= 0 表示不限。
+// 返回 WAIT_READY / WAIT_TIMEOUT / WAIT_CANCELLED / WAIT_FATAL。
+func waitIndexReady(probe: (String, String) -> IndexProbe, org: String, name: String, version: String,
+                    pollTimeoutSec: Int64,
+                    shouldCancel!: () -> Bool = { => false },
+                    onWaiting!: (Int64, Int64, IndexProbe) -> Unit = { _, _, _ => () },
+                    ladder!: Array<Int64> = IndexWaitLadder,
+                    steadySec!: Int64 = IndexWaitSteadySec): Int64 {
     var waited: Int64 = 0
-    while (waited < pollTimeoutSec) {
+    var round: Int64 = 0
+    while (true) {
         if (shouldCancel()) {
             return WAIT_CANCELLED
         }
-        sleep(Duration.second * pollIntervalSec)
-        waited += pollIntervalSec
-        match (probe(org, name)) {
-            case Some(text) =>
-                if (indexHasVersion(text, name, version)) {
-                    return WAIT_READY
-                }
-            case None => ()
+        let step = if (round < ladder.size) { ladder[round] } else { steadySec }
+        round++
+        if (step > 0) {
+            sleep(Duration.second * step)
+            waited += step
+        }
+        let res = probe(org, name)
+        if (res.ok()) {
+            if (indexHasVersion(res.body, name, version)) {
+                return WAIT_READY
+            }
+        } else if (res.fatal()) {
+            // 失败的探测也要报给调用方（它要拿状态码决定"要不要把整个计划暂停"）
+            onWaiting(waited, step, res)
+            return WAIT_FATAL
+        }
+        onWaiting(waited, step, res)
+        // 上限判定放在探测之后：等够时长就先探一次再收工（否则"上限 1 秒"会连一次都探不到）
+        if (pollTimeoutSec > 0 && waited >= pollTimeoutSec) {
+            return WAIT_TIMEOUT
         }
     }
     WAIT_TIMEOUT

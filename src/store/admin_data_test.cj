@@ -201,6 +201,45 @@ func testPlanLifecycleWithItems() {
     @Expect(store.listPlanItems(id).size, 0)
 }
 
+// 时间线时间戳：进入「等索引」= 内容推送成功时刻；「完成」= 目标仓索引确认到该版本的时刻。
+// 重复写同一状态（续跑/重新检查）不能把已有时间覆盖掉——那是发生过的事实。
+@Test
+func planItem_timelineStamps() {
+    let store = makeAdminStore()
+    let id = store.createPlan("plan3", 3, 60, 0, 1000)
+    let item = store.addPlanItem(id, 10, "", "bstorm", "1.4.9", 1, "need_publish", true)
+    @Expect(store.updatePlanItem(item, "running", "", 1100), true)
+    match (store.getPlanItem(item)) {
+        case Some(it) =>
+            @Expect(it.startedAt, 1100)
+            @Expect(it.pushedAt, 0)          // 还只是"在推"
+        case None => @Fail("expected item")
+    }
+    // 推成功、进入等索引 → 记发布时间
+    @Expect(store.updatePlanItem(item, "waiting_index", "等待目标仓索引就绪", 1200), true)
+    match (store.getPlanItem(item)) {
+        case Some(it) => @Expect(it.pushedAt, 1200)
+        case None => @Fail("expected item")
+    }
+    // 续跑再次写 waiting_index：发布时间保持第一次的
+    @Expect(store.updatePlanItem(item, "waiting_index", "已推送过，继续等", 1300), true)
+    // 索引确认到 → 记索引生效时间；完成时间也落这一笔
+    @Expect(store.updatePlanItem(item, "completed", "", 1400), true)
+    match (store.getPlanItem(item)) {
+        case Some(it) =>
+            @Expect(it.pushedAt, 1200)
+            @Expect(it.indexAt, 1400)
+            @Expect(it.completedAt, 1400)
+        case None => @Fail("expected item")
+    }
+    // 再次标完成（例如执行器重复回调）：索引时间不覆盖
+    @Expect(store.updatePlanItem(item, "completed", "", 1500), true)
+    match (store.getPlanItem(item)) {
+        case Some(it) => @Expect(it.indexAt, 1400)
+        case None => @Fail("expected item")
+    }
+}
+
 // 计划项的「目标仓对照」要落库：详情页刷新后还得看得到对照值（否则只能重新分析才显示）
 @Test
 func planItem_targetComparePersists() {

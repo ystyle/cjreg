@@ -225,18 +225,18 @@ func executeReport_waitsForIndexReady() {
     let calls = Box<Int64>(0)
     let probes = Box<Int64>(0)
     // 第一次查索引还没有该版本，第二次才有
-    let probe: (String, String) -> ?String = { _, _ =>
+    let probe: (String, String) -> IndexProbe = { _, _ =>
         probes.value++
         if (probes.value < 2) {
-            Some("{\"name\":\"a\",\"version\":\"0.9.0\"}\n")
+            IndexProbe(200, "{\"name\":\"a\",\"version\":\"0.9.0\"}\n")
         } else {
-            Some("{\"name\":\"a\",\"version\":\"1.0.0\"}\n")
+            IndexProbe(200, "{\"name\":\"a\",\"version\":\"1.0.0\"}\n")
         }
     }
     let ex = PublishExecutor(store, blobs)
     let r = ex.execute(items, "http://127.0.0.1:1", "tok",
         poster: stubPoster(codesOf([200]), calls), indexProbe: probe,
-        pollIntervalSec: 1, pollTimeoutSec: 10)
+        pollTimeoutSec: 10, indexWaitLadder: [1, 1, 1], indexWaitSteadySec: 1)
     @Expect(r.success, 1)
     @Expect(r.aborted, false)
     @Expect(probes.value >= 2, true)
@@ -253,14 +253,14 @@ func executeReport_indexTimeout_pausesAndStops() {
     items.add(execItem(execDoc(store, blobs, "a", "1.0.0"), "a", "1.0.0", 1))
     items.add(execItem(execDoc(store, blobs, "b", "1.0.0"), "b", "1.0.0", 2))
     let calls = Box<Int64>(0)
-    let probe: (String, String) -> ?String = { _, _ =>
+    let probe: (String, String) -> IndexProbe = { _, _ =>
         // 目标仓索引里始终只有 a 的旧版本：a 等不到，b 与 a 无关、索引里正常可见
-        Some("{\"name\":\"a\",\"version\":\"0.9.0\"}\n")
+        IndexProbe(200, "{\"name\":\"a\",\"version\":\"0.9.0\"}\n")
     }
     let ex = PublishExecutor(store, blobs)
     let r = ex.execute(items, "http://127.0.0.1:1", "tok",
         poster: stubPoster(codesOf([200]), calls), indexProbe: probe,
-        pollIntervalSec: 1, pollTimeoutSec: 1)
+        pollTimeoutSec: 1, indexWaitLadder: [1, 1, 1], indexWaitSteadySec: 1)
     // 探头永远只报 a 的旧版本 → a、b 两项都等不到自己的版本（两项都已推成功）
     @Expect(r.waitingIndex, 2)
     @Expect(r.aborted, false)               // 不再中止整个计划
@@ -283,13 +283,13 @@ func executeReport_resumeWaitingIndex_doesNotRepush() {
     it.status = PlanItemStatus.WaitingIndex   // 上次已推成功、在等索引
     items.add(it)
     let calls = Box<Int64>(0)
-    let probe: (String, String) -> ?String = { _, _ =>
-        Some("{\"name\":\"a\",\"version\":\"1.0.0\"}\n")
+    let probe: (String, String) -> IndexProbe = { _, _ =>
+        IndexProbe(200, "{\"name\":\"a\",\"version\":\"1.0.0\"}\n")
     }
     let ex = PublishExecutor(store, blobs)
     let r = ex.execute(items, "http://127.0.0.1:1", "tok",
         poster: stubPoster(codesOf([200]), calls), indexProbe: probe,
-        pollIntervalSec: 1, pollTimeoutSec: 10)
+        pollTimeoutSec: 10, indexWaitLadder: [1, 1, 1], indexWaitSteadySec: 1)
     @Expect(calls.value, 0)                   // 关键：没有再推一次
     @Expect(r.success, 1)
     @Expect(r.failed, 0)
@@ -392,17 +392,17 @@ func executeReport_indexTimeout_onlyBlocksDependents() {
     items.add(execItem(otherId, "other", "1.0.0", 3))
     let calls = Box<Int64>(0)
     // 目标仓索引里永远没有 base 1.0.0（审核没过）；其它包正常可见
-    let probe: (String, String) -> ?String = { _, name =>
+    let probe: (String, String) -> IndexProbe = { _, name =>
         if (name == "base") {
-            Some("{\"name\":\"base\",\"version\":\"0.9.0\"}\n")
+            IndexProbe(200, "{\"name\":\"base\",\"version\":\"0.9.0\"}\n")
         } else {
-            Some("{\"name\":\"${name}\",\"version\":\"1.0.0\"}\n")
+            IndexProbe(200, "{\"name\":\"${name}\",\"version\":\"1.0.0\"}\n")
         }
     }
     let ex = PublishExecutor(store, blobs)
     let r = ex.execute(items, "http://127.0.0.1:1", "tok",
         poster: stubPoster(codesOf([200, 200, 200]), calls), indexProbe: probe,
-        pollIntervalSec: 1, pollTimeoutSec: 1)
+        pollTimeoutSec: 1, indexWaitLadder: [1, 1, 1], indexWaitSteadySec: 1)
     @Expect(r.waitingIndex, 1)                       // base 在等索引
     @Expect(r.aborted, false)                        // 不再中止整个计划
     @Expect(r.success, 1)                            // other 照发成功
@@ -474,14 +474,14 @@ func executeReport_cancelDuringIndexWait() {
     items.add(execItem(execDoc(store, blobs, "b", "1.0.0"), "b", "1.0.0", 2))
     let calls = Box<Int64>(0)
     let cancel = Box<Bool>(false)
-    let probe: (String, String) -> ?String = { _, _ =>
+    let probe: (String, String) -> IndexProbe = { _, _ =>
         cancel.value = true          // 第一轮等待里就"点停止"
-        Some("{\"name\":\"a\",\"version\":\"0.9.0\"}\n")
+        IndexProbe(200, "{\"name\":\"a\",\"version\":\"0.9.0\"}\n")
     }
     let ex = PublishExecutor(store, blobs)
     let r = ex.execute(items, "http://127.0.0.1:1", "tok",
         poster: stubPoster(codesOf([200]), calls), indexProbe: probe,
-        pollIntervalSec: 1, pollTimeoutSec: 30,
+        pollTimeoutSec: 30, indexWaitLadder: [1, 1, 1], indexWaitSteadySec: 1,
         shouldCancel: { => cancel.value })
     @Expect(r.aborted, true)
     @Expect(r.abortReason.contains("停止"), true)

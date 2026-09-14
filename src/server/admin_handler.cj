@@ -1074,8 +1074,8 @@ public class AdminService {
         let proxy = this.proxySvc
         this.planSvc.analyze(roots, targetUpstream: target, fetchIndex: { up, org, name =>
             match (proxy) {
-                case Some(p) => p.fetchUpstreamIndex(up, org, name)
-                case None => Option<String>.None
+                case Some(p) => p.probeUpstreamIndex(up, org, name)
+                case None => IndexProbe(0, "", detail: "本实例未接入回源代理")
             }
         })
     }

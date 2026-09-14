@@ -141,6 +141,11 @@ public class PlanItemDoc {
     // 「查过了、目标仓确实没有这个包」（compared=true 且 version 为空）必须分开。
     public var targetVersion: String = ""
     public var targetCompared: Bool = false
+    // 时间线（详情页「时间」列）：推送成功时刻 / 目标仓索引里确认到该版本的时刻。
+    // 与 startedAt/completedAt 的区别：后者是"这项什么时候开始跑、什么时候收口"，
+    // 这两个是**对目标仓可观察的事实**——内容什么时候送进去、消费者什么时候能解析到。
+    public var pushedAt: Int64 = 0
+    public var indexAt: Int64 = 0
     public var startedAt: Int64 = 0
     public var completedAt: Int64 = 0
 }
@@ -569,6 +574,17 @@ public class AdminDataStore {
     // 启动兜底在 main.cj 的 serve 路径里做（要连带重置条目状态并重算进度，
     // 放在那里能用 listPlanItems 一次遍历完成）
 
+    // 索引等待上限（秒，0 = 一直等）：只在做兼容迁移时改
+    public func setPlanPollTimeout(id: Int64, sec: Int64): Bool {
+        match (this.storm.get<PlanDoc>(id)) {
+            case Some(d) =>
+                d.pollTimeout = sec
+                this.storm.save(d)
+                return true
+            case None => return false
+        }
+    }
+
     public func setPlanTotal(id: Int64, total: Int64): Bool {
         match (this.storm.get<PlanDoc>(id)) {
             case Some(d) =>
@@ -647,6 +663,11 @@ public class AdminDataStore {
                 d.error = error
                 if (status == "running" && d.startedAt == 0) { d.startedAt = now }
                 if (status == "completed" || status == "failed") { d.completedAt = now }
+                // 时间线：进入「等索引」= 内容已推送成功（这一刻是发布时间）；续跑/重新检查
+                // 再次写同一状态时不能覆盖已有时间（只在 0 时填）
+                if (status == "waiting_index" && d.pushedAt == 0) { d.pushedAt = now }
+                // 「完成」= 目标仓索引里确认到了该版本（这一刻消费者才解析得到）
+                if (status == "completed" && d.indexAt == 0) { d.indexAt = now }
                 this.storm.save(d)
                 return true
             case None => return false

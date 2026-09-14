@@ -179,7 +179,7 @@ func classifyPlan_alreadyExistsWhenShaMatches() {
     roots.add(("ystyle", "crc", "1.0.0"))
     let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, org, name =>
         // 目标仓同版本、同 sha
-        Some("{\"organization\":\"${org}\",\"name\":\"${name}\",\"version\":\"1.0.0\",\"sha256sum\":\"sha-crc-1.0.0\"}\n")
+        IndexProbe(200, "{\"organization\":\"${org}\",\"name\":\"${name}\",\"version\":\"1.0.0\",\"sha256sum\":\"sha-crc-1.0.0\"}\n")
     })
     @Expect(a.targetChecked, true)
     @Expect(a.targetError, "")
@@ -199,7 +199,7 @@ func classifyPlan_conflictWhenShaDiffers() {
     let roots = ArrayList<(String, String, String)>()
     roots.add(("ystyle", "crc", "1.0.0"))
     let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ =>
-        Some("{\"name\":\"crc\",\"version\":\"1.0.0\",\"sha256sum\":\"different-sha\"}\n")
+        IndexProbe(200, "{\"name\":\"crc\",\"version\":\"1.0.0\",\"sha256sum\":\"different-sha\"}\n")
     })
     @Expect(a.items[0].category == PlanCategory.Conflict, true)
     @Expect(a.items[0].selected, false)
@@ -217,7 +217,7 @@ func classifyPlan_needPublishWhenAbsentUpstream() {
     roots.add(("ystyle", "crc", "1.0.1"))
     let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ =>
         // 目标仓只有更老的版本
-        Some("{\"name\":\"crc\",\"version\":\"1.0.0\",\"sha256sum\":\"old\"}\n")
+        IndexProbe(200, "{\"name\":\"crc\",\"version\":\"1.0.0\",\"sha256sum\":\"old\"}\n")
     })
     @Expect(a.items[0].category == PlanCategory.NeedPublish, true)
     @Expect(a.items[0].selected, true)
@@ -234,7 +234,7 @@ func classifyPlan_versionOptionalWhenUpstreamNewer() {
     let roots = ArrayList<(String, String, String)>()
     roots.add(("", "demo", "1.0.0"))
     let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ =>
-        Some("{\"name\":\"demo\",\"version\":\"2.0.0\",\"sha256sum\":\"new\"}\n")
+        IndexProbe(200, "{\"name\":\"demo\",\"version\":\"2.0.0\",\"sha256sum\":\"new\"}\n")
     })
     @Expect(a.items[0].category == PlanCategory.VersionOptional, true)
     store.storm.close()
@@ -249,7 +249,7 @@ func classifyPlan_unreachableTargetIsVisible() {
     let up = Upstream(1, "official", "http://up.example", true, 0, "", true, 0, 0)
     let roots = ArrayList<(String, String, String)>()
     roots.add(("", "demo", "1.0.0"))
-    let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ => None })
+    let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ => IndexProbe(0, "", detail: "connection refused") })
     @Expect(a.targetChecked, false)
     @Expect(a.targetError.isEmpty(), false)   // 必须说出来
     @Expect(a.targetError.contains("索引"), true)
@@ -287,7 +287,7 @@ func classifyPlan_reportsTargetLatestVersion() {
     let roots = ArrayList<(String, String, String)>()
     roots.add(("", "bstorm", "1.4.9"))
     let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ =>
-        Some("{\"name\":\"bstorm\",\"version\":\"1.4.7\",\"sha256sum\":\"s7\"}\n" +
+        IndexProbe(200, "{\"name\":\"bstorm\",\"version\":\"1.4.7\",\"sha256sum\":\"s7\"}\n" +
             "{\"name\":\"bstorm\",\"version\":\"1.4.8\",\"sha256sum\":\"s8\"}\n")
     })
     @Expect(a.items[0].targetCompared, true)
@@ -306,7 +306,7 @@ func classifyPlan_targetLatestUsesSemverOrder() {
     let roots = ArrayList<(String, String, String)>()
     roots.add(("", "demo", "1.4.11"))
     let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ =>
-        Some("{\"name\":\"demo\",\"version\":\"1.4.9\",\"sha256sum\":\"s9\"}\n" +
+        IndexProbe(200, "{\"name\":\"demo\",\"version\":\"1.4.9\",\"sha256sum\":\"s9\"}\n" +
             "{\"name\":\"demo\",\"version\":\"1.4.10\",\"sha256sum\":\"s10\"}\n" +
             "{\"name\":\"demo\",\"version\":\"1.4.2\",\"sha256sum\":\"s2\"}\n")
     })
@@ -323,7 +323,7 @@ func classifyPlan_targetLatestEqualsLocalForExisting() {
     let roots = ArrayList<(String, String, String)>()
     roots.add(("ystyle", "crc", "1.0.0"))
     let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, org, name =>
-        Some("{\"organization\":\"${org}\",\"name\":\"${name}\",\"version\":\"1.0.0\",\"sha256sum\":\"sha-crc-1.0.0\"}\n")
+        IndexProbe(200, "{\"organization\":\"${org}\",\"name\":\"${name}\",\"version\":\"1.0.0\",\"sha256sum\":\"sha-crc-1.0.0\"}\n")
     })
     @Expect(a.items[0].category == PlanCategory.AlreadyExists, true)
     @Expect(a.items[0].targetCompared, true)
@@ -340,7 +340,7 @@ func classifyPlan_targetWithoutPackageIsComparedButEmpty() {
     let up = Upstream(1, "official", "http://up.example", true, 0, "", true, 0, 0)
     let roots = ArrayList<(String, String, String)>()
     roots.add(("", "fresh", "1.0.0"))
-    let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ => Some("") })
+    let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ => IndexProbe(200, "") })
     @Expect(a.targetChecked, true)                 // 索引取到了，只是这个包不在里面
     @Expect(a.items[0].targetCompared, true)
     @Expect(a.items[0].targetVersion, "")
@@ -357,7 +357,7 @@ func classifyPlan_unreachableTargetLeavesUncompared() {
     let up = Upstream(1, "official", "http://up.example", true, 0, "", true, 0, 0)
     let roots = ArrayList<(String, String, String)>()
     roots.add(("", "demo", "1.0.0"))
-    let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ => None })
+    let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ => IndexProbe(0, "", detail: "connection refused") })
     @Expect(a.items[0].targetCompared, false)
     @Expect(a.items[0].targetVersion, "")
     @Expect(targetCompareText(a.items[0].name, a.items[0].targetVersion, a.items[0].targetCompared), "未对照")
@@ -377,6 +377,46 @@ func targetCompareText_values() {
     @Expect(targetCompareText("crc", "1.0.0", false), "未对照")
     // 目标仓没有版本号时，即使 compared=true 也不该拼出半截名字
     @Expect(targetCompareText("crc", "", false), "未对照")
+}
+
+// 404 = 目标仓确实没有这个包（查过了），不是"没问到"：
+// 要显示「无此包」而不是「未对照」，也不算对比失败（targetChecked 仍为 true、不报 targetError）
+@Test
+func classifyPlan_targetNotFoundCountsAsCompared() {
+    let (store, svc) = classFixture()
+    store.save(planDoc("", "fresh", "1.0.0", ArrayList<String>()))
+    let up = Upstream(1, "official", "http://up.example", true, 0, "", true, 0, 0)
+    let roots = ArrayList<(String, String, String)>()
+    roots.add(("", "fresh", "1.0.0"))
+    let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ => IndexProbe(404, "") })
+    @Expect(a.targetChecked, true)
+    @Expect(a.targetError, "")
+    @Expect(a.items[0].targetCompared, true)
+    @Expect(a.items[0].targetVersion, "")
+    @Expect(a.items[0].category == PlanCategory.NeedPublish, true)
+    store.storm.close()
+}
+
+// 探测失败（401/500/网络）→ 这一包记「未对照」，计划级说明里带上状态码：
+// 让人一眼看出是"没问到"（得先解决认证/服务问题），而不是"目标仓是空的"
+@Test
+func classifyPlan_probeFailureRecordsStatus() {
+    let (store, svc) = classFixture()
+    store.save(planDoc("", "demo", "1.0.0", ArrayList<String>()))
+    let up = Upstream(1, "official", "http://up.example", true, 0, "", true, 0, 0)
+    let roots = ArrayList<(String, String, String)>()
+    roots.add(("", "demo", "1.0.0"))
+    let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ => IndexProbe(401, "unauthorized") })
+    @Expect(a.targetChecked, false)
+    @Expect(a.targetError.contains("401"), true)
+    @Expect(a.items[0].targetCompared, false)
+    @Expect(targetCompareText(a.items[0].name, a.items[0].targetVersion, a.items[0].targetCompared), "未对照")
+    let b = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ =>
+        IndexProbe(0, "", detail: "connection refused")
+    })
+    @Expect(b.targetChecked, false)
+    @Expect(b.targetError.contains("不可达"), true)
+    store.storm.close()
 }
 
 // 包名显示：org::name@version（无组织就不带前缀）
@@ -409,7 +449,7 @@ func classifyPlan_officialTargetCannotOverwrite() {
     let roots = ArrayList<(String, String, String)>()
     roots.add(("ystyle", "crc", "1.0.0"))
     let a = svc.analyze(roots, targetUpstream: official, fetchIndex: { _, _, _ =>
-        Some("{\"name\":\"crc\",\"version\":\"1.0.0\",\"sha256sum\":\"different-sha\"}\n")
+        IndexProbe(200, "{\"name\":\"crc\",\"version\":\"1.0.0\",\"sha256sum\":\"different-sha\"}\n")
     })
     @Expect(a.items[0].category == PlanCategory.Conflict, true)
     @Expect(a.items[0].overwriteAllowed, false)
@@ -424,7 +464,7 @@ func classifyPlan_privateTargetAllowsOverwrite() {
     let roots = ArrayList<(String, String, String)>()
     roots.add(("ystyle", "crc", "1.0.0"))
     let a = svc.analyze(roots, targetUpstream: privateRepo, fetchIndex: { _, _, _ =>
-        Some("{\"name\":\"crc\",\"version\":\"1.0.0\",\"sha256sum\":\"different-sha\"}\n")
+        IndexProbe(200, "{\"name\":\"crc\",\"version\":\"1.0.0\",\"sha256sum\":\"different-sha\"}\n")
     })
     @Expect(a.items[0].category == PlanCategory.Conflict, true)
     @Expect(a.items[0].overwriteAllowed, true)
@@ -488,11 +528,11 @@ func checkVersionsInIndex_reportsReadyOnes() {
     targets.add(("", "tsdb", "0.3.3"))          // 索引取不到
     let r = checkVersionsInIndex(targets, { org, name =>
         if (name == "tsdb") {
-            None
+            IndexProbe(0, "", detail: "connection refused")
         } else if (name == "crc") {
-            Some("{\"name\":\"crc\",\"version\":\"1.0.1\"}\n")
+            IndexProbe(200, "{\"name\":\"crc\",\"version\":\"1.0.1\"}\n")
         } else {
-            Some("{\"name\":\"snappy\",\"version\":\"1.0.1\"}\n")
+            IndexProbe(200, "{\"name\":\"snappy\",\"version\":\"1.0.1\"}\n")
         }
     })
     @Expect(r.checked, 2)

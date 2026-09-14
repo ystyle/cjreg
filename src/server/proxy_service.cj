@@ -210,6 +210,31 @@ public class ProxyService {
         }
     }
 
+    // 探测上游索引（带状态码）——发布计划「等索引就绪」「检查索引」都走这里。
+    //
+    // 与 fetchUpstreamIndex 的区别：**不把失败折成一个 None**。
+    //   200 + 正文      → 目标仓的索引（里面没有该版本 = 还没同步到）
+    //   404             → 目标仓没有这个包（"查过了，确实没有"，与"没问到"不是一回事）
+    //   401/403/429/5xx → 探测本身失败，再等也不会变好
+    //   0               → 传输层失败（DNS/TLS/超时/连接被拒）
+    public func probeUpstreamIndex(up: Upstream, org: String, name: String): IndexProbe {
+        let url = buildIndexURL(up.url, name, org)
+        if (url.isEmpty()) {
+            return IndexProbe(400, "", detail: "索引 URL 构造失败（包名不合法）")
+        }
+        match (this.httpFetch) {
+            case Some(f) =>
+                // 离线注入点只给 body：有 body 视作 200、没有视作 404（单测用）
+                match (f(url, up.authToken)) {
+                    case Some(b) => IndexProbe(200, String.fromUtf8(b))
+                    case None => IndexProbe(404, "")
+                }
+            case None =>
+                let r = httpGetWithStatus(url, up.authToken)
+                IndexProbe(r.status, String.fromUtf8(r.body), detail: r.error)
+        }
+    }
+
     // 把上游 NDJSON 索引条目缓存到本地 pkg 集合（记录 upstream 来源）
     public func cacheIndexEntries(org: String, name: String, ndjson: String, up: Upstream): Unit {
         let entries = parseNDJSON(ndjson)
@@ -299,6 +324,71 @@ public func httpGet(url: String, token: String): ?Array<Byte> {
         }
     }
     return None
+}
+
+// 带状态码的 GET 结果：`status = 0` 表示传输层失败（DNS/TLS/超时/连接被拒）。
+public class HttpGetOutcome {
+    public var status: Int64 = 0
+    public var body: Array<Byte> = Array<Byte>()
+    public var error: String = ""
+
+    public init() {}
+}
+
+// 带状态码的 GET（索引探测专用）。
+//
+// 为什么不复用 httpGet：它把所有非 200 都折成 None，于是「404 目标仓还没有这个版本」与
+// 「401/429/5xx 根本没问到」在调用方眼里一模一样 —— 前者要继续等，后者再等也不会变好。
+// 正文也一并带出来：官方 400/401/429 的原因写在正文里。
+public func httpGetWithStatus(url: String, token: String): HttpGetOutcome {
+    let out = HttpGetOutcome()
+    var currentUrl = url
+    var hops: Int64 = 0
+    while (hops < 5) {
+        let client = buildHttpClient(currentUrl)
+        try {
+            let resp = client.send(buildGetRequest(currentUrl, token))
+            let code = Int64(resp.status)
+            if (code == 200) {
+                out.status = 200
+                out.body = readStreamToBytes(resp.body)
+                client.close()
+                return out
+            }
+            if (code == 301 || code == 302 || code == 307) {
+                let loc = resp.headers.getFirst("location")
+                client.close()
+                if (loc.isSome() && !loc.getOrThrow().isEmpty()) {
+                    currentUrl = loc.getOrThrow()
+                    hops++
+                    continue
+                }
+                out.status = code
+                return out
+            }
+            out.status = code
+            try {
+                out.body = readStreamToBytes(resp.body)
+            } catch (e2: Exception) {
+                ()
+            }
+            client.close()
+            return out
+        } catch (e: Exception) {
+            out.status = 0
+            out.error = e.toString()
+            println("[cjreg] 索引探测 GET 失败 " + currentUrl + ": " + e.toString())
+            try {
+                client.close()
+            } catch (e2: Exception) {
+                ()
+            }
+            return out
+        }
+    }
+    out.status = 0
+    out.error = "重定向次数过多"
+    out
 }
 
 public func buildHttpClient(url: String): Client {

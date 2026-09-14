@@ -10,6 +10,7 @@ import ystyle::cjreg.server.*
 import ystyle::cjreg.index.*
 import std.collection.*
 import std.convert.*
+import std.time.*
 
 // ===== 列表行视图类型（泛型 Table<T> 行：实体 + 按需计算的次要字段） =====
 
@@ -48,7 +49,9 @@ class PublishPlansPage <: Component {
     // 删除确认
     var confirmVisible = Signal<Bool>(false)
     var pendingDeleteId: Int64 = 0
-    var pendingDeleteName: String = ""
+    // 用信号承载：cjxt 的 Dialog 只保留**首次渲染**的静态子节点，普通字段改了不会刷新
+    //（实测：确认框里始终显示「确定要删除计划「」吗？」），必须包进 SignalView
+    var pendingDeleteName = Signal<String>("")
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
@@ -115,7 +118,7 @@ class PublishPlansPage <: Component {
         match (st.adminData.getPlan(id)) {
             case Some(p) =>
                 this.pendingDeleteId = p.id
-                this.pendingDeleteName = p.name
+                this.pendingDeleteName.set(p.name)
                 this.confirmVisible.set(true)
             case None =>
                 // 静默什么也不做的话，用户点「删除」会像按钮坏了
@@ -139,8 +142,8 @@ class PublishPlansPage <: Component {
             return PatchResult.ReRender
         }
         if (st.adminData.deletePlan(this.pendingDeleteId)) {
-            this.msg.set("已删除计划 ${this.pendingDeleteName}")
-            st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "delete plan ${this.pendingDeleteName}", "ok", nowMs())
+            this.msg.set("已删除计划 ${this.pendingDeleteName.get()}")
+            st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "delete plan ${this.pendingDeleteName.get()}", "ok", nowMs())
         } else {
             this.msg.set("删除失败")
         }
@@ -186,7 +189,8 @@ class PublishPlansPage <: Component {
 
     func renderConfirmDialog(): IComponent {
         let dlg = Dialog([
-            div([text("确定要删除计划「${this.pendingDeleteName}」吗？")]),
+            // SignalView 包一层：对话框里的动态内容要跟着信号刷新（见 SignalView 注释）
+            SignalView({ => div([text("确定要删除计划「${this.pendingDeleteName.get()}」吗？")]) }),
         ])
             .visible(this.confirmVisible)
             .title("删除确认")
@@ -228,8 +232,8 @@ class PublishPlanCreatePage <: Component {
     var msg = Signal<String>("")
     var planName = Signal<String>("")
     var targetUpstream = Signal<String>("")
-    var pollInterval = Signal<Int64>(60)
-    var pollTimeout = Signal<Int64>(600)
+    var pollInterval = Signal<Int64>(60)   // 旧字段：索引等待已改固定阶梯，仅随计划落库保留
+    var pollTimeout = Signal<Int64>(0)     // 索引等待上限（秒）：0 = 一直等，直到就绪或用户停止
     var pkgSearch = Signal<String>("")
     var selectedPkgs = Signal<ArrayList<Int64>>(ArrayList<Int64>())
     var nameError = Signal<String>("")
@@ -444,8 +448,8 @@ class PublishPlanCreatePage <: Component {
             let proxy = st.proxySvc
             let analysis = planSvc.analyze(roots, targetUpstream: target, fetchIndex: { up, org, name =>
                 match (proxy) {
-                    case Some(p) => p.fetchUpstreamIndex(up, org, name)
-                    case None => Option<String>.None
+                    case Some(p) => p.probeUpstreamIndex(up, org, name)
+                    case None => IndexProbe(0, "", detail: "本实例未接入回源代理")
                 }
             })
             for (it in analysis.items) {
@@ -591,8 +595,8 @@ class PublishPlanCreatePage <: Component {
         let proxy = st.proxySvc
         let analysis = planSvc.analyze(roots, targetUpstream: target, fetchIndex: { up, org, name2 =>
             match (proxy) {
-                case Some(p) => p.fetchUpstreamIndex(up, org, name2)
-                case None => Option<String>.None
+                case Some(p) => p.probeUpstreamIndex(up, org, name2)
+                case None => IndexProbe(0, "", detail: "本实例未接入回源代理")
             }
         })
         if (analysis.hasCycle) {
@@ -643,9 +647,9 @@ class PublishPlanCreatePage <: Component {
                 .bindValue({ => this.targetUpstream.get() })
                 .rule(FormRule(required: true, message: "请选择目标上游"))
                 .errorSignal(this.upstreamError),
-            FormItem([InputNumber().bind(this.pollInterval).min(1)]).label("轮询间隔（秒）")
-                .bindValue({ => this.pollInterval.get().toString() }),
-            FormItem([InputNumber().bind(this.pollTimeout).min(1)]).label("轮询超时（秒）")
+            // 索引等待节奏是固定的（5 秒 → 1 分钟 → 3 分钟 → 5 分钟 → 之后每 5 分钟），
+            // 不需要用户配；这里只留一个可选的**总等待上限**（0 = 一直等，默认）。
+            FormItem([InputNumber().bind(this.pollTimeout).min(0)]).label("索引等待上限（秒，0 = 一直等）")
                 .bindValue({ => this.pollTimeout.get().toString() }),
         ]).labelTop()
         this.planForm = form
@@ -818,7 +822,7 @@ class PublishPlanDetailPage <: Component {
                         st.adminData.addLog(LogKind.Publish, sessionUid(ctx), sessionUsername(ctx), "start plan ${plan.name}", "ok", nowMs())
                         // 异步执行（网络操作在线程内，DB 写在 pushUpdate 回调里串行化）
                         spawn { =>
-                            this.runExecution(st, sid, execItems, docIds, up, plan.pollInterval, plan.pollTimeout)
+                            this.runExecution(st, sid, execItems, docIds, up, plan.pollTimeout)
                         }
                     case None =>
                         this.msg.set("目标上游不存在")
@@ -835,7 +839,7 @@ class PublishPlanDetailPage <: Component {
     //                     未执行的项保持未推送（下次点「继续执行」从这里接上）
     //   409            → 目标仓已有同版本不同制品 → 该项跳过（不是失败），继续下一项
     //   >=500 / 网络   → 执行器内部退避重试，仍失败才判该项失败
-    func runExecution(st: CjregState, sid: String, items: ArrayList<PlanItem>, docIds: HashMap<Int64, Int64>, up: Upstream, pollIntervalSec: Int64, pollTimeoutSec: Int64): Unit {
+    func runExecution(st: CjregState, sid: String, items: ArrayList<PlanItem>, docIds: HashMap<Int64, Int64>, up: Upstream, pollTimeoutSec: Int64): Unit {
         // 执行期间登记在 planRunIds 里（界面据此判断"真的在跑"）。**所有出口都要注销**，
         // 否则计划会永远显示「执行中」——实测踩过：收口回调一抛就是这种下场。
         let app = match (st.app) {
@@ -889,13 +893,14 @@ class PublishPlanDetailPage <: Component {
                 println("[cjreg] 发布计划进度推送失败（plan ${this.planId}，进度已落盘）: " + e.toString())
             }
         }, indexProbe: { org, name =>
-            // 拓扑序下一条依赖它：推完必须确认**目标仓索引里真的能查到该版本**再往下走
-            // （中心仓索引同步偶尔很慢，这里按计划的轮询间隔等，超时就暂停而不是判失败）
+            // 拓扑序下一条依赖它：推完必须确认**目标仓索引里真的能查到该版本**再往下走。
+            // 等待节奏固定为 5s → 1m → 3m → 5m → 每 5m，默认不设总超时（中心仓同步慢是常态）；
+            // 只有探测本身失败（401/403/429/5xx/网络）或用户点停止才收工。
             match (st.proxySvc) {
-                case Some(p) => p.fetchUpstreamIndex(up, org, name)
-                case None => Option<String>.None
+                case Some(p) => p.probeUpstreamIndex(up, org, name)
+                case None => IndexProbe(0, "", detail: "本实例未接入回源代理")
             }
-        }, pollIntervalSec: pollIntervalSec, pollTimeoutSec: pollTimeoutSec)
+        }, pollTimeoutSec: pollTimeoutSec)
         } catch (e: Exception) {
             // 执行线程里没人接异常：以前抛出来就**连收口都不执行**，计划永远停在「执行中」
             // （实测：4 项全部已失败落盘，计划状态还是 running）。现在必须收口成 failed 并写明原因。
@@ -1015,8 +1020,8 @@ class PublishPlanDetailPage <: Component {
             let up = target.getOrThrow()
             let r = checkVersionsInIndex(targets, { org, name =>
                 match (proxy) {
-                    case Some(p) => p.fetchUpstreamIndex(up, org, name)
-                    case None => Option<String>.None
+                    case Some(p) => p.probeUpstreamIndex(up, org, name)
+                    case None => IndexProbe(0, "", detail: "本实例未接入回源代理")
                 }
             })
             var done: Int64 = 0
@@ -1044,7 +1049,13 @@ class PublishPlanDetailPage <: Component {
             }
             st.adminData.addLog(LogKind.Publish, 0, "", "plan ${this.planId} 检查索引", "ok", nowMs())
             summary = "检查索引：${done}/${waiting.size} 项已就绪并标记为已发布" +
-                (if (r.unreachable > 0) { "（${r.unreachable} 项目标仓索引取不到）" } else { "" }) +
+                (if (r.unreachable > 0) {
+                    // 探测失败与"还没同步到"不是一回事：401/429/5xx 得先解决那个问题，
+                    // 否则用户会一直等一件不会发生的事
+                    "（${r.unreachable} 项探测失败：${r.detail}）"
+                } else {
+                    ""
+                }) +
                 (if (pending == 0) { "；计划已全部完成" } else { "；其余项仍需发布，可点「继续执行」" })
         } catch (e: Exception) {
             println("[cjreg] 检查索引失败（plan ${this.planId}）: " + e.toString())
@@ -1165,8 +1176,8 @@ class PublishPlanDetailPage <: Component {
             let proxy = st.proxySvc
             let analysis = planSvc.analyze(roots, targetUpstream: target, fetchIndex: { up, org, name =>
                 match (proxy) {
-                    case Some(p) => p.fetchUpstreamIndex(up, org, name)
-                    case None => Option<String>.None
+                    case Some(p) => p.probeUpstreamIndex(up, org, name)
+                    case None => IndexProbe(0, "", detail: "本实例未接入回源代理")
                 }
             })
             // 按 org::name@version 把分类写回原条目（依赖补齐可能带来新条目，这里只更新已存在的）
@@ -1286,6 +1297,14 @@ class PublishPlanDetailPage <: Component {
         s
     }
 
+    // 索引等待策略文案：0 = 一直等（默认）；否则是总等待上限
+    func waitPolicyText(pollTimeout: Int64): String {
+        if (pollTimeout <= 0) {
+            return "一直等（5s → 1m → 3m → 5m → 每 5m 探测一次）"
+        }
+        "最长 ${pollTimeout}s（5s → 1m → 3m → 5m → 每 5m）"
+    }
+
     // 目标仓能不能覆盖已有同版本（官方中心仓不能 → 冲突条目只能升版重发）
     func targetOverwriteAllowed(): Bool {
         match (this.state) {
@@ -1313,6 +1332,15 @@ class PublishPlanDetailPage <: Component {
             .add(TableColumn<PlanItemDoc>().label("目标仓").width(150).accessor({ d =>
                 targetCompareText(d.packageName, d.targetVersion, d.targetCompared)
             }).showOverflowTooltip())
+            // 时间线：推送（内容送进目标仓的时刻）与索引（目标仓索引里确认到该版本、
+            // 消费者从此解析得到）。只报"我们能观测到的"事实——各客户端 cjpm 本地缓存
+            // 什么时候刷新是客户端的事，服务端测不到，不猜。
+            .add(TableColumn<PlanItemDoc>().label("时间").width(150).render({ d, i =>
+                div([
+                    div([text(itemTimeText("推送", d.pushedAt))]),
+                    div([text(itemTimeText("索引", indexTimeOf(d)))]),
+                ])
+            }))
             .add(TableColumn<PlanItemDoc>().label("分类").width(120).render({ d, i =>
                 this.categoryTag(d.category, d.status)
             }))
@@ -1380,7 +1408,7 @@ class PublishPlanDetailPage <: Component {
                             .add(DescriptionsItem().label("目标上游").children([text(this.upstreamName(st, plan.targetUpstream))]))
                             .add(DescriptionsItem().label("进度").children([this.progressText(plan.completedCount, plan.totalCount)]))
                             .add(DescriptionsItem().label("发布项").children([text(this.itemBreakdown())]))
-                            .add(DescriptionsItem().label("轮询").children([text("${plan.pollInterval}s / 超时 ${plan.pollTimeout}s")]))
+                            .add(DescriptionsItem().label("索引等待").children([text(this.waitPolicyText(plan.pollTimeout))]))
                             .add(DescriptionsItem().label("执行").children([progressLine])),
                         // 计划级原因：中止/失败后刷新页面仍要看得到「为什么停了」
                         if (plan.lastError != "") {
@@ -1455,6 +1483,27 @@ func toPlanCategory(s: String): PlanCategory {
         case "conflict" => PlanCategory.Conflict
         case _ => PlanCategory.NeedPublish
     }
+}
+
+// 索引生效时间：新记录用显式字段；本列上线前完成的旧记录退回 completedAt ——
+// 在本计划里「完成」就是"目标仓索引里确认到了该版本"，两者是同一个事件。
+func indexTimeOf(d: PlanItemDoc): Int64 {
+    if (d.indexAt > 0) {
+        return d.indexAt
+    }
+    if (d.status == "completed") {
+        return d.completedAt
+    }
+    0
+}
+
+// 计划项时间戳 → `推送 HH:mm:ss` / `索引 HH:mm:ss`（0 = 没有这个时刻，显示「—」）。
+// 具体日期由计划信息里的时间上下文给出，表格里只留时分秒。
+func itemTimeText(label: String, ms: Int64): String {
+    if (ms <= 0) {
+        return "${label} —"
+    }
+    "${label} " + DateTime.fromUnixTimeStamp(Duration.millisecond * ms).inLocal().format("HH:mm:ss")
 }
 
 // 分类标签（详情页表格与创建页「版本对照」预览共用一份文案）。

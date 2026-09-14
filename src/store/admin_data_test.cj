@@ -6,7 +6,8 @@ import std.unittest.testmacro.*
 import std.collection.*
 
 func makeAdminStore(): AdminDataStore {
-    AdminDataStore(Storm.inMemory())
+    beginTestStores()
+    AdminDataStore(testStorm())
 }
 
 @Test
@@ -198,4 +199,38 @@ func testPlanLifecycleWithItems() {
     @Expect(store.deletePlan(id), true)
     @Expect(store.listPlans().size, 0)
     @Expect(store.listPlanItems(id).size, 0)
+}
+
+// 计划项的「目标仓对照」要落库：详情页刷新后还得看得到对照值（否则只能重新分析才显示）
+@Test
+func planItem_targetComparePersists() {
+    let store = makeAdminStore()
+    let id = store.createPlan("plan2", 3, 60, 600, 1000)
+    let item = store.addPlanItem(id, 10, "", "bstorm", "1.4.9", 1, "need_publish", true,
+        targetVersion: "1.4.8", targetCompared: true)
+    match (store.getPlanItem(item)) {
+        case Some(it) =>
+            @Expect(it.targetVersion, "1.4.8")
+            @Expect(it.targetCompared, true)
+        case None => @Fail("expected item")
+    }
+    // 重新分析：分类与对照一起更新（对照是必填参数，不给就等于清空，这里显式给新值）
+    @Expect(store.setPlanItemCategory(item, "already_exists", false,
+        targetVersion: "1.4.9", targetCompared: true), true)
+    match (store.getPlanItem(item)) {
+        case Some(it) =>
+            @Expect(it.category, "already_exists")
+            @Expect(it.selected, false)
+            @Expect(it.targetVersion, "1.4.9")
+        case None => @Fail("expected item")
+    }
+    // 没做成对照（索引取不到）→ compared=false，版本清空：界面据此显示「未对照」
+    @Expect(store.setPlanItemCategory(item, "need_publish", true,
+        targetVersion: "", targetCompared: false), true)
+    match (store.getPlanItem(item)) {
+        case Some(it) =>
+            @Expect(it.targetVersion, "")
+            @Expect(it.targetCompared, false)
+        case None => @Fail("expected item")
+    }
 }

@@ -272,6 +272,113 @@ func classifyPlan_noTargetKeepsLocalView() {
     store.storm.close()
 }
 
+// ===== 目标仓「版本对照」：`bstorm@1.4.9` 对 `bstorm@1.4.8` =====
+//
+// 出过的缺口：分类只给出「待发布/已存在/冲突」，看不出**目标仓那边现在是哪个版本**——
+// 人要判断"这是不是真新版本"（1.4.9 vs 1.4.8）还是"自己落后了"（1.4.9 vs 1.5.0），
+// 只能挨个去查目标仓索引。所以每条都要带出目标仓该包的最新版本。
+
+// 目标仓有多个版本 → 取最新的那个；本地更新 → need_publish，且对照值就是 1.4.8
+@Test
+func classifyPlan_reportsTargetLatestVersion() {
+    let (store, svc) = classFixture()
+    store.save(planDoc("", "bstorm", "1.4.9", ArrayList<String>()))
+    let up = Upstream(1, "official", "http://up.example", true, 0, "", true, 0, 0)
+    let roots = ArrayList<(String, String, String)>()
+    roots.add(("", "bstorm", "1.4.9"))
+    let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ =>
+        Some("{\"name\":\"bstorm\",\"version\":\"1.4.7\",\"sha256sum\":\"s7\"}\n" +
+            "{\"name\":\"bstorm\",\"version\":\"1.4.8\",\"sha256sum\":\"s8\"}\n")
+    })
+    @Expect(a.items[0].targetCompared, true)
+    @Expect(a.items[0].targetVersion, "1.4.8")
+    @Expect(a.items[0].category == PlanCategory.NeedPublish, true)
+    @Expect(targetCompareText(a.items[0].name, a.items[0].targetVersion, a.items[0].targetCompared), "bstorm@1.4.8")
+    store.storm.close()
+}
+
+// 目标仓最新版本要按 semver 数值比，不是字典序（1.4.10 > 1.4.9，按字符串比会取错）
+@Test
+func classifyPlan_targetLatestUsesSemverOrder() {
+    let (store, svc) = classFixture()
+    store.save(planDoc("", "demo", "1.4.11", ArrayList<String>()))
+    let up = Upstream(1, "official", "http://up.example", true, 0, "", true, 0, 0)
+    let roots = ArrayList<(String, String, String)>()
+    roots.add(("", "demo", "1.4.11"))
+    let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ =>
+        Some("{\"name\":\"demo\",\"version\":\"1.4.9\",\"sha256sum\":\"s9\"}\n" +
+            "{\"name\":\"demo\",\"version\":\"1.4.10\",\"sha256sum\":\"s10\"}\n" +
+            "{\"name\":\"demo\",\"version\":\"1.4.2\",\"sha256sum\":\"s2\"}\n")
+    })
+    @Expect(a.items[0].targetVersion, "1.4.10")
+    store.storm.close()
+}
+
+// 目标仓同版本已存在 → 对照值还是那个版本（分类已经在说"已存在"）
+@Test
+func classifyPlan_targetLatestEqualsLocalForExisting() {
+    let (store, svc) = classFixture()
+    store.save(planDoc("ystyle", "crc", "1.0.0", ArrayList<String>()))
+    let up = Upstream(1, "official", "http://up.example", true, 0, "", true, 0, 0)
+    let roots = ArrayList<(String, String, String)>()
+    roots.add(("ystyle", "crc", "1.0.0"))
+    let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, org, name =>
+        Some("{\"organization\":\"${org}\",\"name\":\"${name}\",\"version\":\"1.0.0\",\"sha256sum\":\"sha-crc-1.0.0\"}\n")
+    })
+    @Expect(a.items[0].category == PlanCategory.AlreadyExists, true)
+    @Expect(a.items[0].targetCompared, true)
+    @Expect(a.items[0].targetVersion, "1.0.0")
+    store.storm.close()
+}
+
+// 目标仓**查到了但没有这个包** → compared=true 且 version 为空，文案是「无此包」。
+// 这与「没查到」（未对照）是两件事，混起来会让人把"不知道"当成"放心发"。
+@Test
+func classifyPlan_targetWithoutPackageIsComparedButEmpty() {
+    let (store, svc) = classFixture()
+    store.save(planDoc("", "fresh", "1.0.0", ArrayList<String>()))
+    let up = Upstream(1, "official", "http://up.example", true, 0, "", true, 0, 0)
+    let roots = ArrayList<(String, String, String)>()
+    roots.add(("", "fresh", "1.0.0"))
+    let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ => Some("") })
+    @Expect(a.targetChecked, true)                 // 索引取到了，只是这个包不在里面
+    @Expect(a.items[0].targetCompared, true)
+    @Expect(a.items[0].targetVersion, "")
+    @Expect(a.items[0].category == PlanCategory.NeedPublish, true)
+    @Expect(targetCompareText(a.items[0].name, a.items[0].targetVersion, a.items[0].targetCompared), "无此包")
+    store.storm.close()
+}
+
+// 索引取不到 / 没选目标上游 → 对照没做成：必须报「未对照」，不能假装目标仓是空的
+@Test
+func classifyPlan_unreachableTargetLeavesUncompared() {
+    let (store, svc) = classFixture()
+    store.save(planDoc("", "demo", "1.0.0", ArrayList<String>()))
+    let up = Upstream(1, "official", "http://up.example", true, 0, "", true, 0, 0)
+    let roots = ArrayList<(String, String, String)>()
+    roots.add(("", "demo", "1.0.0"))
+    let a = svc.analyze(roots, targetUpstream: up, fetchIndex: { _, _, _ => None })
+    @Expect(a.items[0].targetCompared, false)
+    @Expect(a.items[0].targetVersion, "")
+    @Expect(targetCompareText(a.items[0].name, a.items[0].targetVersion, a.items[0].targetCompared), "未对照")
+    // 没给目标上游时同样只有「未对照」
+    let b = svc.analyze(roots)
+    @Expect(b.items[0].targetCompared, false)
+    @Expect(b.items[0].targetVersion, "")
+    store.storm.close()
+}
+
+// 对照文案：三种取值 × 带组织的包名
+@Test
+func targetCompareText_values() {
+    @Expect(targetCompareText("bstorm", "1.4.8", true), "bstorm@1.4.8")
+    @Expect(targetCompareText("crc", "1.0.0", true), "crc@1.0.0")
+    @Expect(targetCompareText("crc", "", true), "无此包")
+    @Expect(targetCompareText("crc", "1.0.0", false), "未对照")
+    // 目标仓没有版本号时，即使 compared=true 也不该拼出半截名字
+    @Expect(targetCompareText("crc", "", false), "未对照")
+}
+
 // 包名显示：org::name@version（无组织就不带前缀）
 @Test
 func packageLabel_format() {

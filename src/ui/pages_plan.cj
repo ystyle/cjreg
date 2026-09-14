@@ -237,6 +237,15 @@ class PublishPlanCreatePage <: Component {
     var planForm = Form([])
     // 搜索结果一次最多渲染多少行（剩下的靠搜索缩小范围）
     let MaxPickerRows: Int64 = 30
+    // 「本地版本 ↔ 目标仓版本」对照预览：每次改动选择都异步重跑一次与创建时**同一份**分析
+    //（依赖展开 + 目标仓索引），所以预览与创建出来的计划必然一致。
+    // 网络在后台线程，结果经 App.pushUpdate 回推（异步线程不能直接改前端信号）。
+    var previewRows = Signal<ArrayList<PlanItem>>(ArrayList<PlanItem>())
+    var previewBusy = Signal<Bool>(false)
+    var previewNote = Signal<String>("")
+    // 丢弃过期结果：连点「添加/移除」时，先发出的请求可能后到，
+    // 不按序号过滤就会用旧结果覆盖新结果（界面看起来"点了没反应"）
+    var previewSeq: Int64 = 0
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
@@ -244,6 +253,13 @@ class PublishPlanCreatePage <: Component {
 
     func backToList(ctx: ActionContext): PatchResult {
         ctx.route.push("/admin/publish-plans")
+        PatchResult.ReRender
+    }
+
+    // 目标上游变了 → 之前的对照结果作废，重跑一次（先选上游再选包是常见顺序，
+    // 但不能只依赖选包**之后**才对照：用户可能先选包、后改上游）
+    func onTargetChanged(ctx: ActionContext): PatchResult {
+        this.refreshPreview(ctx)
         PatchResult.ReRender
     }
 
@@ -373,7 +389,162 @@ class PublishPlanCreatePage <: Component {
         }
         // 只改信号：结果与已选择列表都在 render 里由信号算出
         this.selectedPkgs.set(next)
+        // 选择变了 → 异步重跑「本地版本 ↔ 目标仓版本」对照
+        this.refreshPreview(ctx)
         PatchResult.ReRender
+    }
+
+    // ===== 选择后的「版本对照」预览 =====
+
+    // 选择一变就重跑一次对照（与创建时同一份 analyze：依赖展开 + 目标仓索引分类）
+    func refreshPreview(ctx: ActionContext): Unit {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return
+        }
+        let selected = this.selectedPkgs.get()
+        this.previewSeq++
+        let seq = this.previewSeq
+        if (selected.size == 0) {
+            this.previewRows.set(ArrayList<PlanItem>())
+            this.previewNote.set("")
+            this.previewBusy.set(false)
+            return
+        }
+        let roots = ArrayList<(String, String, String)>()
+        for (d in st.pkgStore.storm.all<PackageDoc>()) {
+            if (isSelected(selected, d.id)) {
+                roots.add((d.organization, d.name, d.version))
+            }
+        }
+        let targetId = match (Int64.tryParse(this.targetUpstream.get())) {
+            case Some(n) => n
+            case None => 0
+        }
+        this.previewBusy.set(true)
+        this.previewNote.set("正在对比目标仓索引…")
+        let sid = ctx.getSessionId()
+        spawn { =>
+            this.previewAsync(st, sid, seq, roots, targetId)
+        }
+    }
+
+    // 组装一次对照（解析依赖 + 取目标仓索引）。**预览失败不阻断创建**，所以异常在这里
+    // 就转成提示语返回；网络只能出现在这里（render 里不能有阻塞调用）。
+    func computePreview(st: CjregState, roots: ArrayList<(String, String, String)>,
+                        targetId: Int64): (ArrayList<PlanItem>, String) {
+        let items = ArrayList<PlanItem>()
+        var hasCycle = false
+        var targetError = ""
+        var targetChosen = false
+        try {
+            let planSvc = PublishPlanService(st.pkgStore)
+            let target = if (targetId > 0) { st.upStore.getById(targetId) } else { Option<Upstream>.None }
+            targetChosen = target.isSome()
+            let proxy = st.proxySvc
+            let analysis = planSvc.analyze(roots, targetUpstream: target, fetchIndex: { up, org, name =>
+                match (proxy) {
+                    case Some(p) => p.fetchUpstreamIndex(up, org, name)
+                    case None => Option<String>.None
+                }
+            })
+            for (it in analysis.items) {
+                items.add(it)
+            }
+            hasCycle = analysis.hasCycle
+            targetError = analysis.targetError
+        } catch (e: Exception) {
+            println("[cjreg] 发布计划创建页对照失败: " + e.toString())
+            return (items, "对照失败：" + e.toString())
+        }
+        if (hasCycle) {
+            return (items, "依赖存在环：创建会被拒绝，请先解开依赖环")
+        }
+        if (targetError != "") {
+            return (items, targetError)
+        }
+        if (!targetChosen) {
+            return (items, "未选择目标上游：只展开了依赖链，选好上游后才能对照目标仓版本")
+        }
+        var need: Int64 = 0
+        var exists: Int64 = 0
+        var conflict: Int64 = 0
+        for (it in items) {
+            match (it.category) {
+                case PlanCategory.AlreadyExists => exists++
+                case PlanCategory.Conflict => conflict++
+                case _ => need++
+            }
+        }
+        var note = "共 ${items.size} 项 · 需发布 ${need}"
+        if (exists > 0) {
+            note += " · 目标仓已有 ${exists}"
+        }
+        if (conflict > 0) {
+            note += " · 冲突 ${conflict}"
+        }
+        (items, note)
+    }
+
+    func previewAsync(st: CjregState, sid: String, seq: Int64,
+                      roots: ArrayList<(String, String, String)>, targetId: Int64): Unit {
+        let (items, note) = this.computePreview(st, roots, targetId)
+        let app = match (st.app) {
+            case Some(a) => a
+            case None =>
+                this.previewBusy.set(false)
+                return
+        }
+        try {
+            let _ = app.pushUpdate(sid, { _ =>
+                // 只有仍是最新的那一次才落到界面：连点时先发后到的响应必须丢掉
+                if (this.previewSeq == seq) {
+                    this.previewRows.set(items)
+                    this.previewNote.set(note)
+                }
+                this.previewBusy.set(false)
+                PatchResult.ReRender
+            })
+        } catch (e: Exception) {
+            // 异步回调抛异常没人接：不接住界面会永远停在"对照中…"
+            println("[cjreg] 发布计划创建页对照结果推送失败: " + e.toString())
+            this.previewBusy.set(false)
+        }
+    }
+
+    // 对照预览区：逐项列「本地版本 → 目标仓版本」+ 分类，创建前就看得出
+    // 哪些其实已经发过、目标仓那边现在是哪个版本
+    func previewSection(): IComponent {
+        let out = ArrayList<IComponent>()
+        out.add(div([text("版本对照（本地 → 目标仓）")],
+            attrs: Some(HashMap<String, String>([("class", cls("picker-title"))]))))
+        if (this.previewBusy.get()) {
+            out.add(div([text("对照中…（正在取目标仓索引）")],
+                attrs: Some(HashMap<String, String>([("class", cls("picker-hint"))]))))
+        }
+        if (this.previewNote.get() != "") {
+            out.add(div([text(this.previewNote.get())],
+                attrs: Some(HashMap<String, String>([("class", cls("picker-hint"))]))))
+        }
+        let items = this.previewRows.get()
+        if (items.size == 0) {
+            if (!this.previewBusy.get()) {
+                out.add(div([text("选择包以后，这里会列出每一包的本地版本与目标仓版本")],
+                    attrs: Some(HashMap<String, String>([("class", cls("picker-empty"))]))))
+            }
+        } else {
+            let rows = ArrayList<IComponent>()
+            for (it in items) {
+                let local = packageLabel(it.org, it.name, it.version)
+                let remote = targetCompareText(it.name, it.targetVersion, it.targetCompared)
+                rows.add(div([
+                    text("${local} → 目标仓： ${remote}"),
+                    planCategoryTag(it.category, ""),
+                ], attrs: Some(HashMap<String, String>([("class", cls("picker-row"))]))))
+            }
+            out.add(div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("picker-list"))]))))
+        }
+        div(out.toArray())
     }
 
     func submitCreate(ctx: ActionContext): PatchResult {
@@ -435,7 +606,8 @@ class PublishPlanCreatePage <: Component {
         for (it in analysis.items) {
             // selected 由分类决定：目标仓已有同版本（同 sha / 不同 sha）默认不勾选
             st.adminData.addPlanItem(planId, it.pkgId, it.org, it.name, it.version, order,
-                planCategoryName(it.category), it.selected)
+                planCategoryName(it.category), it.selected,
+                targetVersion: it.targetVersion, targetCompared: it.targetCompared)
             order++
         }
         // 进度的分母 = **需要发布的项数**，不是条目总数：
@@ -465,7 +637,9 @@ class PublishPlanCreatePage <: Component {
                 .bindValue({ => this.planName.get() })
                 .rule(FormRule(required: true, message: "计划名必填"))
                 .errorSignal(this.nameError),
-            FormItem([Select(upstreamOptions.toArray()).bind(this.targetUpstream).placeholder("选择上游")]).label("目标上游")
+            FormItem([Select(upstreamOptions.toArray()).bind(this.targetUpstream)
+                .onChange({ c => this.onTargetChanged(c) })
+                .placeholder("选择上游")]).label("目标上游")
                 .bindValue({ => this.targetUpstream.get() })
                 .rule(FormRule(required: true, message: "请选择目标上游"))
                 .errorSignal(this.upstreamError),
@@ -481,6 +655,7 @@ class PublishPlanCreatePage <: Component {
                 adminCard("计划信息", [form]),
                 adminCard("选择要发布的包", [
                     div(this.pickerSections()),
+                    this.previewSection(),
                     if (this.msg.get() != "") {
                         Tag([text(this.msg.get())]).kind(ComponentKind.Success)
                     } else {
@@ -556,24 +731,14 @@ class PublishPlanDetailPage <: Component {
         }
     }
 
-    // 分类标签：把「目标仓已有」与「真需要发」区分开，别一律显示"待发布"
     // 分类标签。注意：**分类是建计划（或上次重新分析）那一刻的目标仓比对结果**，
     // 一旦本次计划真的把它推成功了，再显示「待发布」就是自相矛盾（实测用户就会问
     // "tsdb 明明发出去了，怎么还回退成待发布"）。所以按执行状态分层显示：
     //   已推送成功、在等索引 → 「已推送·等索引」
     //   已完成             → 「已发布」
+    // 文案只留这一处：详情页与创建页的对照预览共用同一个函数。
     func categoryTag(c: String, status: String): IComponent {
-        match (status) {
-            case "completed" => return Tag([text("已发布")]).kind(ComponentKind.Success)
-            case "waiting_index" => return Tag([text("已推送·等索引")]).kind(ComponentKind.Warning)
-            case _ => ()
-        }
-        match (c) {
-            case "already_exists" => Tag([text("已存在")]).kind(ComponentKind.Success)
-            case "conflict" => Tag([text("冲突")]).kind(ComponentKind.Danger)
-            case "version_optional" => Tag([text("可升版")]).kind(ComponentKind.Warning)
-            case _ => Tag([text("待发布")]).kind(ComponentKind.Primary)
-        }
+        planCategoryTag(toPlanCategory(c), status)
     }
 
     // 有没有"已推送成功、在等目标仓索引"的项
@@ -1015,7 +1180,8 @@ class PublishPlanDetailPage <: Component {
                         } else {
                             it.selected
                         }
-                        let _ = st.adminData.setPlanItemCategory(d.id, planCategoryName(it.category), sel)
+                        let _ = st.adminData.setPlanItemCategory(d.id, planCategoryName(it.category), sel,
+                            targetVersion: it.targetVersion, targetCompared: it.targetCompared)
                         updated++
                         break
                     }
@@ -1093,12 +1259,16 @@ class PublishPlanDetailPage <: Component {
         var exists: Int64 = 0
         var conflict: Int64 = 0
         var need: Int64 = 0
+        var compared: Int64 = 0
         let rows = this.itemRows.get()
         for (d in rows) {
             match (d.category) {
                 case "already_exists" => exists++
                 case "conflict" => conflict++
                 case _ => need++
+            }
+            if (d.targetCompared) {
+                compared++
             }
         }
         var s = "共 ${rows.size} 项 · 需发布 ${need}"
@@ -1107,6 +1277,11 @@ class PublishPlanDetailPage <: Component {
         }
         if (conflict > 0) {
             s += " · 冲突 ${conflict}"
+        }
+        // 整份计划都没有对照数据（老计划、或建计划时索引取不到）→ 明说怎么补齐，
+        // 否则详情里一列「未对照」会让人以为是坏了
+        if (rows.size > 0 && compared == 0) {
+            s += " · 目标仓未对照（点「重新分析」补齐）"
         }
         s
     }
@@ -1132,6 +1307,12 @@ class PublishPlanDetailPage <: Component {
             .add(TableColumn<PlanItemDoc>().label("包").accessor({ d =>
                 packageLabel(d.packageOrg, d.packageName, d.packageVersion)
             }).minWidth(230))
+            // 目标仓那一侧的版本，与「包」列并排看：`bstorm@1.4.9` 对 `bstorm@1.4.8`。
+            // 三种取值（版本 / 无此包 / 未对照）由服务端 targetCompareText 统一给出，
+            // 免得界面自己拼、和执行时的说法分叉。
+            .add(TableColumn<PlanItemDoc>().label("目标仓").width(150).accessor({ d =>
+                targetCompareText(d.packageName, d.targetVersion, d.targetCompared)
+            }).showOverflowTooltip())
             .add(TableColumn<PlanItemDoc>().label("分类").width(120).render({ d, i =>
                 this.categoryTag(d.category, d.status)
             }))
@@ -1273,6 +1454,22 @@ func toPlanCategory(s: String): PlanCategory {
         case "already_exists" => PlanCategory.AlreadyExists
         case "conflict" => PlanCategory.Conflict
         case _ => PlanCategory.NeedPublish
+    }
+}
+
+// 分类标签（详情页表格与创建页「版本对照」预览共用一份文案）。
+// status 优先：已经推送成功的项不该再显示「待发布」（那是建计划那一刻的比对结果）。
+func planCategoryTag(c: PlanCategory, status: String): IComponent {
+    match (status) {
+        case "completed" => return Tag([text("已发布")]).kind(ComponentKind.Success)
+        case "waiting_index" => return Tag([text("已推送·等索引")]).kind(ComponentKind.Warning)
+        case _ => ()
+    }
+    match (c) {
+        case PlanCategory.AlreadyExists => Tag([text("已存在")]).kind(ComponentKind.Success)
+        case PlanCategory.Conflict => Tag([text("冲突")]).kind(ComponentKind.Danger)
+        case PlanCategory.VersionOptional => Tag([text("可升版")]).kind(ComponentKind.Warning)
+        case _ => Tag([text("待发布")]).kind(ComponentKind.Primary)
     }
 }
 

@@ -1059,7 +1059,10 @@ public class AdminService {
             sb.append("{\"name\":\"${it.name}\",\"org\":\"${it.org}\",\"version\":\"${it.version}\",")
             sb.append("\"order\":${it.order},\"category\":\"${planCategoryName(it.category)}\",")
             sb.append("\"selected\":${it.selected},\"local_sha256\":\"${it.localSha256}\",")
-            sb.append("\"remote_sha256\":\"${it.remoteSha256}\",\"requirement\":\"${escapeJsonStr(it.requirement)}\"}")
+            sb.append("\"remote_sha256\":\"${it.remoteSha256}\",\"requirement\":\"${escapeJsonStr(it.requirement)}\",")
+            // 目标仓对照：`target_version` 是目标仓该包最新版本；没做成对照时它为空，
+            // 消费方必须连 `target_compared` 一起看才能区分「目标仓没有这个包」与「没查到」。
+            sb.append("\"target_version\":\"${it.targetVersion}\",\"target_compared\":${it.targetCompared}}")
         }
         sb.append("],\"hasCycle\":${analysis.hasCycle}}")
         writeJson(ctx, 200u16, sb.toString())

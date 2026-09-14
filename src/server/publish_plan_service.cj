@@ -99,6 +99,10 @@ public class PlanItem {
     public var remoteSha256: String      // 目标仓同版本 sha（空 = 目标仓没有该版本）
     public var requirement: String       // 作为依赖被纳入时，依赖方声明的版本要求
     public var localVersions: ArrayList<String>  // 本地该包的全部版本（升序）
+    // 目标仓对照的「另一边」：目标仓该包最新版本。只报一个版本号，人就够用了
+    // （`bstorm@1.4.9` 对 `bstorm@1.4.8`）——同版本/更高/没有这三种情况由分类列区分。
+    public var targetVersion: String     // 目标仓该包最新版本（空 = 目标仓没有这个包）
+    public var targetCompared: Bool      // 本次分析是否真拿到了该包的对照（false = 索引取不到/没选目标上游）
     // 目标仓能不能覆盖「已有同版本」：
     //   官方中心仓 → **不能**（同版本一律 409，发布不可逆）→ 冲突只剩"升版重发"一条路
     //   自建仓（cjreg/cjrepo）→ 看它的 permission_mode，team 模式允许覆盖 → 可手工勾选强制重传
@@ -120,8 +124,37 @@ public class PlanItem {
         this.remoteSha256 = ""
         this.requirement = ""
         this.localVersions = ArrayList<String>()
+        this.targetVersion = ""
+        this.targetCompared = false
         this.overwriteAllowed = false
     }
+}
+
+// 目标仓索引里该包的最新版本（空 map → 空串 = 目标仓没有这个包）
+public func latestVersionOf(remote: HashMap<String, String>): String {
+    var best = ""
+    for ((v, _) in remote) {
+        if (best.isEmpty() || compareVersions(v, best) > 0) {
+            best = v
+        }
+    }
+    best
+}
+
+// 目标仓对照文案（计划详情列与创建向导共用，取值口径只有这一处）：
+//   有对照且有版本   → `bstorm@1.4.8`
+//   有对照但目标仓没有该包 → `无此包`
+//   没做成对照（索引取不到 / 没选目标上游）→ `未对照`
+// 「未对照」必须与「目标仓没有这个包」分开：前者是不知道，后者是查过了确实没有，
+// 混成一种说法会让人把"没查到"当成"可以放心发"。
+public func targetCompareText(name: String, targetVersion: String, targetCompared: Bool): String {
+    if (!targetCompared) {
+        return "未对照"
+    }
+    if (targetVersion.isEmpty()) {
+        return "无此包"
+    }
+    packageLabel("", name, targetVersion)
 }
 
 // 目标仓是否允许覆盖已有同版本（官方仓明确不允许；自建仓由自身权限模式决定）
@@ -398,9 +431,15 @@ public class PublishPlanService {
             }
             it.overwriteAllowed = targetOverwritable(targetUpstream)
             let emptyRemote = HashMap<String, String>()
-            let remoteOf = match (remote.get(d.organization + "::" + d.name)) {
-                case Some(m) => m
-                case None => emptyRemote
+            var remoteOf = emptyRemote
+            let key = d.organization + "::" + d.name
+            match (remote.get(key)) {
+                case Some(m) =>
+                    // 取到了索引 = 这个包的对照做成了（哪怕索引是空的：那表示目标仓没有这个包）
+                    remoteOf = m
+                    it.targetCompared = true
+                    it.targetVersion = latestVersionOf(m)
+                case None => ()
             }
             classifyItem(it, remoteOf)
             items.add(it)
@@ -425,12 +464,7 @@ public class PublishPlanService {
                     it.selected = false
                 }
             case None =>
-                var best = ""
-                for ((v, _) in remote) {
-                    if (best.isEmpty() || compareVersions(v, best) > 0) {
-                        best = v
-                    }
-                }
+                let best = latestVersionOf(remote)
                 if (!best.isEmpty() && compareVersions(it.version, best) < 0) {
                     it.category = PlanCategory.VersionOptional
                 }

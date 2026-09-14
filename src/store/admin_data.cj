@@ -136,6 +136,11 @@ public class PlanItemDoc {
     public var status: String = "pending"  // pending/running/completed/failed
     public var selected: Bool = true
     public var error: String = ""
+    // 目标仓对照（建计划 / 重新分析时由目标仓索引填入）：目标仓该包最新版本。
+    // targetCompared=false 表示这次没做成对照（索引取不到 / 没选目标上游）——与
+    // 「查过了、目标仓确实没有这个包」（compared=true 且 version 为空）必须分开。
+    public var targetVersion: String = ""
+    public var targetCompared: Bool = false
     public var startedAt: Int64 = 0
     public var completedAt: Int64 = 0
 }
@@ -587,7 +592,10 @@ public class AdminDataStore {
     }
 
     // ---- 计划项 ----
-    public func addPlanItem(planId: Int64, packageId: Int64, org: String, name: String, version: String, order: Int64, category: String, selected: Bool): Int64 {
+    // targetVersion / targetCompared：建计划时按目标仓索引填的对照信息（默认「未对照」，
+    // 由调用方在做过对照后显式传入）
+    public func addPlanItem(planId: Int64, packageId: Int64, org: String, name: String, version: String, order: Int64, category: String, selected: Bool,
+                            targetVersion!: String = "", targetCompared!: Bool = false): Int64 {
         let d = PlanItemDoc()
         d.id = this.nextPlanItem
         this.nextPlanItem++
@@ -599,6 +607,8 @@ public class AdminDataStore {
         d.order = order
         d.category = category
         d.selected = selected
+        d.targetVersion = targetVersion
+        d.targetCompared = targetCompared
         d.startedAt = 0
         d.completedAt = 0
         this.storm.save(d)
@@ -653,12 +663,16 @@ public class AdminDataStore {
         }
     }
 
-    // 重新分类（详情页「重新分析」用）：只改分类与勾选，**不动执行状态**
-    public func setPlanItemCategory(id: Int64, category: String, selected: Bool): Bool {
+    // 重新分类（详情页「重新分析」用）：只改分类/勾选/目标仓对照，**不动执行状态**。
+    // 对照信息是必填的：重新分析一定会得到新的对照结果，留默认值等于把旧结果悄悄清掉。
+    public func setPlanItemCategory(id: Int64, category: String, selected: Bool,
+                                    targetVersion!: String, targetCompared!: Bool): Bool {
         match (this.storm.get<PlanItemDoc>(id)) {
             case Some(d) =>
                 d.category = category
                 d.selected = selected
+                d.targetVersion = targetVersion
+                d.targetCompared = targetCompared
                 this.storm.save(d)
                 return true
             case None => return false

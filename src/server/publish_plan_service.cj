@@ -393,8 +393,12 @@ public class PublishPlanService {
 
         // 递归 DFS（简化：用栈模拟）
         var stack = ArrayList<(Int64, Bool)>()  // (pkgId, processed)
-        for (r in roots) {
-            stack.add((r.id, false))
+        // 栈是 LIFO：根包**倒序**压入，弹出顺序才等于调用方给的顺序
+        // （修复前正序压入 → 相互无依赖的包在计划里的先后与选择顺序相反）
+        var rIdx = roots.size - 1
+        while (rIdx >= 0) {
+            stack.add((roots[rIdx].id, false))
+            rIdx--
         }
         while (stack.size > 0) {
             let (id, processed) = stack[stack.size - 1]
@@ -418,21 +422,39 @@ public class PublishPlanService {
             stack.add((id, true))
             // 依赖（从 indexJson 解析 dependencies）
             let doc = findDoc(all, id).getOrThrow()
+            let deps = ArrayList<PackageDoc>()
             for ((depOrg, dep, require) in parseDependencyRefs(doc.indexJson)) {
-                // 依赖按「满足声明版本要求里最新的那个」解析，并且同一包一个计划只出一个版本；
-                // 跨组织依赖（`ystyle::crc`）按前缀里的 org 找，没有前缀才跟随依赖方的 org
-                let org = if (depOrg != "") { depOrg } else { doc.organization }
-                match (this.pickDepDoc(all, org, dep, require, chosen)) {
+                // 依赖按「满足声明版本要求里最新的那个」解析，并且同一包一个计划只出一个版本。
+                // 依赖的**组织取自名字本身**：`org::name` 用前缀，不带前缀 = **无组织**模块
+                // （与 cjpm / cjdep 的「依赖名即全名」一致）。
+                //
+                // 旧实现写成「没有前缀就跟随依赖方的 org」，于是 `ystyle::holt → badgercj`
+                // 被拿去 `ystyle::` 里找 → 找不到 → **这条依赖边直接消失** → 拓扑序把 holt
+                // 排到 badgercj 前面，计划先推依赖方：目标仓先出现一个声明了尚不存在依赖的
+                // 版本（悬空依赖，publish-scope §四）。实测：holt@1.0.8（声明 badgercj 1.6.20）
+                // 被排在 badgercj@1.6.20 之前推送。
+                var picked = this.pickDepDoc(all, depOrg, dep, require, chosen)
+                if (picked.isNone() && depOrg == "" && doc.organization != "") {
+                    // 宽容兜底：历史声明里若把同组织依赖写成不带前缀，两个命名空间都试一次
+                    picked = this.pickDepDoc(all, doc.organization, dep, require, chosen)
+                }
+                match (picked) {
                     case Some(dd) =>
                         // 记下是哪个版本要求把它拉进来的（分类时判断 version_optional 用）
                         if (!requirements.contains(dd.id)) {
                             requirements[dd.id] = require
                         }
                         if (!visited.contains(dd.id)) {
-                            stack.add((dd.id, false))
+                            deps.add(dd)
                         }
                     case None => ()
                 }
+            }
+            // 栈是 LIFO：依赖倒序压入，弹出顺序才与声明顺序一致（计划里的先后可预期）
+            var di = deps.size - 1
+            while (di >= 0) {
+                stack.add((deps[di].id, false))
+                di--
             }
         }
 
@@ -831,8 +853,17 @@ func planDependencyEdges(items: ArrayList<PlanItem>, pkgStore: PackageStore): Ha
         match (pkgStore.getById(it.pkgId)) {
             case Some(doc) =>
                 for ((depOrg, depName, _) in parseDependencyRefs(doc.indexJson)) {
-                    let org = if (depOrg != "") { depOrg } else { doc.organization }
-                    match (key2id.get(org + "::" + depName)) {
+                    // 依赖名即全名（与 analyze 的拓扑排序同一判据）：不带前缀 = 无组织模块；
+                    // 找不到再按「同组织不写前缀」的历史写法兜底一次。
+                    //
+                    // 少了这一段，`ystyle::holt → badgercj` 被解析成 `ystyle::badgercj`，
+                    // 计划内查不到 → 这条边不存在 → **「依赖未就绪就别发」的门对它失效**：
+                    // 依赖方会在依赖尚未出现在目标仓时被推出去（悬空依赖）。
+                    var hit = key2id.get(depOrg + "::" + depName)
+                    if (hit.isNone() && depOrg == "" && doc.organization != "") {
+                        hit = key2id.get(doc.organization + "::" + depName)
+                    }
+                    match (hit) {
                         case Some(id) => if (id != it.pkgId && !deps.contains(id)) {
                             deps.add(id)
                         }

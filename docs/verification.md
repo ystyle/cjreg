@@ -37,7 +37,7 @@
 eval "$(cjvs env zsh)" && eval "$(cjvs stdx-env zsh)"
 cd cjreg && cjpm build -j 16
 
-# 1) 单元测试（153 用例）
+# 1) 单元测试（179 用例）
 cjpm test -j 16 --no-progress
 
 # 2) 覆盖率报告（HTML 输出到 .smoke/coverage）
@@ -63,14 +63,17 @@ EOF
 
 ## 3. 逐项结果与证据
 
-### 3.1 单元测试（154 用例全绿）
+### 3.1 单元测试（179 用例全绿）
 
 ```text
 $ cjpm test -j 16 --no-progress
-Summary: TOTAL: 154
-    PASSED: 154, SKIPPED: 0, ERROR: 0
+Summary: TOTAL: 179
+    PASSED: 179, SKIPPED: 0, ERROR: 0
     FAILED: 0
 ```
+
+> 测试包按 `cjpm -j 16` 并行分发到多个进程，每个包内共享同一 GC 堆；
+> 内存态 Storm 的回收约定见 §4.7（`test_stores_test.cj`）。
 
 覆盖模块：`protocol`（官方二进制格式、URL 分片）、`semver_range`（区间匹配/版本比较）、`index`（NDJSON 生成与兼容解析）、
 `store`（bstorm 文档、持久化、自增 id 恢复）、`auth`（pbkdf2、token、生命周期、多管理员约束）、
@@ -84,24 +87,25 @@ bstorm 重启 reindex、二进制制品不可走 UTF-8 文本流等 5 个兼容�
 
 ```text
 $ cjcov --root=./ -o .smoke/coverage --html-details -i "$PWD/src" -e "*_test.cj"
-Files: 35   Lines: 2368 / 6033   Coverage: 39.3 %
+Files: 41   Lines: 3124 / 7596   Coverage: 41.1 %
 ```
 
-按包（文件行覆盖率均值）：
+按包（行覆盖率 = 包内命中行 / 包内总行，**加权**，不是文件均值）：
 
 | 包 | 覆盖率 | 说明 |
 |---|---|---|
-| `protocol` | 97.3% | 官方格式解析（纯逻辑，充分单测） |
-| `auth` | 95.5% | 认证/授权/多管理员约束 |
-| `config` | 94.9% | 配置与上游表 |
-| `index` | 94.2% | NDJSON 生成/解析 |
-| `semver_range` | 90.2% | 版本区间 |
-| `store` | 85.1% | bstorm 存取/持久化 |
-| `server` | 72.6% | 逻辑层高（`publish_service` 92.3%、`user_service` 98.8%）；HTTP handler 层低（`admin_handler` 15.1%、`proxy_service` 37.9%），由 e2e 覆盖 |
-| `ui` | 50.5% | 门户页 73.4%、文档 51.1%；公开页/布局主要靠浏览器冒烟 |
+| `protocol` | 94.9% | 官方二进制格式、URL 分片（纯逻辑，充分单测） |
+| `config` | 94.4% | 配置解析/优先级、上游表 |
+| `auth` | 92.5% | 认证/授权/多管理员约束 |
+| `index` | 88.3% | NDJSON 生成与兼容解析 |
+| `semver_range` | 86.7% | 版本区间与比较 |
+| `store` | 85.2% | bstorm 文档存取/持久化（`upstream_store` 17.7% 拉低，其余 88–93%） |
+| `server` | 50.5% | 逻辑层高（`user_service` 98.8%、`public_service` 96.6%、`publish_service` 92.3%、`org_service` 88.1%）；handler 与装配层低（`admin_handler` 7.5%，`public_handler`/`user_handler`/`server.cj` 0%），由 e2e 覆盖 |
+| `ui` | 10.5% | 门户读模型 `pages_user` 73.4%、文档 51.1%；管理页/公开页/登录/布局（0–5%）是 cjxt WS 渲染适配层，靠 e2e + 浏览器冒烟覆盖 |
+| `main.cj`（根包） | 0% | 命令装配与进程入口（init/serve/admin），不适合单测 |
 
-> 说明：整体 39.3% 的分母含 UI 页面与 HTTP handler（这些以 e2e 与浏览器验证为主）。
-> 单纯逻辑层（protocol/index/semver_range/store/auth/config）行覆盖率 **85%–97%**。
+> 说明：整体 41.1% 的分母含 UI 页面与 HTTP handler/装配层（这些以 e2e 与浏览器验证为主）。
+> 单纯逻辑层（`protocol`/`config`/`auth`/`index`/`semver_range`/`store`）行覆盖率 **85%–95%**。
 > 提升空间：为 `admin_handler` 补 handler 级测试、为公开页补 `serializeSubtree` 渲染测试（已有先例，低成本）。
 
 ### 3.3 双仓发布计划 e2e（`tests/e2e.sh`）
@@ -223,6 +227,28 @@ $ bash tests/e2e.sh
 - **修复**：接口方法更名 `has(sha256)`（并加注释说明该陷阱），调用点同步更新。
 - **回归**：修复后 `tests/e2e.sh` 8 步全绿（含第 8 步三级删除）；单测 175/175。
 - **教训**：与标准库同名的成员方法要警惕「体里裸调用」的解析结果；本地预热过的构建会掩盖依赖下载路径的缺陷。
+
+### 4.7 测试里内存态 Storm 不回收 → CI 覆盖率构建 `OutOfMemoryError`（`Segment::init`）
+
+- **现象**：master 提交在 GitHub CI 上 `Unit tests` 通过、`Coverage report`（`cjpm test --coverage`）失败：
+  server 包 70 个用例里 18 个 `ERROR`，`REASON: An exception has occurred:OutOfMemoryError`，
+  栈顶为 `badgercj.skiplist.Segment::init`（→ `AtomicStorage::addSegment` → `MemTable::init` → `Badger::open`
+  → `bstorm.Storm::inMemory`），即「再开一个内存态库」时堆分配失败。
+- **复现**（本地确定性复现，比 CI 更严格）：`cjHeapSize=128MB cjpm test --coverage -j 16 --no-progress`
+  → `ystyle::cjreg.server` 包 70 例中 18 例 OOM（默认堆 256 MB 时 CI 上偶发命中；覆盖率插桩放大分配量）。
+- **根因**：每个 `Storm.inMemory()` 打开即预分配一个 skiplist Segment —— 8192 个 `AtomicUInt64` +
+  8192 × `MAX_HEIGHT`(20) 个 `AtomicUInt32`，约 **17 万个对象、含 1.3 MB 连续数组**；且 Badger 的写入/flush
+  后台线程会一直持有实例引用，**不显式 `close()` 就既回收不了内存，也持续占着大对象空间**。
+  server 包测试共 13 处夹具（store 包 5 处、ui 包 1 处），全部只建不关 → 覆盖率插桩构建下触顶。
+- **修复**：新增包内测试夹具（`src/server|store|ui/test_stores_test.cj`）统一管理内存态库的生命周期：
+  `beginTestStores()` 关闭上一代、`testStorm()` 新建并登记；夹具工厂开头调用一次 `beginTestStores()`，
+  需要同时存活两个库的用例（用户表 + 包表）只调用一次、随后多次 `testStorm()`。
+  同时把 `testPublishUnauthorized` 改为三条断言共用一个夹具（原先第二次建夹具后仍使用第一个夹具的
+  `PublishService`，与「关掉上一代」互斥）。
+- **回归**：`cjHeapSize=128MB cjpm test --coverage -j 16 --no-progress` → **179/179 全绿**（修复前同一命令 18 例 OOM）；
+  默认堆下 `cjpm test` 179/179、`tests/e2e.sh` 9 步全绿。CI 未提高堆上限——测试在默认 256 MB 下留有 2 倍余量。
+- **教训**：`Storm.inMemory()` 在测试里也必须配对 `close()`（内存态不等于「GC 会收」）；
+  多个用例共用一个进程的测试包，夹具泄漏会累积成与业务无关的 OOM。
 
 
 

@@ -6,7 +6,8 @@ import std.unittest.testmacro.*
 import std.collection.*
 
 func makeStore(): PackageStore {
-    let storm = Storm.inMemory()
+    beginTestStores()
+    let storm = testStorm()
     PackageStore(storm)
 }
 

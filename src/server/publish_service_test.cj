@@ -30,8 +30,10 @@ func toByteArray(list: ArrayList<Byte>): Array<Byte> {
     list.toArray()
 }
 
+// 单库夹具：开新一代内存态库（关掉上一代的，见 test_stores_test.cj）
 func makeStore(): PackageStore {
-    PackageStore(Storm.inMemory())
+    beginTestStores()
+    PackageStore(testStorm())
 }
 
 func makePublishService(): PublishService {
@@ -251,7 +253,8 @@ func makePublishServiceAuth(): (PublishService, String, AuthService) {
 
 @Test
 func testPublishUnauthorized() {
-    let (svc, _, _) = makePublishServiceAuth()
+    // 三条断言共用同一夹具：夹具工厂会关掉上一代内存态库（见 test_stores_test.cj）
+    let (svc, _, authSvc) = makePublishServiceAuth()
     let body = makePublishBodyConsistent("test", "demo", "1.0.0")
     // 缺失 token → 401
     let r1 = svc.publish("test", "demo", body, "")
@@ -259,8 +262,7 @@ func testPublishUnauthorized() {
     // 无效 token → 401
     let r2 = svc.publish("test", "demo", body, "publish-fake")
     @Expect(r2.outcome == PublishOutcome.Unauthorized, true)
-    // session token 不能发布
-    let (_, _, authSvc) = makePublishServiceAuth()
+    // session token（登录令牌）不能用于发布
     let (_, sess) = authSvc.login("admin", "AdminPass1").getOrThrow()
     let r3 = svc.publish("test", "demo", body, sess.token)
     @Expect(r3.outcome == PublishOutcome.Unauthorized, true)
@@ -280,15 +282,17 @@ func testPublishAuthorizedStoresPublisher() {
     @Expect(versions[0].description, "demo package")
 }
 
-// 带权限模型的发布服务（共享 storm：用户表 + 团队/组织数据）
+// 带权限模型的发布服务（共享 storm：用户表 + 团队/组织数据；包表另开一个库，
+// 两者属于同一代测试库，由 beginTestStores() 一起回收，见 test_stores_test.cj）
 func makePublishServicePerm(): (PublishService, AuthService, AdminDataStore, String) {
     PasswordHash.ITERATIONS = 1000  // 测试提速
-    let storm = Storm.inMemory()
+    beginTestStores()
+    let storm = testStorm()
     let userStore = BstormUserStore(storm)
     let authSvc = AuthService(userStore, 3600)
     let admin = authSvc.initAdmin("admin", "AdminPass1").getOrThrow()
     let adminData = AdminDataStore(storm)
-    let svc = PublishService(makeStore(), MemoryBlobStore(),
+    let svc = PublishService(PackageStore(testStorm()), MemoryBlobStore(),
         auth: Some(authSvc), adminData: Some(adminData), permissionMode: "team")
     (svc, authSvc, adminData, admin.publishToken)
 }
@@ -579,12 +583,13 @@ func testPackageOwnerIsFirstPublisherOnly() {
 func testPublishOpenModeAllowsNonTeamUser() {
     // 默认 open 模式：小企业内部先用着——有效 token 即可发布（无需团队授权）
     PasswordHash.ITERATIONS = 1000
-    let storm = Storm.inMemory()
+    beginTestStores()
+    let storm = testStorm()
     let userStore = BstormUserStore(storm)
     let authSvc = AuthService(userStore, 3600)
     let u = authSvc.createUser("eve", "eve12345", false).getOrThrow()
     let adminData = AdminDataStore(storm)
-    let svc = PublishService(makeStore(), MemoryBlobStore(),
+    let svc = PublishService(PackageStore(testStorm()), MemoryBlobStore(),
         auth: Some(authSvc), adminData: Some(adminData))  // 默认 permissionMode=open
     let body = makePublishBodyConsistent("test", "demo", "1.0.0")
     let r = svc.publish("test", "demo", body, u.publishToken)

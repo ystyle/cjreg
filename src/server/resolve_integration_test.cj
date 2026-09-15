@@ -10,7 +10,8 @@ import std.fs.*
 
 @Test
 func testResolveWithMultilineCache() {
-    let pkgStore = PackageStore(Storm.inMemory())
+    beginTestStores()
+    let pkgStore = PackageStore(testStorm())
     let blob = MemoryBlobStore()
     let upStore = MemoryUpstreamStore()
     let ups = UpstreamService(upStore)

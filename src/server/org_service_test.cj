@@ -7,7 +7,8 @@ import std.unittest.testmacro.*
 import std.collection.*
 
 func makeOrgFixture(): (PackageStore, AdminDataStore) {
-    let storm = Storm.inMemory()
+    beginTestStores()
+    let storm = testStorm()
     (PackageStore(storm), AdminDataStore(storm))
 }
 

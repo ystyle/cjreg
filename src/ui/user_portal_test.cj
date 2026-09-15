@@ -21,7 +21,8 @@ func makePortalState(mode: String, publicUrl!: String = "http://localhost:8060",
     cfg.port = port
     cfg.permissionMode = mode
     PasswordHash.ITERATIONS = 1000  // 测试提速
-    let storm = Storm.inMemory()
+    beginTestStores()
+    let storm = testStorm()
     let pkgStore = PackageStore(storm)
     let userStore = BstormUserStore(storm)
     let upStore = BstormUpstreamStore(storm)

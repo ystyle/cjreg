@@ -7,7 +7,8 @@ import std.unittest.testmacro.*
 import std.collection.*
 
 func makeLifecycleFixture(): (PackageStore, AdminDataStore, MemoryBlobStore) {
-    let storm = Storm.inMemory()
+    beginTestStores()
+    let storm = testStorm()
     let store = PackageStore(storm)
     let adminData = AdminDataStore(storm)
     let blobs = MemoryBlobStore()

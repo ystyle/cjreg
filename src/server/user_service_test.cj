@@ -11,7 +11,8 @@ import std.unittest.testmacro.*
 
 func makePortalFixture(): (PackageStore, AuthService, AdminDataStore) {
     PasswordHash.ITERATIONS = 1000  // 测试提速
-    let storm = Storm.inMemory()
+    beginTestStores()
+    let storm = testStorm()
     let pkgStore = PackageStore(storm)
     let userStore = BstormUserStore(storm)
     let authSvc = AuthService(userStore, 3600)

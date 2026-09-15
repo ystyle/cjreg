@@ -14,7 +14,8 @@ func makeUpstreamService(): UpstreamService {
 }
 
 func makeProxyService(): (ProxyService, PackageStore, MemoryBlobStore, UpstreamService) {
-    let pkgStore = PackageStore(Storm.inMemory())
+    beginTestStores()
+    let pkgStore = PackageStore(testStorm())
     let blob = MemoryBlobStore()
     let ups = makeUpstreamService()
     ups.add("official", "https://pkg.cangjie-lang.cn/registry", 0, "", 0)

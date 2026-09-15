@@ -32,10 +32,11 @@ func makePublicUser(id: Int64, name: String, isAdmin: Bool): User {
     User(id, name, "hash-${name}", isAdmin, true, "tok-${name}")
 }
 
-// 单 Storm 共享（与 main.cj 一致：PackageStore/AdminDataStore 同库）——每个 Storm 都会分配
-// skiplist arena，测试里多开实例会撞 GC 堆上限（默认 256MB）导致 OutOfMemoryError
+// 单 Storm 共享（与 main.cj 一致：PackageStore/AdminDataStore 同库）——内存态 Storm 很重，
+// 多开实例会撞 GC 堆上限导致 OutOfMemoryError（见 test_stores_test.cj 的统一回收机制）
 func makePublicFixture(): (PackageStore, AdminDataStore) {
-    let storm = Storm.inMemory()
+    beginTestStores()
+    let storm = testStorm()
     let store = PackageStore(storm)
     let adminData = AdminDataStore(storm)
     // test 组织：demo 两个版本（1.0.0 旧 / 1.1.0 新）+ util 一个版本；other 组织：tool

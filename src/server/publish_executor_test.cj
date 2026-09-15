@@ -44,7 +44,8 @@ func testBuildPackagePublishURL() {
 
 @Test
 func testExecuteSortsByOrder() {
-    let store = PackageStore(Storm.inMemory())
+    beginTestStores()
+    let store = PackageStore(testStorm())
     let blob = MemoryBlobStore()
     let executor = PublishExecutor(store, blob)
 
@@ -70,7 +71,8 @@ func testExecuteSortsByOrder() {
 
 @Test
 func testExecuteMissingArtifact() {
-    let store = PackageStore(Storm.inMemory())
+    beginTestStores()
+    let store = PackageStore(testStorm())
     let blob = MemoryBlobStore()
     let executor = PublishExecutor(store, blob)
     // 发布但不存 blob → 制品缺失

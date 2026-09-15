@@ -18,6 +18,25 @@
 - 测试：`org_service_test.cj` 4 组（名称校验与 JSON 形状、创建与默认唯一化、改名与更新守卫、删除守卫与统计）；
   `tests/e2e.sh` 第 9 步（创建/重名/非法名/列表/详情/更新/改名守卫/删除守卫/重复删除/公开列表一致/审计）
 
+### Added — GitHub 镜像手动同步脚本
+
+- `scripts/sync-github.sh`：把 AtomGit 主仓库的 `master` 与 tag 手动同步到 GitHub 镜像。
+  背景是推送镜像实测会长时间停滞（曾 90 分钟不推进）且不镜像 tag，导致 master 上的提交在
+  GitHub 侧缺失、CI / 文档站 / Release 都不触发。脚本幂等、只快进、绝不 force（不覆盖已发布 tag），
+  也支持 `bash scripts/sync-github.sh v0.1.0` 只同步指定 tag；`docs/RELEASE.md` 增补对应排查条目
+
+### Fixed — 测试用内存态 Storm 不回收导致 CI 覆盖率构建 OOM
+
+- GitHub CI 的 `Coverage report` 步骤（`cjpm test --coverage`）在 server 包出现 18 例
+  `OutOfMemoryError`（`badgercj.skiplist.Segment::init`）：每个 `Storm.inMemory()` 打开即预分配
+  ~17 万个原子对象（含 1.3 MB 连续数组），且后台线程持有实例引用，不 `close()` 既回收不了内存、
+  又持续占着大对象空间；server/store/ui 三个测试包共 19 处夹具只建不关
+- 新增包内夹具 `src/{server,store,ui}/test_stores_test.cj`：`beginTestStores()` 关闭上一代、
+  `testStorm()` 新建并登记；夹具工厂开头统一调用。`testPublishUnauthorized` 改为三条断言共用一个夹具
+- 回归：`cjHeapSize=128MB cjpm test --coverage -j 16 --no-progress` → **179/179 全绿**
+  （修复前同一命令 18 例 OOM）；默认堆下单测 179/179、`tests/e2e.sh` 9 步全绿
+- 详见 `docs/verification.md` §4.7（含复现命令与结论）
+
 ### 计划中
 
 - **发布链路流式化**（大包稳定 + 内存 O(1)）：当前 `POST /pkg` 整包读入内存（峰值 ≈ 包体 2–3 倍），

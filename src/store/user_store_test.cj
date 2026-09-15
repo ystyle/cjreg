@@ -9,7 +9,8 @@ import std.unittest.testmacro.*
 import std.collection.*
 
 func makeUserStore(): BstormUserStore {
-    BstormUserStore(Storm.inMemory())
+    beginTestStores()
+    BstormUserStore(testStorm())
 }
 
 func makeService(store: UserStore): AuthService {
@@ -92,7 +93,8 @@ func testMutationsPersistToStore() {
     // MemoryUserStore 因引用共享恰好生效，Bstorm 的 getUser 返回副本，
     // 不 saveUser 时重新查询仍是旧值。
     PasswordHash.ITERATIONS = 1000  // 测试提速
-    let storm = Storm.inMemory()
+    beginTestStores()
+    let storm = testStorm()
     let store = BstormUserStore(storm)
     let svc = AuthService(store, 3600)
     let _ = svc.initAdmin("admin", "AdminPass1")
@@ -120,7 +122,8 @@ func testMutationsPersistToStore() {
 @Test
 func testChangePasswordBstormVerify() {
     PasswordHash.ITERATIONS = 1000  // 测试提速
-    let storm = Storm.inMemory()
+    beginTestStores()
+    let storm = testStorm()
     let store = BstormUserStore(storm)
     let svc = AuthService(store, 3600)
     let _ = svc.initAdmin("admin", "AdminPass1")

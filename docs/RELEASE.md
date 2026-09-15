@@ -28,7 +28,13 @@ grep -n "CJREG_SERVER_VERSION" src/server/public_service.cj
 git checkout master
 git tag -a v0.2.0 -m "v0.2.0"
 git push origin v0.2.0        # AtomGit（主仓库）
+
+# 若 AtomGit→GitHub 镜像未在几分钟内推进（实测会长时间停滞），手动兜底：
+bash scripts/sync-github.sh v0.2.0   # 顺带把 master 也快进过去
 ```
+
+`scripts/sync-github.sh` 是幂等的：本地与镜像一致时只做校验并输出 `up-to-date`，
+只快进、绝不 force，因此不会覆盖已发布的 tag。不带参数时同步 `master` + 所有 `v*` tag。
 
 GitHub 镜像同步到该 tag 后，`Release` 工作流自动执行：
 
@@ -53,7 +59,8 @@ docker pull ghcr.io/ystyle/cjreg:v0.2.0 && docker run --rm ghcr.io/ystyle/cjreg:
 
 | 现象 | 原因 / 处理 |
 |---|---|
-| tag 推了但工作流没跑 | tag 未同步到 GitHub：检查 AtomGit→GitHub 的 tag 同步；必要时在 GitHub 侧补推同一个 tag（`git push github v0.2.0`），tag 名保持一致即可 |
+| tag 推了但工作流没跑 | tag 未同步到 GitHub：检查 AtomGit→GitHub 的 tag 同步；必要时在 GitHub 侧补推同一个 tag（`bash scripts/sync-github.sh v0.2.0`），tag 名保持一致即可 |
+| **push 到 AtomGit 成功，但 GitHub 侧迟迟不出现该提交、CI 不跑** | AtomGit→GitHub 的推送镜像停滞（实测出现过 90 分钟不推进，且**不镜像 tag**）。手动兜底：`bash scripts/sync-github.sh`（同步 master + 全部 tag），随后 `gh run list -R ystyle/cjreg -L 5` 应能看到新提交触发的 run |
 | `Release` 报 `fail_on_unmatched_files` | 构建产物路径变化：确认 `cjreg/dist/*` 有文件（工作流里 `ls -lh dist` 的步骤会打印） |
 | 镜像推 403 | 仓库 Settings → Actions → General 的 Workflow permissions 需要 Read and write，job 里已声明 `packages: write` |
 | `GET /api/stats` 版本号不对 | 忘了改 `CJREG_SERVER_VERSION`（见 §1） |

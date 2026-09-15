@@ -20,7 +20,7 @@
   "tomlcj" = "1.0.0"
   "semver" = "0.0.3"
   "pbkdf2" = "1.0.0"
-  "tang" = { path = "../tang" }
+  "tang" = "1.0.5"
   "bstorm" = "1.4.9"
   "graph" = "1.0.1"
   "gjson" = "1.2.2"

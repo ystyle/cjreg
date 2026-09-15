@@ -839,7 +839,20 @@ class PublishPlanDetailPage <: Component {
     //                     未执行的项保持未推送（下次点「继续执行」从这里接上）
     //   409            → 目标仓已有同版本不同制品 → 该项跳过（不是失败），继续下一项
     //   >=500 / 网络   → 执行器内部退避重试，仍失败才判该项失败
+    // 执行线程入口：登记解除放在 finally —— 任何出口（提前 return、Exception、
+    // 系统级 Error）都必须解登记。少解一次，这个计划在界面上就永远显示「执行中」，
+    // 「重新分析/继续执行」这类按钮再也回不来（执行期间的按钮是受 planRunIds 控制的）。
     func runExecution(st: CjregState, sid: String, items: ArrayList<PlanItem>, docIds: HashMap<Int64, Int64>, up: Upstream, pollTimeoutSec: Int64): Unit {
+        try {
+            this.runExecutionInner(st, sid, items, docIds, up, pollTimeoutSec)
+        } finally {
+            removePlanId(st, this.planId, false)
+            removePlanId(st, this.planId, true)
+            st.planBusy.set(false)
+        }
+    }
+
+    func runExecutionInner(st: CjregState, sid: String, items: ArrayList<PlanItem>, docIds: HashMap<Int64, Int64>, up: Upstream, pollTimeoutSec: Int64): Unit {
         // 执行期间登记在 planRunIds 里（界面据此判断"真的在跑"）。**所有出口都要注销**，
         // 否则计划会永远显示「执行中」——实测踩过：收口回调一抛就是这种下场。
         let app = match (st.app) {
@@ -907,6 +920,12 @@ class PublishPlanDetailPage <: Component {
             println("[cjreg] 发布计划执行异常（plan ${this.planId}）: " + e.toString())
             report.failed++
             report.errors.add("执行线程异常：${e.toString()}")
+        } catch (e: Error) {
+            // 系统级错误（OOM 等）不是 Exception 子类，之前会直接逃逸：收口不执行、
+            // 计划状态留在 running（登记由 runExecution 的 finally 兜住）。这里同样收口。
+            println("[cjreg] 发布计划执行系统级错误（plan ${this.planId}）: " + e.toString())
+            report.failed++
+            report.errors.add("执行线程系统级错误：${e.toString()}")
         }
         // 收口：中止或"有项在等目标仓索引" → paused（可续跑）；否则按成败收。
         // 等索引不算失败：内容已经推上去了，只是目标仓还没同步出来（中心仓同步慢或审核没过）。
@@ -1121,6 +1140,22 @@ class PublishPlanDetailPage <: Component {
     // **必须异步**：对比要逐包去目标仓取索引（真网络，实测 6 个包数秒到十几秒），
     // 同步做完的话界面一直停在旧状态，用户以为点了没反应。所以这里只置"分析中"，
     // 把活儿丢给线程，干完 pushUpdate 回来。
+    // 重新分析按钮（**执行中也显示**）。
+    //
+    // 以前写成 `if (!executing)` 包住，而 `executing` 是进程级执行登记（planRunIds）：
+    // 「所有项都推完、只差最后一个在等索引」以及「执行线程没来得及收口」时它一直为真，
+    // 按钮就永远不见了 —— 计划看着已经全部完成，却怎么都点不到重新分析。
+    // 重新分析只写派生数据（order / 分类 / 补齐依赖），不动执行记录，与正在跑的线程
+    // 不冲突：跑着的线程用的是它自己那份条目快照。
+    func reanalyzeButton(): IComponent {
+        let analyzing = this.analyzing.get()
+        let btn = Button([text(if (analyzing) { "分析中…" } else { "重新分析" })])
+        if (analyzing) {
+            btn.loading()
+        }
+        btn.onClick(reanalyze)
+    }
+
     func reanalyze(ctx: ActionContext): PatchResult {
         let st = match (this.state) {
             case Some(x) => x
@@ -1409,18 +1444,7 @@ class PublishPlanDetailPage <: Component {
                         },
                         div([
                             Button([text("返回列表")]).onClick(backHandler),
-                            // 重新分类：按目标仓索引重跑对比（目标仓可能刚同步完；
-                            // 老计划也可能是在"目标仓对比"上线前建的，分类是旧的）
-                            if (!executing) {
-                                let analyzing = this.analyzing.get()
-                                let btn = Button([text(if (analyzing) { "分析中…" } else { "重新分析" })])
-                                if (analyzing) {
-                                    btn.loading()
-                                }
-                                btn.onClick(reanalyze)
-                            } else {
-                                div()
-                            },
+                            this.reanalyzeButton(),
                             if (canStart) {
                                 Button([text(if (resuming) { "继续执行（跳过已完成项）" } else { "开始执行" })])
                                     .kind(ButtonKind.Primary).onClick(doStart)

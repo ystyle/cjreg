@@ -4,6 +4,7 @@ package ystyle::cjreg.server
 
 import ystyle::cjreg.index.*
 import ystyle::cjreg.store.*
+import graph.*
 import ystyle::cjreg.config.*
 import ystyle::cjreg.semver_range.*
 import stdx.encoding.json.stream.*
@@ -382,57 +383,46 @@ public class PublishPlanService {
             return PlanAnalysis(ArrayList<PlanItem>(), false, false, "")
         }
 
-        // 3. 依赖图（从 indexJson 解析依赖名）→ 拓扑排序（后序 DFS）
-        var visited = HashSet<Int64>()
-        var inStack = HashSet<Int64>()
-        var order = ArrayList<PackageDoc>()
-        var hasCycle = false
-        var stackTrace = ArrayList<Int64>()
+        // 3. 依赖图 + 拓扑排序：用 graph-cj（与 cjdep 同一个实现），不再手写 DFS。
+        //
+        // 手写版本踩过两次（都是只有自己实现才会有的毛病）：
+        //   ① 依赖边解析按"跟随依赖方的 org"→ `ystyle::holt → badgercj` 的边消失，
+        //      拓扑序把 holt 排到 badgercj 前面（先发依赖方 = 目标仓悬空依赖）；
+        //   ② 显式栈是 LIFO，根包/依赖的弹出顺序与输入相反。
+        // graph-cj 的 stableTopologicalSort 保证「依赖先于依赖方」，同层按传入的
+        // less 比较器有序（这里用完整名字典序），环由 GraphError + SCC 统一报出。
+        let byKey = HashMap<String, PackageDoc>()
+        let nodeKeys = ArrayList<String>()        // 插入序（有环时兜底列出用）
+        let g = Graph<String, PackageDoc>({ d: PackageDoc => dependencyNodeKey(d) }, [directed()])
         // docId → 把它拉进来的依赖方版本要求（根包没有要求）
         let requirements = HashMap<Int64, String>()
+        // 依赖边先记下来，等所有节点都进图再加（addEdge 要求两端顶点已存在）
+        let pendingEdges = ArrayList<(String, String)>()   // (依赖, 依赖方)
 
-        // 递归 DFS（简化：用栈模拟）
-        var stack = ArrayList<(Int64, Bool)>()  // (pkgId, processed)
-        // 栈是 LIFO：根包**倒序**压入，弹出顺序才等于调用方给的顺序
-        // （修复前正序压入 → 相互无依赖的包在计划里的先后与选择顺序相反）
-        var rIdx = roots.size - 1
-        while (rIdx >= 0) {
-            stack.add((roots[rIdx].id, false))
-            rIdx--
+        // 从根包出发按依赖展开；pickDepDoc 内部把「本计划选中的版本」记进 chosen，
+        // 保证同一个包在一个计划里只出一个版本
+        let queue = ArrayList<PackageDoc>()
+        for (r in roots) {
+            queue.add(r)
         }
-        while (stack.size > 0) {
-            let (id, processed) = stack[stack.size - 1]
-            stack.remove(stack.size - 1..stack.size)
-            if (processed) {
-                if (!orderContains(order, id)) {
-                    order.add(findDoc(all, id).getOrThrow())
-                }
-                inStack.remove(id)
+        var qi = 0
+        while (qi < queue.size) {
+            let doc = queue[qi]
+            qi++
+            let key = dependencyNodeKey(doc)
+            if (byKey.contains(key)) {
                 continue
             }
-            if (visited.contains(id)) {
-                continue
-            }
-            if (inStack.contains(id)) {
-                hasCycle = true
-                continue
-            }
-            visited.add(id)
-            inStack.add(id)
-            stack.add((id, true))
-            // 依赖（从 indexJson 解析 dependencies）
-            let doc = findDoc(all, id).getOrThrow()
-            let deps = ArrayList<PackageDoc>()
+            byKey[key] = doc
+            nodeKeys.add(key)
+            g.addVertex(doc, [])
             for ((depOrg, dep, require) in parseDependencyRefs(doc.indexJson)) {
-                // 依赖按「满足声明版本要求里最新的那个」解析，并且同一包一个计划只出一个版本。
                 // 依赖的**组织取自名字本身**：`org::name` 用前缀，不带前缀 = **无组织**模块
                 // （与 cjpm / cjdep 的「依赖名即全名」一致）。
                 //
                 // 旧实现写成「没有前缀就跟随依赖方的 org」，于是 `ystyle::holt → badgercj`
                 // 被拿去 `ystyle::` 里找 → 找不到 → **这条依赖边直接消失** → 拓扑序把 holt
-                // 排到 badgercj 前面，计划先推依赖方：目标仓先出现一个声明了尚不存在依赖的
-                // 版本（悬空依赖，publish-scope §四）。实测：holt@1.0.8（声明 badgercj 1.6.20）
-                // 被排在 badgercj@1.6.20 之前推送。
+                // 排到 badgercj 前面，计划先推依赖方（悬空依赖，publish-scope §四）。
                 var picked = this.pickDepDoc(all, depOrg, dep, require, chosen)
                 if (picked.isNone() && depOrg == "" && doc.organization != "") {
                     // 宽容兜底：历史声明里若把同组织依赖写成不带前缀，两个命名空间都试一次
@@ -444,17 +434,44 @@ public class PublishPlanService {
                         if (!requirements.contains(dd.id)) {
                             requirements[dd.id] = require
                         }
-                        if (!visited.contains(dd.id)) {
-                            deps.add(dd)
+                        pendingEdges.add((dependencyNodeKey(dd), key))
+                        if (!byKey.contains(dependencyNodeKey(dd))) {
+                            queue.add(dd)
                         }
                     case None => ()
                 }
             }
-            // 栈是 LIFO：依赖倒序压入，弹出顺序才与声明顺序一致（计划里的先后可预期）
-            var di = deps.size - 1
-            while (di >= 0) {
-                stack.add((deps[di].id, false))
-                di--
+        }
+        for ((from, to) in pendingEdges) {
+            if (from == to) {
+                continue   // 自依赖：不进图，避免制造环
+            }
+            try {
+                g.addEdge(from, to, [])
+            } catch (e: Exception) {
+                // 加边失败 = 依赖边丢失 → 顺序可能把被依赖包排到依赖方之后
+                eprintln("[cjreg] 发布计划：加依赖边失败（${from} -> ${to}）：" + e.toString())
+            }
+        }
+
+        var order = ArrayList<PackageDoc>()
+        var hasCycle = false
+        try {
+            for (k in g.stableTopologicalSort({ a: String, b: String => a < b })) {
+                match (byKey.get(k)) {
+                    case Some(d) => order.add(d)
+                    case None => ()
+                }
+            }
+        } catch (e: GraphError) {
+            // 有环：与 cjdep 一致 —— 标记 hasCycle（创建向导会直接拒绝建计划），
+            // 节点按插入序列出（此时没有可信顺序）
+            hasCycle = true
+            for (k in nodeKeys) {
+                match (byKey.get(k)) {
+                    case Some(d) => order.add(d)
+                    case None => ()
+                }
             }
         }
 
@@ -646,14 +663,6 @@ public class PublishPlanService {
         return None
     }
 
-    func orderContains(order: ArrayList<PackageDoc>, id: Int64): Bool {
-        for (d in order) {
-            if (d.id == id) {
-                return true
-            }
-        }
-        return false
-    }
 }
 
 // 从 analyze 请求体解析 packages 列表 [{organization,name,version}]
@@ -769,6 +778,15 @@ public class ExecuteReport {
     public var errors: ArrayList<String> = ArrayList<String>()
 }
 
+// 依赖图节点键 = 包的完整名（与 cjpm / cjdep 口径一致：有组织才带 `org::` 前缀）。
+// 拓扑排序的同层顺序按它做字典序，保证计划顺序稳定可复现。
+public func dependencyNodeKey(d: PackageDoc): String {
+    if (d.organization == "") {
+        return d.name
+    }
+    d.organization + "::" + d.name
+}
+
 // 从 indexJson 解析依赖 (org, 名字, 版本要求)。
 // 依赖名可能带 `org::` 前缀（如 `ystyle::crc`）——**前缀必须保留**：跨组织依赖
 // （snappy/badgercj → ystyle::crc）一旦丢掉前缀，就会去"依赖方自己的 org"里找，
@@ -877,6 +895,206 @@ func planDependencyEdges(items: ArrayList<PlanItem>, pkgStore: PackageStore): Ha
     edges
 }
 
+// 「重新分析」的写回结果
+public struct PlanRefreshResult {
+    public var updated: Int64   // 命中并刷新（顺序 + 分类）的条目
+    public var added: Int64     // 依赖补齐带来的新条目
+    public var skipped: Int64   // 同包已有其它版本条目 → 不重复加
+    public init() {
+        this.updated = 0
+        this.added = 0
+        this.skipped = 0
+    }
+}
+
+// 把一次 analyze 的结果**整体写回**计划：顺序、分类、依赖补齐一起刷新。
+//
+// 为什么不能只刷分类（旧实现的毛病）：`order` 是建计划时的分析快照，冻结在条目上。
+// 一旦那次分析的依赖边有缺（或依赖声明后来改了），顺序就永远错下去，而界面上的
+// 「重新分析」只更新分类 —— 用户点了也修不好顺序，等于这个按钮废了。
+//
+// 语义：
+//   - 命中的条目（org/name/version 完全一致）：刷新 order + 分类 + 目标仓对照；
+//     已完成/已推送的条目不回退勾选（那是执行记录）
+//   - 分析里有、计划里没有的（依赖补齐）：新增条目
+//   - 同包已有其它版本条目：不重复加（一个包在一个计划里只出一条），计入 skipped
+//   - 计划里有、本次分析没有的：保留（可能带执行记录），顺序排到拓扑序之后
+public func applyAnalysisToPlan(adminData: AdminDataStore, planId: Int64,
+                                analysis: PlanAnalysis): PlanRefreshResult {
+    var res = PlanRefreshResult()   // struct 是值类型：要改字段必须用 var
+    let docs = adminData.listPlanItems(planId)
+    let exact = HashMap<String, Int64>()     // org::name@version → docId
+    let pkgSeen = HashMap<String, Bool>()    // org::name → 已有条目
+    for (d in docs) {
+        exact[d.packageOrg + "::" + d.packageName + "@" + d.packageVersion] = d.id
+        pkgSeen[d.packageOrg + "::" + d.packageName] = true
+    }
+    let matched = HashMap<Int64, Bool>()     // 本次分析覆盖到的 docId
+    var maxOrder: Int64 = 0
+    for (it in analysis.items) {
+        if (it.order > maxOrder) {
+            maxOrder = it.order
+        }
+        let key = it.org + "::" + it.name + "@" + it.version
+        match (exact.get(key)) {
+            case Some(id) =>
+                matched[id] = true
+                let prev = adminData.getPlanItem(id)
+                let sel = match (prev) {
+                    case Some(x) => if (x.status == "completed" || x.status == "waiting_index") {
+                        x.selected
+                    } else {
+                        it.selected
+                    }
+                    case None => it.selected
+                }
+                let _ = adminData.setPlanItemOrder(id, it.order)
+                let _ = adminData.setPlanItemCategory(id, planCategoryName(it.category), sel,
+                    targetVersion: it.targetVersion, targetCompared: it.targetCompared)
+                res.updated++
+            case None =>
+                let pkgKey = it.org + "::" + it.name
+                if (pkgSeen.contains(pkgKey)) {
+                    res.skipped++
+                } else {
+                    pkgSeen[pkgKey] = true
+                    let _ = adminData.addPlanItem(planId, it.pkgId, it.org, it.name, it.version, it.order,
+                        planCategoryName(it.category), it.selected,
+                        targetVersion: it.targetVersion, targetCompared: it.targetCompared)
+                    res.added++
+                }
+        }
+    }
+    // 计划里多出来的旧条目：保留执行记录，只把顺序挪到本次拓扑序之后
+    var tail = maxOrder + 1
+    for (d in docs) {
+        if (!matched.contains(d.id)) {
+            let _ = adminData.setPlanItemOrder(d.id, tail)
+            tail++
+        }
+    }
+    res
+}
+
+// 计划项的**执行顺序**：按当前依赖声明现算拓扑序（graph-cj，与 cjdep 同一实现），
+// 不再信任建计划那一刻冻结的 `order`。
+//
+// 为什么必须现算：`order` 是建计划时的分析快照。依赖边解析错过一次（或依赖声明后来改了）
+// 就会永远错下去，而界面上的「重新分析」只刷分类、改不了顺序 —— 结果是"重新分析没用"。
+// 冻结顺序 + 依赖门同时失效时，计划会把依赖方先推出去（目标仓悬空依赖）。
+//
+// 同层先后用建计划时的 `order` 兜底（再按完整名定序），保持用户当初看到的相对顺序。
+public func planExecutionOrder(items: ArrayList<PlanItem>, pkgStore: PackageStore): ArrayList<PlanItem> {
+    let keyOf = { it: PlanItem => if (it.org == "") { it.name } else { it.org + "::" + it.name } }
+    let byKey = HashMap<String, PlanItem>()
+    let orderOf = HashMap<String, Int64>()
+    for (it in items) {
+        let k = keyOf(it)
+        byKey[k] = it
+        orderOf[k] = it.order
+    }
+    let edges = planDependencyEdges(items, pkgStore)   // pkgId → 依赖的 pkgId（同一条解析规则）
+    let id2key = HashMap<Int64, String>()
+    for (it in items) {
+        id2key[it.pkgId] = keyOf(it)
+    }
+    let g = Graph<String, PlanItem>({ it: PlanItem => keyOf(it) }, [directed()])
+    for (it in items) {
+        g.addVertex(it, [])
+    }
+    for ((id, deps) in edges) {
+        let toKey = match (id2key.get(id)) {
+            case Some(k) => k
+            case None => ""
+        }
+        if (toKey == "") {
+            continue
+        }
+        for (d in deps) {
+            match (id2key.get(d)) {
+                case Some(fromKey) =>
+                    if (fromKey != toKey) {
+                        try {
+                            g.addEdge(fromKey, toKey, [])
+                        } catch (e: Exception) {
+                            eprintln("[cjreg] 执行顺序：加依赖边失败（${fromKey} -> ${toKey}）：" + e.toString())
+                        }
+                    }
+                case None => ()
+            }
+        }
+    }
+    let less = { a: String, b: String =>
+        let (oa, ob) = (orderOf.get(a) ?? Int64.Max, orderOf.get(b) ?? Int64.Max)
+        if (oa != ob) {
+            oa < ob
+        } else {
+            a < b
+        }
+    }
+    let sorted = ArrayList<PlanItem>()
+    try {
+        for (k in g.stableTopologicalSort(less)) {
+            match (byKey.get(k)) {
+                case Some(it) => sorted.add(it)
+                case None => ()
+            }
+        }
+    } catch (e: GraphError) {
+        // 现算发现环（依赖声明互相指）：退回建计划时的 order，行为与旧版一致
+        println("[cjreg] 执行顺序：依赖图有环，退回计划内既有顺序（" + e.message + "）")
+        for (it in items) {
+            sorted.add(it)
+        }
+        insertionSortByOrder(sorted)
+    }
+    if (sorted.size != items.size) {
+        // 兜底：图里漏掉的项（理论上不会）追加到末尾，宁可多发也别漏项
+        for (it in items) {
+            var has = false
+            for (s in sorted) {
+                if (s.pkgId == it.pkgId) {
+                    has = true
+                    break
+                }
+            }
+            if (!has) {
+                sorted.add(it)
+            }
+        }
+    }
+    sorted
+}
+
+// 按 order 升序（同序按完整名）就地插入排序：不依赖 std.sort 对元素类型的约束
+func planItemNameKey(it: PlanItem): String {
+    if (it.org == "") {
+        return it.name
+    }
+    it.org + "::" + it.name
+}
+
+func planItemBefore(a: PlanItem, b: PlanItem): Bool {
+    if (a.order != b.order) {
+        return a.order < b.order
+    }
+    planItemNameKey(a) < planItemNameKey(b)
+}
+
+func insertionSortByOrder(list: ArrayList<PlanItem>): Unit {
+    var i: Int64 = 1
+    while (i < list.size) {
+        let key = list[i]
+        var j = i - 1
+        while (j >= 0 && planItemBefore(key, list[j])) {
+            list[j + 1] = list[j]
+            j--
+        }
+        list[j + 1] = key
+        i++
+    }
+}
+
 // pkgId 在本计划内直接/间接依赖的全部 pkgId
 func transitivePlanDeps(id: Int64, edges: HashMap<Int64, ArrayList<Int64>>): ArrayList<Int64> {
     let out = ArrayList<Int64>()
@@ -936,23 +1154,10 @@ public class PublishExecutor {
         report.total = items.size
         let MaxRetries: Int64 = 3
 
-        // 先按 order 排序（拓扑顺序）
-        var sorted = ArrayList<PlanItem>()
-        for (it in items) {
-            sorted.add(it)
-        }
-        // 插入排序（order 升序）
-        var i: Int64 = 1
-        while (i < sorted.size) {
-            let key = sorted[i]
-            var j = i - 1
-            while (j >= 0 && sorted[j].order > key.order) {
-                sorted[j + 1] = sorted[j]
-                j--
-            }
-            sorted[j + 1] = key
-            i++
-        }
+        // 执行顺序**现算**：按 items 当前的依赖声明做拓扑排序（graph-cj），
+        // 计划里的 `order` 只当同层先后的兜底 —— 建计划那一刻的快照会过期
+        // （依赖边解析错过一次、或依赖后来改了，冻结的顺序就会一直错下去）。
+        let sorted = planExecutionOrder(items, this.pkgStore)
 
         // 计划内依赖关系 + "目标仓里还没就绪"的项集合。
         // 只有（直接/间接）依赖这些项的项才该被卡住，与它们无关的项照发。

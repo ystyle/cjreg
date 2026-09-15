@@ -22,6 +22,7 @@
   "pbkdf2" = "1.0.0"
   "tang" = { path = "../tang" }
   "bstorm" = "1.4.9"
+  "graph" = "1.0.1"
   "gjson" = "1.2.2"
   # 制品（.cjp = gzip + tar）内的 README / cjpm.toml 提取：tar 用自研 tar-cj（ystyle::tar）
   "ystyle::tar" = "1.1.0"

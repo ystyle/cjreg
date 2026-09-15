@@ -125,3 +125,63 @@ func analyzePlan_keepsCallerOrderForIndependentRoots() {
     @Expect(a.items[2].name, "gamma")
     store.storm.close()
 }
+
+// 执行顺序必须**现算**：计划条目里冻结的 order 不可信。
+// 这里故意把依赖方（holt）的 order 排在最前（模拟旧版本建的计划），执行顺序仍须
+// 把 badgercj 排在 holt 之前 —— 否则目标仓会先出现声明了不存在依赖的版本。
+@Test
+func planExecutionOrder_recomputesInsteadOfTrustingStoredOrder() {
+    let store = orderStore()
+    let badger = orderDoc("", "badgercj", "1.6.20", ArrayList<(String, String)>([("snappy", "1.0.1")]))
+    let snappy = orderDoc("", "snappy", "1.0.1", ArrayList<(String, String)>())
+    let holt = orderDoc("ystyle", "holt", "1.0.10",
+        ArrayList<(String, String)>([("badgercj", "1.6.20")]))
+    store.save(badger)
+    store.save(snappy)
+    store.save(holt)
+    let items = ArrayList<PlanItem>()
+    // 冻结的 order：holt 1、badgercj 2、snappy 3（错误顺序）
+    items.add(PlanItem(holt.id, "holt", "ystyle", "1.0.10", PlanCategory.NeedPublish, 1))
+    items.add(PlanItem(badger.id, "badgercj", "", "1.6.20", PlanCategory.NeedPublish, 2))
+    items.add(PlanItem(snappy.id, "snappy", "", "1.0.1", PlanCategory.NeedPublish, 3))
+    let ordered = planExecutionOrder(items, store)
+    @Expect(ordered[0].name, "snappy")
+    @Expect(ordered[1].name, "badgercj")
+    @Expect(ordered[2].name, "holt")
+    store.storm.close()
+}
+
+// 「重新分析」必须整体写回：顺序刷新 + 依赖补齐（否则顺序永远停在建计划那一刻，
+// 按钮等于废的）。这里计划里只有 holt（缺 badgercj/snappy），分析结果补进两条。
+@Test
+func applyAnalysisToPlan_refreshesOrderAndAddsMissingDeps() {
+    let store = orderStore()
+    store.save(orderDoc("ystyle", "holt", "1.0.10",
+        ArrayList<(String, String)>([("badgercj", "1.6.20")])))
+    store.save(orderDoc("", "badgercj", "1.6.20", ArrayList<(String, String)>()))
+    let admin = AdminDataStore(Storm.inMemory())
+    let planId = admin.createPlan("t", 1, 60, 0, 1000)
+    // 建计划时只落了 holt（order 1）——模拟"当时依赖边丢了"的旧计划
+    admin.addPlanItem(planId, 900, "ystyle", "holt", "1.0.10", 1, "need_publish", true)
+    @Expect(admin.listPlanItems(planId).size, 1)
+
+    let svc = PublishPlanService(store)
+    let roots = ArrayList<(String, String, String)>()
+    roots.add(("ystyle", "holt", "1.0.10"))
+    let analysis = svc.analyze(roots)
+    let refreshed = applyAnalysisToPlan(admin, planId, analysis)
+    @Expect(refreshed.added, 1)          // badgercj 被补进来
+    let docs = admin.listPlanItems(planId)
+    @Expect(docs.size, 2)
+    // 顺序：badgercj 先于 holt
+    var badgerOrder: Int64 = -1
+    var holtOrder: Int64 = -1
+    for (d in docs) {
+        if (d.packageName == "badgercj") { badgerOrder = d.order }
+        if (d.packageName == "holt") { holtOrder = d.order }
+    }
+    @Expect(badgerOrder > 0, true)
+    @Expect(badgerOrder < holtOrder, true)
+    admin.storm.close()
+    store.storm.close()
+}

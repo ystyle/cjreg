@@ -485,6 +485,11 @@ func executeReport_cancelDuringIndexWait() {
         shouldCancel: { => cancel.value })
     @Expect(r.aborted, true)
     @Expect(r.abortReason.contains("停止"), true)
+    // 计划级原因会被盖到**所有未处理项**的说明上，不能把"a 在等索引"这种条目级细节拼进去：
+    // 否则与 a 毫无依赖关系的 b 也显示「（a@1.0.0 已推送成功，正在等目标仓索引）」，
+    // 看起来像被 a 的索引卡住了（实测：holt 的索引等待被写进了 bstorm/sunku/tsdb 的说明）
+    @Expect(r.abortReason.contains("a@1.0.0"), false)
+    @Expect(items[1].error.contains("a@1.0.0"), false)
     @Expect(items[0].status == PlanItemStatus.WaitingIndex, true)   // 已推成功，续跑接着等
     @Expect(items[1].status == PlanItemStatus.Skipped, true)        // 后面的项不再推
     @Expect(calls.value, 1)

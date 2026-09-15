@@ -106,9 +106,10 @@ func planDependencyEdges_resolvesUnprefixedDepOfOrgedPackage() {
     store.storm.close()
 }
 
-// 相互无依赖的根包：计划顺序 = 调用方给的顺序（修复前是倒序）
+// 相互无依赖的根包：顺序必须**确定可复现**（graph-cj 的同层兜底是完整名字典序，
+// 与 cjdep 口径一致）。修复前的显式栈是 LIFO，根包会被倒序处理。
 @Test
-func analyzePlan_keepsCallerOrderForIndependentRoots() {
+func analyzePlan_independentRootsUseDeterministicOrder() {
     let store = orderStore()
     store.save(orderDoc("", "alpha", "1.0.0", ArrayList<(String, String)>()))
     store.save(orderDoc("", "beta", "1.0.0", ArrayList<(String, String)>()))

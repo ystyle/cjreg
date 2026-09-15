@@ -18,6 +18,9 @@ let WAIT_CANCELLED: Int64 = -1
 // 探测本身失败（401/403/429/5xx/网络）：内容已推上去，但"索引里有"这件事问不出来
 let WAIT_FATAL: Int64 = -2
 
+// 「已推送成功、索引确认攒到本批末尾」的条目说明（叶子项 defer 时写一次）
+let DEFER_INDEX_MSG = "已推送成功，索引确认攒到本批末尾一起做"
+
 // 等待目标仓索引的节奏（秒）：先短探一次（同进程的私有仓索引是即时生效的，不必先等一分钟），
 // 然后 1 分钟、3 分钟、5 分钟，之后每 5 分钟一轮 —— 与 `cangjie-publish` 技能里的
 // 「发布后 1、3、5 分钟各查一次」一致，只是**不设次数上限**（中心仓同步几十分钟到几天都正常）。
@@ -1168,6 +1171,21 @@ public class PublishExecutor {
             labelOf[it.pkgId] = packageLabel(it.org, it.name, it.version)
         }
 
+        // 哪些项的索引必须**原地等**：被别人依赖的那些。
+        // 依赖方推上去时目标仓要能解析到它，索引没就绪就推 = 悬空依赖（实测会换来假失败），
+        // 所以这一步省不掉。反过来说，**没人依赖的项（叶子）原地等索引只是"确认已进仓"**：
+        // 推送返回 200 时内容就已经进去了，索引只是"我们看见没看见" —— 攒到本批末尾一起确认，
+        // 别让整批为它停住（中心仓索引同步几十分钟到几天是常态，N 项各等一轮 = N 倍等待）。
+        let inlineWait = HashSet<Int64>()
+        for (it in sorted) {
+            if (!it.selected || it.status == PlanItemStatus.Completed) {
+                continue
+            }
+            collectDeployDependents(edges, it.pkgId, inlineWait)
+        }
+        // 已推送、只差索引确认的叶子项：批次末尾统一确认（见 confirmDeferred）
+        let deferred = ArrayList<PlanItem>()
+
         var idx: Int64 = 0
         while (idx < sorted.size) {
             let it = sorted[idx]
@@ -1293,7 +1311,15 @@ public class PublishExecutor {
                     }
                 }
             }
-            if (ok) {
+            if (ok && !inlineWait.contains(it.pkgId)) {
+                // 叶子项：没有下游，索引确认不影响任何后续推送 → 推成功就往下走，
+                // 攒到本批末尾一次性确认（confirmDeferred）。
+                it.status = PlanItemStatus.WaitingIndex
+                it.error = DEFER_INDEX_MSG
+                report.waitingIndex++
+                deferred.add(it)
+                onItem(it, true, it.error)
+            } else if (ok) {
                 // 推送成功后还要**等目标仓索引就绪**才算完成：
                 // 拓扑序里下一条依赖这一条，而中心仓的索引/缓存同步可能很慢
                 // （几十分钟到几天，审核还可能更久）。不等就推下一条，会出现「依赖还没出现在
@@ -1412,7 +1438,91 @@ public class PublishExecutor {
             }
             idx++
         }
+        // 批次末尾：把所有"已推送、只差索引"的叶子项一起确认。
+        // 一轮探测覆盖全部待确认项（而不是每项各等一轮）——这就是"没有下游的项不原地等，
+        // 到最后一起等"的落点。计划已中止或没接索引探测时按 confirmDeferred 的说明处理。
+        if (deferred.size > 0) {
+            this.confirmDeferred(deferred, report, indexProbe, pollTimeoutSec, shouldCancel,
+                indexWaitLadder, indexWaitSteadySec, onItem)
+        }
         return report
+    }
+
+    // 批次末尾统一确认「已推送、只差索引」的叶子项。
+    //
+    // 攒到最后的依据：这些项没有任何下游 —— 它们的索引只决定"我们看见没看见"，
+    // 不影响任何后续推送；而中心仓索引同步可能几十分钟到几天，逐项原地等会把整批拖成 N 倍。
+    // 探测是批量做的（waitIndexesReady），N 项共享 N 轮。
+    //
+    // 没接索引探测（indexProbe = None）时直接判完成：与旧行为一致，没有探测能力就没有"确认"一说。
+    // 计划已在推送阶段中止（429/401/用户停止）时不在这里空等：内容都已推出去，
+    // 保持「等索引」即可（= 已推送成功、续跑接着确认）。
+    func confirmDeferred(deferred: ArrayList<PlanItem>, report: ExecuteReport,
+                         indexProbe: ?(String, String) -> IndexProbe, pollTimeoutSec: Int64,
+                         shouldCancel: () -> Bool, ladder: Array<Int64>, steadySec: Int64,
+                         onItem: (PlanItem, Bool, String) -> Unit): Unit {
+        if (indexProbe.isNone()) {
+            for (it in deferred) {
+                this.markIndexConfirmed(it, report, onItem, "")
+            }
+            return
+        }
+        if (report.aborted) {
+            for (it in deferred) {
+                it.status = PlanItemStatus.WaitingIndex
+                it.error = "计划已中止，索引确认留到续跑（内容已推送成功）"
+                onItem(it, true, it.error)
+            }
+            return
+        }
+        let probe = indexProbe.getOrThrow()
+        let targets = ArrayList<(String, String, String)>()
+        for (it in deferred) {
+            targets.add((it.org, it.name, it.version))
+        }
+        let lastProbe = Box<IndexProbe>(IndexProbe(404, ""))
+        let (ready, code) = waitIndexesReady(probe, targets, pollTimeoutSec,
+            shouldCancel: shouldCancel,
+            onWaiting: { waited, step, res =>
+                lastProbe.value = res
+                let mins = waited / 60
+                let text = "等待目标仓索引就绪（已等 ${mins} 分钟，${step} 秒后再探；最近一次：${res.describe()}）"
+                for (it in deferred) {
+                    onItem(it, true, text)
+                }
+            },
+            ladder: ladder, steadySec: steadySec)
+        if (code == WAIT_CANCELLED) {
+            // 与"等单项索引时被停止"同一语义：内容已推出去，记「等索引」，续跑接着确认
+            report.aborted = true
+            report.abortReason = "用户已停止执行"
+        } else if (code == WAIT_FATAL && lastProbe.value.planFatal()) {
+            report.aborted = true
+            report.abortReason = "目标仓 ${lastProbe.value.describe()}：计划已暂停（已推送的项不受影响）"
+        }
+        for (i in 0..deferred.size) {
+            let it = deferred[i]
+            if (ready[i]) {
+                this.markIndexConfirmed(it, report, onItem, "")
+            } else {
+                it.status = PlanItemStatus.WaitingIndex
+                it.error = deferredPendingMsg(code, lastProbe.value, pollTimeoutSec, it)
+                report.errors.add("${it.name}@${it.version}: ${it.error}")
+                onItem(it, false, it.error)
+            }
+        }
+    }
+
+    // 索引确认通过 → 该项才算完成。defer 时按「等索引」记过一次，这里换算成成功。
+    func markIndexConfirmed(it: PlanItem, report: ExecuteReport,
+                            onItem: (PlanItem, Bool, String) -> Unit, msg: String): Unit {
+        it.status = PlanItemStatus.Completed
+        it.error = msg
+        if (report.waitingIndex > 0) {
+            report.waitingIndex--
+        }
+        report.success++
+        onItem(it, true, msg)
     }
 }
 
@@ -1479,11 +1589,35 @@ func waitIndexReady(probe: (String, String) -> IndexProbe, org: String, name: St
                     onWaiting!: (Int64, Int64, IndexProbe) -> Unit = { _, _, _ => () },
                     ladder!: Array<Int64> = IndexWaitLadder,
                     steadySec!: Int64 = IndexWaitSteadySec): Int64 {
+    let one = ArrayList<(String, String, String)>()
+    one.add((org, name, version))
+    let (_, code) = waitIndexesReady(probe, one, pollTimeoutSec, shouldCancel: shouldCancel,
+        onWaiting: onWaiting, ladder: ladder, steadySec: steadySec)
+    return code
+}
+
+// 批量版等待：一轮探测覆盖多个待确认项，收口码与 waitIndexReady 同一套语义。
+//
+// 存在的原因：**没有下游的项**（叶子）不需要各自在原位等索引 —— 索引对它们只是"确认已进仓"。
+// 逐项等是 N 项各等一轮（中心仓同步慢时就是 N 倍时长），攒到一起是一轮探 N 项。
+// 返回 (每项是否就绪, 收口码)；WAIT_READY 表示**全部**就绪。
+func waitIndexesReady(probe: (String, String) -> IndexProbe,
+                      targets: ArrayList<(String, String, String)>,
+                      pollTimeoutSec: Int64,
+                      shouldCancel!: () -> Bool = { => false },
+                      onWaiting!: (Int64, Int64, IndexProbe) -> Unit = { _, _, _ => () },
+                      ladder!: Array<Int64> = IndexWaitLadder,
+                      steadySec!: Int64 = IndexWaitSteadySec): (ArrayList<Bool>, Int64) {
+    let ready = ArrayList<Bool>()
+    for (_ in targets) {
+        ready.add(false)
+    }
+    var pending = targets.size
     var waited: Int64 = 0
     var round: Int64 = 0
-    while (true) {
+    while (pending > 0) {
         if (shouldCancel()) {
-            return WAIT_CANCELLED
+            return (ready, WAIT_CANCELLED)
         }
         let step = if (round < ladder.size) { ladder[round] } else { steadySec }
         round++
@@ -1491,23 +1625,63 @@ func waitIndexReady(probe: (String, String) -> IndexProbe, org: String, name: St
             sleep(Duration.second * step)
             waited += step
         }
-        let res = probe(org, name)
-        if (res.ok()) {
-            if (indexHasVersion(res.body, name, version)) {
-                return WAIT_READY
+        var last = IndexProbe(404, "")
+        var fatal = false
+        for (i in 0..targets.size) {
+            if (ready[i]) {
+                continue
             }
-        } else if (res.fatal()) {
-            // 失败的探测也要报给调用方（它要拿状态码决定"要不要把整个计划暂停"）
-            onWaiting(waited, step, res)
-            return WAIT_FATAL
+            let (org, name, version) = targets[i]
+            let res = probe(org, name)
+            last = res
+            if (res.ok()) {
+                if (indexHasVersion(res.body, name, version)) {
+                    ready[i] = true
+                    pending--
+                }
+            } else if (res.fatal()) {
+                fatal = true
+                break
+            }
         }
-        onWaiting(waited, step, res)
+        if (fatal) {
+            // 失败的探测也要报给调用方（它要拿状态码决定"要不要把整个计划暂停"）
+            onWaiting(waited, step, last)
+            return (ready, WAIT_FATAL)
+        }
+        if (pending == 0) {
+            // 就绪的那一轮不再报 onWaiting：回调是给"还在等"的进度用的（与单项版同一语义）
+            return (ready, WAIT_READY)
+        }
+        onWaiting(waited, step, last)
         // 上限判定放在探测之后：等够时长就先探一次再收工（否则"上限 1 秒"会连一次都探不到）
         if (pollTimeoutSec > 0 && waited >= pollTimeoutSec) {
-            return WAIT_TIMEOUT
+            return (ready, WAIT_TIMEOUT)
         }
     }
-    WAIT_TIMEOUT
+    (ready, WAIT_READY)
+}
+
+// 边表是「项 → 它的依赖」，这里把"依赖项"收集成"必须原地等索引的项"集合
+func collectDeployDependents(edges: HashMap<Int64, ArrayList<Int64>>, pkgId: Int64, into: HashSet<Int64>): Unit {
+    let deps = match (edges.get(pkgId)) {
+        case Some(x) => x
+        case None => ArrayList<Int64>()
+    }
+    for (d in deps) {
+        into.add(d)
+    }
+}
+
+// 批量确认收口后，没等到索引的项该怎么说（收口码 → 文案，与单项等待保持一致）
+func deferredPendingMsg(code: Int64, res: IndexProbe, pollTimeoutSec: Int64, it: PlanItem): String {
+    if (code == WAIT_CANCELLED) {
+        return "等待索引期间用户停止执行：已推送成功，续跑会继续等"
+    }
+    if (code == WAIT_FATAL) {
+        return "索引确认失败（${res.describe()}）：已推送成功，稍后点「检查索引」再确认"
+    }
+    return "已等满索引等待上限（${pollTimeoutSec}s）：${it.name}@${it.version} 还没出现在目标仓索引里（已推送成功，续跑会继续等；可把上限设为 0 表示一直等）"
 }
 
 // 目标仓索引里是否已有该版本（索引是 NDJSON，逐行解析而不是做子串匹配——

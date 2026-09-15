@@ -686,6 +686,18 @@ public class AdminDataStore {
 
     // 重新分类（详情页「重新分析」用）：只改分类/勾选/目标仓对照，**不动执行状态**。
     // 对照信息是必填的：重新分析一定会得到新的对照结果，留默认值等于把旧结果悄悄清掉。
+    // 只改计划项的顺序（「重新分析」重算依赖拓扑序后回写；
+    // 顺序是派生数据 —— 建计划时的快照会过期，执行时也会按当前依赖现算一遍）
+    public func setPlanItemOrder(id: Int64, order: Int64): Bool {
+        match (this.storm.get<PlanItemDoc>(id)) {
+            case Some(d) =>
+                d.order = order
+                this.storm.save(d)
+                return true
+            case None => return false
+        }
+    }
+
     public func setPlanItemCategory(id: Int64, category: String, selected: Bool,
                                     targetVersion!: String, targetCompared!: Bool): Bool {
         match (this.storm.get<PlanItemDoc>(id)) {

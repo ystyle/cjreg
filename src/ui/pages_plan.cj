@@ -1180,25 +1180,12 @@ class PublishPlanDetailPage <: Component {
                     case None => IndexProbe(0, "", detail: "本实例未接入回源代理")
                 }
             })
-            // 按 org::name@version 把分类写回原条目（依赖补齐可能带来新条目，这里只更新已存在的）
-            var updated: Int64 = 0
-            for (d in docs) {
-                for (it in analysis.items) {
-                    if (it.name == d.packageName && it.org == d.packageOrg && it.version == d.packageVersion) {
-                        // 已完成/已推送的不回退勾选状态（那是执行记录）
-                        let sel = if (d.status == "completed" || d.status == "waiting_index") {
-                            d.selected
-                        } else {
-                            it.selected
-                        }
-                        let _ = st.adminData.setPlanItemCategory(d.id, planCategoryName(it.category), sel,
-                            targetVersion: it.targetVersion, targetCompared: it.targetCompared)
-                        updated++
-                        break
-                    }
-                }
-            }
-            this.syncPlanTotal(st)          // 分类变了，分母跟着变
+            // **整体写回**：顺序（依赖拓扑序）+ 分类 + 依赖补齐一起刷新。
+            // 只刷分类的旧写法会让 order 永远停在建计划那一刻的快照 —— 顺序错了点
+            // 「重新分析」也修不回来，按钮等于废的（实测：无组织依赖的边丢过一次，
+            // holt 被排在 badgercj 前面，重新分析怎么点都是那个错顺序）。
+            let refreshed = applyAnalysisToPlan(st.adminData, this.planId, analysis)
+            this.syncPlanTotal(st)          // 条目/分类变了，分母跟着变
             if (analysis.targetError != "") {
                 let _ = st.adminData.setPlanError(this.planId, analysis.targetError, nowMs())
                 summary = analysis.targetError
@@ -1214,7 +1201,10 @@ class PublishPlanDetailPage <: Component {
                         case _ => need++
                     }
                 }
-                summary = "已重新分类 ${updated} 项（需发布 ${need} · 目标仓已有 ${exists}" +
+                summary = "已重新分析：更新 ${refreshed.updated} 项" +
+                    (if (refreshed.added > 0) { " · 新增依赖 ${refreshed.added} 项" } else { "" }) +
+                    (if (refreshed.skipped > 0) { " · ${refreshed.skipped} 项同包已有其它版本未加入" } else { "" }) +
+                    "（顺序与分类都已刷新；需发布 ${need} · 目标仓已有 ${exists}" +
                     (if (conflict > 0) { " · 冲突 ${conflict}" } else { "" }) + "）"
             }
         } catch (e: Exception) {

@@ -465,9 +465,10 @@ func executeReport_blockingIsTransitive() {
 // 等目标仓索引最长可达计划的 pollTimeout（默认 600s），必须能中途停：
 // 执行器在"每项开推前"和"等索引的每一轮"都会问一次 shouldCancel。
 
-// 等索引期间取消 → 该项记「等索引」（内容已推出去，续跑接着等），计划中止
+// 停止执行发生在「批次末尾的索引确认」阶段 → 两项其实都已推出去（内容在仓里，续跑不重推），
+// 都记「等索引」；计划中止。注意与"推送阶段取消"的区别：那时剩余项根本不会被推。
 @Test
-func executeReport_cancelDuringIndexWait() {
+func executeReport_cancelDuringTailConfirm() {
     let (store, blobs) = execFixture()
     let items = ArrayList<PlanItem>()
     items.add(execItem(execDoc(store, blobs, "a", "1.0.0"), "a", "1.0.0", 1))
@@ -475,12 +476,12 @@ func executeReport_cancelDuringIndexWait() {
     let calls = Box<Int64>(0)
     let cancel = Box<Bool>(false)
     let probe: (String, String) -> IndexProbe = { _, _ =>
-        cancel.value = true          // 第一轮等待里就"点停止"
+        cancel.value = true          // 第一轮确认里就"点停止"
         IndexProbe(200, "{\"name\":\"a\",\"version\":\"0.9.0\"}\n")
     }
     let ex = PublishExecutor(store, blobs)
     let r = ex.execute(items, "http://127.0.0.1:1", "tok",
-        poster: stubPoster(codesOf([200]), calls), indexProbe: probe,
+        poster: stubPoster(codesOf([200, 200]), calls), indexProbe: probe,
         pollTimeoutSec: 30, indexWaitLadder: [1, 1, 1], indexWaitSteadySec: 1,
         shouldCancel: { => cancel.value })
     @Expect(r.aborted, true)
@@ -490,9 +491,10 @@ func executeReport_cancelDuringIndexWait() {
     // 看起来像被 a 的索引卡住了（实测：holt 的索引等待被写进了 bstorm/sunku/tsdb 的说明）
     @Expect(r.abortReason.contains("a@1.0.0"), false)
     @Expect(items[1].error.contains("a@1.0.0"), false)
-    @Expect(items[0].status == PlanItemStatus.WaitingIndex, true)   // 已推成功，续跑接着等
-    @Expect(items[1].status == PlanItemStatus.Skipped, true)        // 后面的项不再推
-    @Expect(calls.value, 1)
+    // 两项都已推成功：确认阶段被停止不影响"内容已经进仓"这件事
+    @Expect(items[0].status == PlanItemStatus.WaitingIndex, true)
+    @Expect(items[1].status == PlanItemStatus.WaitingIndex, true)
+    @Expect(calls.value, 2)
     store.storm.close()
 }
 
@@ -518,5 +520,104 @@ func executeReport_cancelBeforeNextItem() {
     @Expect(r.success, 1)
     @Expect(items[1].status == PlanItemStatus.Skipped, true)
     @Expect(calls.value, 1)
+    store.storm.close()
+}
+
+// ===== 叶子项不原地等索引：确认攒到批次末尾 =====
+//
+// 判据：索引对**没有下游的项**只是"确认已进仓"，但对**被别人依赖的项**是硬约束
+//（依赖方推上去时目标仓要能解析到它）。前者攒到最后一起确认，后者必须原地等。
+
+// 两项互不依赖 → 两项**先全部推出去**，再统一确认索引。
+// 旧行为是"推一项、等一项"（第一项索引确认完才推第二项），中心仓同步慢时整批被拖成 N 倍。
+@Test
+func executeReport_leafItemsDeferIndexConfirmToTail() {
+    let (store, blobs) = execFixture()
+    let items = ArrayList<PlanItem>()
+    items.add(execItem(execDoc(store, blobs, "a", "1.0.0"), "a", "1.0.0", 1))
+    items.add(execItem(execDoc(store, blobs, "b", "1.0.0"), "b", "1.0.0", 2))
+    let calls = Box<Int64>(0)
+    let probesByPush = ArrayList<Int64>()
+    let seen = HashMap<String, Int64>()
+    // 每个名字第一次探不到、第二次才有 → 确认需要两轮（证明是"一起等"而不是各等各的）
+    let probe: (String, String) -> IndexProbe = { _, name =>
+        probesByPush.add(calls.value)
+        let n = match (seen.get(name)) {
+            case Some(v) => v
+            case None => 0
+        }
+        seen[name] = n + 1
+        if (n < 1) {
+            IndexProbe(200, "{\"name\":\"${name}\",\"version\":\"0.0.1\"}\n")
+        } else {
+            IndexProbe(200, "{\"name\":\"${name}\",\"version\":\"1.0.0\"}\n")
+        }
+    }
+    let ex = PublishExecutor(store, blobs)
+    let r = ex.execute(items, "http://127.0.0.1:1", "tok",
+        poster: stubPoster(codesOf([200, 200]), calls), indexProbe: probe,
+        pollTimeoutSec: 30, indexWaitLadder: [1, 1, 1], indexWaitSteadySec: 1)
+    @Expect(calls.value, 2)
+    // 关键：第一次探索引时两项都已经推完（"推一项等一项"在这里会是 1）
+    @Expect(probesByPush.size > 0, true)
+    @Expect(probesByPush[0], 2)
+    @Expect(r.success, 2)
+    @Expect(r.waitingIndex, 0)                       // 确认通过后不再挂在「等索引」
+    @Expect(r.aborted, false)
+    @Expect(items[0].status == PlanItemStatus.Completed, true)
+    @Expect(items[1].status == PlanItemStatus.Completed, true)
+    store.storm.close()
+}
+
+// 被别人依赖的项**必须**原地等：第一次探索引时依赖方还没被推（1 而不是 2）。
+// 少了这条，依赖方会在依赖尚未出现在目标仓索引里时被推出去（悬空依赖）。
+@Test
+func executeReport_dependencyStillWaitsInline() {
+    let (store, blobs) = execFixture()
+    let items = ArrayList<PlanItem>()
+    let baseId = execDoc(store, blobs, "base", "1.0.0")
+    let topId = execDocWithDep(store, blobs, "top", "1.0.0", "base", "1.0.0")
+    items.add(execItem(baseId, "base", "1.0.0", 1))
+    items.add(execItem(topId, "top", "1.0.0", 2))
+    let calls = Box<Int64>(0)
+    let firstProbeAt = Box<Int64>(-1)
+    let probe: (String, String) -> IndexProbe = { _, name =>
+        if (firstProbeAt.value < 0) {
+            firstProbeAt.value = calls.value
+        }
+        IndexProbe(200, "{\"name\":\"${name}\",\"version\":\"1.0.0\"}\n")
+    }
+    let ex = PublishExecutor(store, blobs)
+    let r = ex.execute(items, "http://127.0.0.1:1", "tok",
+        poster: stubPoster(codesOf([200, 200]), calls), indexProbe: probe,
+        pollTimeoutSec: 30, indexWaitLadder: [1, 1, 1], indexWaitSteadySec: 1)
+    @Expect(firstProbeAt.value, 1)                   // 探 base 索引时 top 还没推
+    @Expect(calls.value, 2)
+    @Expect(r.success, 2)
+    @Expect(items[0].status == PlanItemStatus.Completed, true)
+    @Expect(items[1].status == PlanItemStatus.Completed, true)
+    store.storm.close()
+}
+
+// 批次末尾的确认也有上限：等满上限仍未出现 → 记「等索引」（内容已进仓，续跑继续确认）
+@Test
+func executeReport_tailConfirmRespectsTimeout() {
+    let (store, blobs) = execFixture()
+    let items = ArrayList<PlanItem>()
+    items.add(execItem(execDoc(store, blobs, "a", "1.0.0"), "a", "1.0.0", 1))
+    let calls = Box<Int64>(0)
+    let probe: (String, String) -> IndexProbe = { _, _ =>
+        IndexProbe(200, "{\"name\":\"a\",\"version\":\"0.9.0\"}\n")
+    }
+    let ex = PublishExecutor(store, blobs)
+    let r = ex.execute(items, "http://127.0.0.1:1", "tok",
+        poster: stubPoster(codesOf([200]), calls), indexProbe: probe,
+        pollTimeoutSec: 1, indexWaitLadder: [1, 1, 1], indexWaitSteadySec: 1)
+    @Expect(r.waitingIndex, 1)
+    @Expect(r.success, 0)
+    @Expect(r.aborted, false)
+    @Expect(items[0].status == PlanItemStatus.WaitingIndex, true)
+    @Expect(items[0].error.contains("索引等待上限"), true)
+    @Expect(calls.value, 1)                          // 没有重推
     store.storm.close()
 }

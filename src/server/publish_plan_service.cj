@@ -1328,7 +1328,12 @@ public class PublishExecutor {
                     report.waitingIndex++
                     unavailable.add(it.pkgId)
                     report.aborted = true
-                    report.abortReason = "用户已停止执行（${doc.name}@${doc.version} 已推送成功，正在等目标仓索引）"
+                    // 计划级原因只写「用户停止」：这句会被盖到**所有未处理项**的说明上，
+                    // 而"谁在等索引"是该条目自己的事（it.error 已写清 1327 行）。
+                    // 曾经把「holt@1.0.8 已推送成功，正在等目标仓索引」拼进计划级原因，
+                    // 结果与 holt 毫无依赖关系的 bstorm/sunku/tsdb 也显示这句，
+                    // 看起来像被 holt 的索引卡住了。
+                    report.abortReason = "用户已停止执行"
                     onItem(it, false, it.error)
                 } else if (waitCode == WAIT_READY) {
                     report.success++

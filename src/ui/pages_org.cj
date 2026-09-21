@@ -55,11 +55,16 @@ class UsersPage <: Component {
     var msg = Signal<String>("")
     // 提示语气：true=成功（绿），false=失败/受阻（红）
     var msgOk = Signal<Bool>(true)
-    // 行数据 + 分页（泛型 Table<User>）
+    // 行数据 + 分页（泛型 Table<User>）：rows/total 由 list_binding 的 Effect 从
+    // 「数据版本 + 关键字 + 分页」信号派生（搜索输入即生效，见 list_binding.cj）
     var rows = Signal<ArrayList<User>>(ArrayList<User>())
+    var userSearch = Signal<String>("")
+    var dataVersion = Signal<Int64>(0)
     var currentPage = Signal<Int64>(1)
     var pageSize = Signal<Int64>(20)
     var total = Signal<Int64>(0)
+    // 派生绑定：页面实例跨请求复用，onMount 重建、onUnmount 释放
+    private var binding: Option<Effect> = None
     // 新增 Dialog
     var dialogVisible = Signal<Bool>(false)
     var formUser = Signal<String>("")
@@ -81,29 +86,51 @@ class UsersPage <: Component {
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
-        refresh()
+        this.rebind()
     }
 
-    // 分页切片（行数据直接为强类型 User）
-    func refresh(): Unit {
-        match (this.state) {
-            case Some(st) =>
-                let users = st.userStore.listAllUsers()
-                this.total.set(users.size)
-                let (start, end) = pageWindow(users.size, this.currentPage.get(), this.pageSize.get())
-                let data = ArrayList<User>()
-                var i = start
-                while (i < end) {
-                    data.add(users[i])
-                    i++
-                }
-                this.rows.set(data)
+    public func onUnmount(ctx: LifecycleContext): Unit {
+        match (this.binding) {
+            case Some(e) => e.dispose()
             case None => ()
         }
+        this.binding = None
+    }
+
+    private func rebind(): Unit {
+        match (this.binding) {
+            case Some(e) => e.dispose()
+            case None => ()
+        }
+        this.binding = Some(bindPaged(this.rows, this.total, { => this.filteredUsers() },
+            this.currentPage, this.pageSize))
+    }
+
+    // 用户 store 不是信号：写库后 bump 一次让派生重算（原 refresh() 的调用点）
+    func bump(): Unit {
+        this.dataVersion.update({ v => v + 1 })
+    }
+
+    // 列表数据：关键字过滤（用户名/邮箱，trim + ASCII 小写）。
+    // 读到的信号都会被 bindPaged 的 Effect 订阅 → 输入即过滤。
+    func filteredUsers(): ArrayList<User> {
+        let _ = this.dataVersion.get()
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return ArrayList<User>()
+        }
+        let q = this.userSearch.get().trimAscii().toAsciiLower()
+        let out = ArrayList<User>()
+        for (u in st.userStore.listAllUsers()) {
+            if (q == "" || u.username.toAsciiLower().contains(q) || u.email.toAsciiLower().contains(q)) {
+                out.add(u)
+            }
+        }
+        out
     }
 
     func onPageChange(ctx: ActionContext): PatchResult {
-        this.refresh()
+        // 页码信号变了，派生自动重算本页行；这里只需重画一次
         PatchResult.ReRender
     }
 
@@ -228,7 +255,7 @@ class UsersPage <: Component {
                 }
             case None => ()
         }
-        this.refresh()
+        this.bump()
         PatchResult.ReRender
     }
 
@@ -257,7 +284,7 @@ class UsersPage <: Component {
                 }
             case None => ()
         }
-        this.refresh()
+        this.bump()
         PatchResult.ReRender
     }
 
@@ -306,6 +333,9 @@ class UsersPage <: Component {
     // ===== 渲染 =====
     func renderList(): IComponent {
         if (this.rows.get().size == 0) {
+            if (this.userSearch.get().trimAscii() != "") {
+                return emptyState("没有匹配的用户")
+            }
             return emptyState("暂无用户，点击「新增用户」创建")
         }
         Table<User>()
@@ -416,6 +446,11 @@ class UsersPage <: Component {
     public func render(): IComponent {
         let msgKind = if (this.msgOk.get()) { ComponentKind.Success } else { ComponentKind.Danger }
         let toolbar = div([
+            // 搜索框只 bind（输入即写信号 → 派生重算）；这里的 action 只负责回第一页
+            Input().bind(this.userSearch).placeholder("搜索用户名 / 邮箱").on("input", { _ =>
+                this.currentPage.set(1)
+                PatchResult.ReRender
+            }),
             Button([text("新增用户")]).kind(ButtonKind.Primary).onClick(openCreate),
             if (this.msg.get() != "") {
                 Tag([text(this.msg.get())]).kind(msgKind)
@@ -735,10 +770,43 @@ class TeamsPage <: Component {
     var confirmVisible = Signal<Bool>(false)
     var pendingDeleteId: Int64 = 0
     var pendingDeleteName: String = ""
+    // 两个弹窗列表的"数据版本"：store 与 editingId 都不是信号，改动后 bump 一次让派生重算
+    var pkgVersion = Signal<Int64>(0)
+    var memberVersion = Signal<Int64>(0)
+    // 派生绑定：弹窗里的搜索必须"输入即过滤"（见 list_binding.cj 的根因说明）
+    private var pkgBinding: Option<Effect> = None
+    private var memberBinding: Option<Effect> = None
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
         refresh()
+        this.rebind()
+    }
+
+    public func onUnmount(ctx: LifecycleContext): Unit {
+        match (this.pkgBinding) {
+            case Some(e) => e.dispose()
+            case None => ()
+        }
+        match (this.memberBinding) {
+            case Some(e) => e.dispose()
+            case None => ()
+        }
+        this.pkgBinding = None
+        this.memberBinding = None
+    }
+
+    private func rebind(): Unit {
+        match (this.pkgBinding) {
+            case Some(e) => e.dispose()
+            case None => ()
+        }
+        match (this.memberBinding) {
+            case Some(e) => e.dispose()
+            case None => ()
+        }
+        this.pkgBinding = Some(bindVisible(this.pkgRows, { => this.filteredPkgs() }))
+        this.memberBinding = Some(bindVisible(this.memberRows, { => this.filteredMembers() }))
     }
 
     // 分页切片（行数据为 TeamRow 视图）
@@ -899,28 +967,35 @@ class TeamsPage <: Component {
         PatchResult.ReRender
     }
 
-    // 包关联列表：全量包 + 搜索过滤 + 关联标记
-    func refreshPkgs(): Unit {
-        match (this.state) {
-            case Some(st) =>
-                let kw = this.pkgSearch.get()
-                let linked = st.adminData.listTeamPackages(this.editingId)
-                let data = ArrayList<PkgRow>()
-                for (d in st.pkgStore.storm.all<PackageDoc>()) {
-                    if (d.deletedAt != 0) { continue }
-                    if (kw != "" && !d.name.contains(kw)) { continue }
-                    var isLinked = false
-                    for (p in linked) {
-                        if (p.organization == d.organization && p.packageName == d.name) {
-                            isLinked = true
-                            break
-                        }
-                    }
-                    data.add(PkgRow(d, isLinked))
-                }
-                this.pkgRows.set(data)
-            case None => ()
+    // 包关联列表：全量包 + 搜索过滤 + 关联标记。
+    // 读到的每个信号都被 pkgBinding 的 Effect 订阅 → 关键字一变就自动重算。
+    func filteredPkgs(): ArrayList<PkgRow> {
+        let _ = this.pkgVersion.get()
+        let data = ArrayList<PkgRow>()
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return data
         }
+        let kw = this.pkgSearch.get().trimAscii()
+        let linked = st.adminData.listTeamPackages(this.editingId)
+        for (d in st.pkgStore.storm.all<PackageDoc>()) {
+            if (d.deletedAt != 0) { continue }
+            if (kw != "" && !d.name.contains(kw)) { continue }
+            var isLinked = false
+            for (p in linked) {
+                if (p.organization == d.organization && p.packageName == d.name) {
+                    isLinked = true
+                    break
+                }
+            }
+            data.add(PkgRow(d, isLinked))
+        }
+        data
+    }
+
+    // 数据变了（换团队、关联/移除）就 bump：效果会重算并写回 pkgRows
+    func refreshPkgs(): Unit {
+        this.pkgVersion.update({ v => v + 1 })
     }
 
     func togglePkg(ctx: ActionContext, org: String, name: String): PatchResult {
@@ -965,27 +1040,32 @@ class TeamsPage <: Component {
         PatchResult.ReRender
     }
 
-    // 成员列表：全量用户 + 搜索过滤 + 关联标记
-    func refreshMembers(): Unit {
-        match (this.state) {
-            case Some(st) =>
-                let kw = this.memberSearch.get()
-                let linked = st.adminData.listTeamMemberIds(this.editingId)
-                let data = ArrayList<MemberRow>()
-                for (u in st.userStore.listAllUsers()) {
-                    if (kw != "" && !u.username.contains(kw)) { continue }
-                    var isLinked = false
-                    for (uid in linked) {
-                        if (uid == u.id) {
-                            isLinked = true
-                            break
-                        }
-                    }
-                    data.add(MemberRow(u, isLinked))
-                }
-                this.memberRows.set(data)
-            case None => ()
+    // 成员列表：全量用户 + 搜索过滤 + 关联标记（派生逻辑同 filteredPkgs）
+    func filteredMembers(): ArrayList<MemberRow> {
+        let _ = this.memberVersion.get()
+        let data = ArrayList<MemberRow>()
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return data
         }
+        let kw = this.memberSearch.get().trimAscii()
+        let linked = st.adminData.listTeamMemberIds(this.editingId)
+        for (u in st.userStore.listAllUsers()) {
+            if (kw != "" && !u.username.contains(kw)) { continue }
+            var isLinked = false
+            for (uid in linked) {
+                if (uid == u.id) {
+                    isLinked = true
+                    break
+                }
+            }
+            data.add(MemberRow(u, isLinked))
+        }
+        data
+    }
+
+    func refreshMembers(): Unit {
+        this.memberVersion.update({ v => v + 1 })
     }
 
     func toggleMember(ctx: ActionContext, userId: Int64): PatchResult {
@@ -1176,10 +1256,11 @@ class TeamsPage <: Component {
         let dlg = Dialog([
             div([
                 div([text("搜索包并关联/移除（权限走团队默认权限）")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
-                Input().bind(this.pkgSearch).placeholder("搜索包名").on("input", { _ =>
-                    this.refreshPkgs()
-                    PatchResult.ReRender
-                }),
+                // 只 bind：过滤由 pkgBinding 的 Effect 跟着关键字重算。
+                // 旧写法在 input 的 action 里 refreshPkgs()，而前端先 action 后 bind
+                // （cjxt public/js/cangjie-ui.js:333 立即发 action，:490 的 bind 有 300ms 防抖），
+                // action 里读到的关键字还是上一次的 → 搜索框里打字等于没反应。
+                Input().bind(this.pkgSearch).placeholder("搜索包名"),
                 Table<PkgRow>()
                     .data(this.pkgRows)
                     .stripe()
@@ -1208,10 +1289,7 @@ class TeamsPage <: Component {
         let dlg = Dialog([
             div([
                 div([text("搜索用户并添加/移除成员")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
-                Input().bind(this.memberSearch).placeholder("搜索用户名").on("input", { _ =>
-                    this.refreshMembers()
-                    PatchResult.ReRender
-                }),
+                Input().bind(this.memberSearch).placeholder("搜索用户名"),   // 同 pkgSearch：只 bind
                 Table<MemberRow>()
                     .data(this.memberRows)
                     .stripe()

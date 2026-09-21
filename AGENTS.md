@@ -85,16 +85,46 @@ CJREG_PORT=8066 docker compose build && CJREG_PORT=8066 docker compose up -d
 补充：制品字节数（`tarballSize`）也在这个口径里（索引协议不带 size，只有下载/重拉后才知道），
 所以「只缺 size」的版本同样会被 `sync-metadata` 再补一轮（本地有 blob 就不用回源）。
 
-## 后台：包版本列表 / 单版本详情 / 上游重拉
+## 后台：包管理（左主右子）/ 单版本详情 / 上游重拉
 
-**版本列表**（包管理页「版本」按钮）：ID / 版本 / **来源**（本地发布 or `回源 · <上游名>`）/ **大小** /
-**sha256**（缩写）/ **时间**（本地发布=发布时刻，回源=收录时刻）/ 下载 / 状态 / 操作（详情 · 重拉 · 软删 | 恢复 · 硬删）。
+**包管理页是「左主（包）右子（版本）」主子表**：左栏是聚合行（一个 `org::name` 一行，显示版本数 /
+最新版本 / 下载合计），选中一行右栏即时列出该包的版本；版本表字段：ID / 版本 / **来源**（本地发布 or
+`回源 · <上游名>`）/ **大小** / **sha256**（缩写）/ **时间**（本地发布=发布时刻，回源=收录时刻）/
+下载 / 状态 / 操作（详情 · 重拉 · 软删 | 恢复 · 硬删）。
 
 - **重拉**只对**回源镜像**版本出现（`upstreamId != 0`）；本地发布的版本本地才是权威，后端直接 409。
-- **单版本详情**弹窗：全字段 + SHA256 全量 + 来源上游 + **README 全文**（Markdown 渲染，正文区独立滚动）。
+- **单版本详情**仍是弹窗（README 正文长，塞进右栏会把版本表挤没）：全字段 + SHA256 全量 + 来源上游 +
+  **README 全文**（Markdown 渲染，正文区独立滚动）。
 - 两者都有管理 API（给脚本/CI 用）：
   - `GET  /api/admin/packages/:id` → 详情 JSON（含 `readme`/`readmeLength`/`upstreamName`/`artifactPresent`）
   - `POST /api/admin/packages/:id/refetch[?force=1]` → 重拉并覆盖本地缓存
+
+### 列表页的「输入即过滤」写法（改这些页面前必读）
+
+管理端所有列表的搜索/筛选都是**信号派生**，不是动作触发（`src/ui/list_binding.cj` 的 `bindRows` /
+`bindPaged` / `bindVisible`）：cjxt 的 `Table.data()` 只接受 `Signal<ArrayList<T>>`，过滤结果只能由信号
+承载。
+
+- **输入框/下拉只 bind，绝不挂 `on("input")` 动作**：前端对同一元素是**先 action 后 bind**
+  （`public/js/cangjie-ui.js:333` 立即发 action，`:490` 的 bind 有 300ms 防抖），那个 action 立刻换来一次
+  补丁，而补丁应用完会无条件清掉焦点元素的 `bindDirty` 守卫（`:710`），随后 `applyAttrs` 把输入框的值
+  退回服务端旧值（`:309`）——300ms 后才发出的 bind 读到的是**空串**，写回信号等于没搜。
+  实测症状：**浏览器里打字完全没反应**（单测里直接 set 信号是好的，所以单测抓不到）。
+- **过滤条件变化时不要回写页码信号**：cjxt `Pagination` 的 `total` 是**创建时的快照**，页码一变它自己就
+  变脏，同一批补丁里旧实例会重渲一次、且排在页面补丁**之后** → 把刚算好的「共 N 条」顶回上一次的值。
+  页越界交给本地钳制（服务端分页退到最后一页重查；`bindPaged` 只影响切片，`Pagination.render` 会把
+  显示页夹进有效范围）。
+- **空态提示与表格并存，槽位固定**（`layout.cj` 的 `listBody`）：不要按"有没有行"在提示与表格之间换
+  节点类型——同批补丁里父（页面）与子（表格）都会变脏，子补丁后应用，会把中文提示顶成空表格的
+  "No Data"。表格自带的空文案用 `Table.emptyText("暂无数据")`。
+- 动作只写信号，**页面上必须有人读它**，否则组件不会变脏、服务端不下发补丁（"点一下没反应"）；
+  单选类状态（如"当前选中的包"）要做成**信号**并在渲染里读，不能留普通字段。
+- store 不是信号：写库后 `bump()` 一个 `dataVersion` 信号让派生重算（`refreshXxx()` 现在就干这个）。
+- 派生绑定必须 `onMount` 重建、`onUnmount` 释放：页面实例是路由注册期创建、跨请求复用的。
+- 回归测试：`list_binding_test.cj`、`pages_manage_render_test.cj`、`pages_users_render_test.cj`、
+  `pages_plan_render_test.cj`、`logs_search_test.cj`、`team_dialog_search_test.cj`
+  （含"输入框没有挂 input 动作"、"改条件不动页码且条数跟着变"、"空态提示与表格并存"、
+  "选中/开关会标脏"这几条结构性断言，它们守的正是单测最容易漏掉的补丁行为）。
 
 **重拉的语义与护栏**（`src/server/refetch_service.cj`）：
 

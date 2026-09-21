@@ -273,3 +273,19 @@ func planItem_targetComparePersists() {
         case None => @Fail("expected item")
     }
 }
+
+@Test
+func listPlans_newestFirst() {
+    // 列表与仪表盘都按 id 降序：最近建的先看到（不依赖底层扫描顺序）
+    let store = makeAdminStore()
+    let first = store.createPlan("计划A", 0, 10, 600, 1000)
+    let second = store.createPlan("计划B", 0, 10, 600, 2000)
+    let third = store.createPlan("计划C", 0, 10, 600, 3000)
+
+    let plans = store.listPlans()
+    @Expect(plans.size, 3)
+    @Expect(plans[0].id, third)
+    @Expect(plans[1].id, second)
+    @Expect(plans[2].id, first)
+    @Expect(plans[0].name, "计划C")
+}

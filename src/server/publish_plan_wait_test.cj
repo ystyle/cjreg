@@ -121,17 +121,6 @@ func legacyPollDefaults_onlyMatchesUntouchedDefaults() {
     @Expect(legacyPollDefaults(60, 1800), false)
 }
 
-// 生产节奏就是 5 秒 → 1 分钟 → 3 分钟 → 5 分钟，之后每 5 分钟（配置本身就是契约）
-@Test
-func indexWaitLadder_matchesPublishSkillRhythm() {
-    @Expect(IndexWaitLadder.size, 4)
-    @Expect(IndexWaitLadder[0], 5)
-    @Expect(IndexWaitLadder[1], 60)
-    @Expect(IndexWaitLadder[2], 180)
-    @Expect(IndexWaitLadder[3], 300)
-    @Expect(IndexWaitSteadySec, 300)
-}
-
 // 探测结果的收工判据（对齐官方返回码表）
 @Test
 func indexProbe_fatalJudgement() {
@@ -153,4 +142,25 @@ func indexProbe_fatalJudgement() {
     @Expect(IndexProbe(0, "", detail: "boom").planFatal(), false)
     @Expect(IndexProbe(0, "", detail: "boom").describe(), "网络不可达：boom")
     @Expect(IndexProbe(503, "").describe(), "HTTP 503")
+}
+
+// 默认阶梯（生产实际用的那一套）：5s → 1m → 1m → 1m → 之后固定 5m。
+// 上面各用例都把阶梯注入成秒级，这里专门守住"默认值别被顺手改掉"。
+//
+// 与「手工发版重试节奏」刻意不同：手工发版是有限次重试（几次不成就停下报告），
+// 计划里的等待是无上限的后台任务，慢同步（几十分钟到几天）也得等下去，所以中间不递增、尾段固定。
+@Test
+func indexWaitDefaults_areFiveSecondsThenOneMinuteThriceThenFiveMinutes() {
+    @Expect(IndexWaitLadder.size, 4)
+    @Expect(IndexWaitLadder[0], 5)
+    @Expect(IndexWaitLadder[1], 60)
+    @Expect(IndexWaitLadder[2], 60)
+    @Expect(IndexWaitLadder[3], 60)
+    @Expect(IndexWaitSteadySec, 300)
+}
+
+// 文案是常量的投影：改了阶梯就不该留下"还写着 3 分钟"的旧说法
+@Test
+func indexWaitRhythmText_projectsTheLadder() {
+    @Expect(indexWaitRhythmText(), "5s → 1m → 1m → 1m → 每 5m")
 }

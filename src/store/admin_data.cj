@@ -534,12 +534,15 @@ public class AdminDataStore {
         return d.id
     }
 
+    // 列表默认**最新在前**（按 id 降序）：列表页与仪表盘都要"最近建的先看到"，
+    // 不能依赖底层扫描顺序（与 listLogs 的做法一致：显式排序 + descending）
     public func listPlans(): ArrayList<PlanDoc> {
         let r = ArrayList<PlanDoc>()
         let all = this.storm.all<PlanDoc>()
         for (d in all) {
             r.add(d)
         }
+        sort(r, lessThan: { a, b => a.id > b.id })
         return r
     }
 

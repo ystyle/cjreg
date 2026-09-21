@@ -28,6 +28,16 @@ public func bindRows<T>(rows: Signal<ArrayList<T>>, total: Signal<Int64>,
     })
 }
 
+/// 无计数：只要"显示哪些行"（不分页、也不在界面上报总数的列表用）。
+///
+/// 与 bindRows 同样走 Effect：过滤结果必须由信号变化自动重算，不能在 action 里刷新
+/// （前端先 action 后 bind，action 里读到的关键字还是上一次的）。
+public func bindVisible<T>(rows: Signal<ArrayList<T>>, source: () -> ArrayList<T>): Effect {
+    Effect({ =>
+        rows.set(source())
+    })
+}
+
 /// 带分页：按 page/size 切片后进 rows，过滤后的总数进 total。
 ///
 /// 页越界时**只在本地钳制**，不回写 page 信号——回写会让本 Effect 自订阅成环。

@@ -647,8 +647,8 @@ class PublishPlanCreatePage <: Component {
                 .bindValue({ => this.targetUpstream.get() })
                 .rule(FormRule(required: true, message: "请选择目标上游"))
                 .errorSignal(this.upstreamError),
-            // 索引等待节奏是固定的（5 秒 → 1 分钟 → 3 分钟 → 5 分钟 → 之后每 5 分钟），
-            // 不需要用户配；这里只留一个可选的**总等待上限**（0 = 一直等，默认）。
+            // 索引等待节奏是固定的（见 indexWaitRhythmText），不需要用户配；
+            // 这里只留一个可选的**总等待上限**（0 = 一直等，默认）。
             FormItem([InputNumber().bind(this.pollTimeout).min(0)]).label("索引等待上限（秒，0 = 一直等）")
                 .bindValue({ => this.pollTimeout.get().toString() }),
         ]).labelTop()
@@ -683,8 +683,14 @@ class PublishPlanDetailPage <: Component {
     var msg = Signal<String>("")
     // 「重新分析」在跑：要逐包取目标仓索引（真网络），界面必须有加载态
     var analyzing = Signal<Bool>(false)
-    // 发布项行数据（pushUpdate 时经 refreshItems 更新）
+    // **全量**发布项（pushUpdate 时经 refreshItems 更新）：计数、执行、按钮判据都读它
+    var items = Signal<ArrayList<PlanItemDoc>>(ArrayList<PlanItemDoc>())
+    // 表格**显示行**：由 items + 隐藏开关派生（见 plan_items_filter.cj 为什么要分成两份）
     var itemRows = Signal<ArrayList<PlanItemDoc>>(ArrayList<PlanItemDoc>())
+    // 隐藏"不会推送"的项（没勾选 / 已被判未推送）
+    var hideUnpublished = Signal<Bool>(false)
+    // 派生绑定：页面实例是路由注册期创建、跨请求复用的，onMount 必须重建，否则订阅会累积
+    private var binding: Option<Effect> = None
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
@@ -697,6 +703,26 @@ class PublishPlanDetailPage <: Component {
             case None => ()
         }
         refreshItems()
+        this.rebind()
+    }
+
+    public func onUnmount(ctx: LifecycleContext): Unit {
+        match (this.binding) {
+            case Some(e) => e.dispose()
+            case None => ()
+        }
+        this.binding = None
+    }
+
+    // 显示行 = visibleItems(items, hideUnpublished)：开关一拨就自动重算
+    private func rebind(): Unit {
+        match (this.binding) {
+            case Some(e) => e.dispose()
+            case None => ()
+        }
+        this.binding = Some(bindVisible(this.itemRows, { =>
+            visibleItems(this.items.get(), this.hideUnpublished.get())
+        }))
     }
 
     func backToList(ctx: ActionContext): PatchResult {
@@ -745,9 +771,10 @@ class PublishPlanDetailPage <: Component {
         planCategoryTag(toPlanCategory(c), status)
     }
 
-    // 有没有"已推送成功、在等目标仓索引"的项
+    // 有没有"已推送成功、在等目标仓索引"的项。
+    // 按**全量**判：隐藏开关只是显示筛选，不能把「检查索引」按钮一起藏没了
     func hasWaitingIndex(): Bool {
-        for (d in this.itemRows.get()) {
+        for (d in this.items.get()) {
             if (d.status == "waiting_index") {
                 return true
             }
@@ -907,7 +934,7 @@ class PublishPlanDetailPage <: Component {
             }
         }, indexProbe: { org, name =>
             // 拓扑序下一条依赖它：推完必须确认**目标仓索引里真的能查到该版本**再往下走。
-            // 等待节奏固定为 5s → 1m → 3m → 5m → 每 5m，默认不设总超时（中心仓同步慢是常态）；
+            // 等待节奏固定（见 indexWaitRhythmText），默认不设总超时（中心仓同步慢是常态）；
             // 只有探测本身失败（401/403/429/5xx/网络）或用户点停止才收工。
             match (st.proxySvc) {
                 case Some(p) => p.probeUpstreamIndex(up, org, name)
@@ -1275,12 +1302,12 @@ class PublishPlanDetailPage <: Component {
     func refreshItems(): Unit {
         match (this.state) {
             case Some(st) =>
-                let items = st.adminData.listPlanItems(this.planId)
                 let data = ArrayList<PlanItemDoc>()
-                for (d in items) {
+                for (d in st.adminData.listPlanItems(this.planId)) {
                     data.add(d)
                 }
-                this.itemRows.set(data)
+                // 只写**全量**：显示行由 binding 的 Effect 从它派生（两边都写会让过滤被覆盖）
+                this.items.set(data)
             case None => ()
         }
     }
@@ -1290,13 +1317,14 @@ class PublishPlanDetailPage <: Component {
         text(progressTextOf(done, total))
     }
 
-    // 明细：共几项、其中已存在/冲突/需发布各几个（不进分母也要让人看得见，不然像"项丢了"）
+    // 明细：共几项、其中已存在/冲突/需发布各几个（不进分母也要让人看得见，不然像"项丢了"）。
+    // 按**全量**算：隐藏开关只筛显示行，明细报的必须是计划的真实构成。
     func itemBreakdown(): String {
         var exists: Int64 = 0
         var conflict: Int64 = 0
         var need: Int64 = 0
         var compared: Int64 = 0
-        let rows = this.itemRows.get()
+        let rows = this.items.get()
         for (d in rows) {
             match (d.category) {
                 case "already_exists" => exists++
@@ -1322,12 +1350,13 @@ class PublishPlanDetailPage <: Component {
         s
     }
 
-    // 索引等待策略文案：0 = 一直等（默认）；否则是总等待上限
+    // 索引等待策略文案：0 = 一直等（默认）；否则是总等待上限。
+    // 节奏部分是服务端常量的投影（indexWaitRhythmText），别在这里再抄一遍数字。
     func waitPolicyText(pollTimeout: Int64): String {
         if (pollTimeout <= 0) {
-            return "一直等（5s → 1m → 3m → 5m → 每 5m 探测一次）"
+            return "一直等（${indexWaitRhythmText()} 探测一次）"
         }
-        "最长 ${pollTimeout}s（5s → 1m → 3m → 5m → 每 5m）"
+        "最长 ${pollTimeout}s（${indexWaitRhythmText()}）"
     }
 
     // 目标仓能不能覆盖已有同版本（官方中心仓不能 → 冲突条目只能升版重发）
@@ -1342,7 +1371,27 @@ class PublishPlanDetailPage <: Component {
         }
     }
 
+    // 显示行数文案：隐藏时给出「显示 N / 共 M」，否则只说总数。
+    // 数字都从信号现读，所以拨开关时 render 会重算（不读信号的话文案不会变）。
+    func itemCountText(): String {
+        itemCountTextOf(this.itemRows.get().size, this.items.get().size, this.hideUnpublished.get())
+    }
+
+    // 「发布项」卡片头部：隐藏开关 + 行数。
+    // 开关只影响显示，执行与计数仍按全量（见 plan_items_filter.cj）。
+    func renderItemsToolbar(): IComponent {
+        div([
+            Switch().bind(this.hideUnpublished),
+            text("隐藏不推送的项"),
+            text(this.itemCountText()),
+        ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))])))
+    }
+
     func renderItems(): IComponent {
+        // 全被隐藏时给一句话：否则只看到一张空表，像是项丢了
+        if (this.itemRows.get().size == 0 && this.items.get().size > 0) {
+            return div([text("没有会推送的项（${this.items.get().size} 项都已勾掉或已判为未推送）—— 关掉「隐藏不推送的项」可以查看全部")])
+        }
         let canOverwrite = this.targetOverwriteAllowed()
         Table<PlanItemDoc>()
             .data(this.itemRows)
@@ -1476,7 +1525,7 @@ class PublishPlanDetailPage <: Component {
                             },
                         ], attrs: Some(HashMap<String, String>([("class", cls("card-actions"))]))),
                     ]),
-                        adminCard("发布项", [this.renderItems()]),
+                        adminCard("发布项", [this.renderItemsToolbar(), this.renderItems()]),
                     ]),
                 ])
             case None =>
@@ -1634,31 +1683,74 @@ class LogsPage <: Component {
     var msg = Signal<String>("")
     var confirmVisible = Signal<Bool>(false)
     var cleanKind = Signal<String>("all")
+    // 数据版本：清理日志后强制重查（查询条件都没变时，信号不会变，派生不会自己再跑）
+    var dataVersion = Signal<Int64>(0)
+    // 派生绑定：页面实例是路由注册期创建、跨请求复用的，onMount 必须重建，否则订阅会累积
+    private var binding: Option<Effect> = None
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
-        refresh()
+        this.rebind()
     }
 
-    func refresh(): Unit {
-        match (this.state) {
-            case Some(st) =>
-                let kind = if (this.kindFilter.get() == "all") { Option<String>.None } else { Some(this.kindFilter.get()) }
-                let status = if (this.statusFilter.get() == "all") { "" } else { this.statusFilter.get() }
-                var size = this.pageSize.get()
-                if (size <= 0) {
-                    size = 20
-                }
-                var page = this.currentPage.get()
-                if (page < 1) {
-                    page = 1
-                }
-                let (rows, total) = st.adminData.queryLogs(kind, this.keyword.get().trimAscii(), status,
-                    0, 0, (page - 1) * size, size)
-                this.rows.set(rows)
-                this.total.set(total)
+    public func onUnmount(ctx: LifecycleContext): Unit {
+        match (this.binding) {
+            case Some(e) => e.dispose()
             case None => ()
         }
+        this.binding = None
+    }
+
+    private func rebind(): Unit {
+        match (this.binding) {
+            case Some(e) => e.dispose()
+            case None => ()
+        }
+        this.binding = Some(Effect({ => this.reload() }))
+    }
+
+    func bump(): Unit {
+        this.dataVersion.update({ v => v + 1 })
+    }
+
+    // 查询结果派生：查询条件全部从信号读，任一变（搜索框 bind、下拉 bind、翻页、改每页条数）自动重查。
+    //
+    // 旧写法把查询放在输入框的 action 里 refresh()，而前端对同一元素是**先 action 后 bind**
+    // （cjxt public/js/cangjie-ui.js:333 立即发 action，:490 的 bind 有 300ms 防抖）——
+    // action 里读到的关键字还是上一次的，表现就是「输入搜索无效，必须再点一次『筛选』」。
+    //
+    // 日志量大，过滤在服务端做（不像包管理那样全量拉进来在内存里筛）：所以派生的对象是
+    // "这次查询的结果"，而不是"行的子集"。
+    func reload(): Unit {
+        let _ = this.dataVersion.get()
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return
+        }
+        let kind = if (this.kindFilter.get() == "all") { Option<String>.None } else { Some(this.kindFilter.get()) }
+        let status = if (this.statusFilter.get() == "all") { "" } else { this.statusFilter.get() }
+        var size = this.pageSize.get()
+        if (size <= 0) {
+            size = 20
+        }
+        var page = this.currentPage.get()
+        if (page < 1) {
+            page = 1
+        }
+        var (rows, total) = st.adminData.queryLogs(kind, this.keyword.get().trimAscii(), status,
+            0, 0, (page - 1) * size, size)
+        // 页越界（上一页被清理、或条件变严后总页数变少）：退到最后一页重查一次。
+        // 这里**不回写页码信号**（回写会让本 Effect 自订阅成环）；分页器自己会把显示页
+        // 夹到有效范围（Pagination.render 的 clampPage），所以不会出现"表格第 1 页、页码显示第 3 页"。
+        if (rows.size == 0 && total > 0 && (page - 1) * size >= total) {
+            let last = (total + size - 1) / size
+            let again = st.adminData.queryLogs(kind, this.keyword.get().trimAscii(), status,
+                0, 0, (last - 1) * size, size)
+            rows = again[0]
+            total = again[1]
+        }
+        this.rows.set(rows)
+        this.total.set(total)
     }
 
     func kindLabel(k: String): String {
@@ -1669,15 +1761,16 @@ class LogsPage <: Component {
         }
     }
 
+    // 「筛选」按钮：回到第一页再重查（条件没变时靠 bump 强制重查，否则点了像没反应）
     func doRefresh(ctx: ActionContext): PatchResult {
         this.currentPage.set(1)
-        this.refresh()
+        this.bump()
         PatchResult.ReRender
     }
 
-    // 分页绑定由框架回写 currentPage/pageSize 信号，这里只需按新条件重查
-    func onPageChange(ctx: ActionContext): PatchResult {
-        this.refresh()
+    // 下拉改条件时回第一页：这个动作**不读条件**，所以不受"先 action 后 bind"影响
+    func resetPage(ctx: ActionContext): PatchResult {
+        this.currentPage.set(1)
         PatchResult.ReRender
     }
 
@@ -1710,7 +1803,7 @@ class LogsPage <: Component {
         this.msg.set("已清理 ${deleted} 条${if (scope == "all") { "全部" } else { this.kindLabel(scope) }}日志")
         this.confirmVisible.set(false)
         this.currentPage.set(1)
-        this.refresh()
+        this.bump()
         PatchResult.ReRender
     }
 
@@ -1729,17 +1822,15 @@ class LogsPage <: Component {
         cleanOptions.add(SelectOption([text("仅发布日志")], "publish"))
         cleanOptions.add(SelectOption([text("仅管理日志")], "admin"))
         cleanOptions.add(SelectOption([text("仅认证日志")], "auth"))
-        // 各控件固定宽度：日志页列多，工具栏需在一行内放下「筛选/清理」按钮
+        // 各控件固定宽度：日志页列多，工具栏需在一行内放下「筛选/清理」按钮。
+        // 输入框与下拉都**只 bind**（不挂刷新动作）：过滤由派生查询跟着信号走，
+        // 动作里读关键字会踩"先 action 后 bind"拿到上一次的值。
         let toolbar = div([
-            div([Input().bind(this.keyword).placeholder("搜索操作者/操作/对象/错误")
-                .on("input", { _ =>
-                    this.currentPage.set(1)
-                    this.refresh()
-                    PatchResult.ReRender
-                })], attrs: Some(HashMap<String, String>([("style", "width:230px;display:inline-block;")]))),
-            div([Select(kindOptions.toArray()).bind(this.kindFilter)],
+            div([Input().bind(this.keyword).placeholder("搜索操作者/操作/对象/错误")],
+                attrs: Some(HashMap<String, String>([("style", "width:230px;display:inline-block;")]))),
+            div([Select(kindOptions.toArray()).bind(this.kindFilter).onChange(resetPage)],
                 attrs: Some(HashMap<String, String>([("style", "width:130px;display:inline-block;")]))),
-            div([Select(statusOptions.toArray()).bind(this.statusFilter)],
+            div([Select(statusOptions.toArray()).bind(this.statusFilter).onChange(resetPage)],
                 attrs: Some(HashMap<String, String>([("style", "width:130px;display:inline-block;")]))),
             Button([text("筛选")]).kind(ButtonKind.Primary).onClick(doRefresh),
             Button([text("清理日志")]).kind(ButtonKind.Danger).onClick(askClear),
@@ -1771,12 +1862,13 @@ class LogsPage <: Component {
             .add(TableColumn<LogDoc>().label("IP").accessor({ l => l.ipAddr }).width(120))
             .add(TableColumn<LogDoc>().label("User-Agent").accessor({ l => l.userAgent }).minWidth(130).showOverflowTooltip())
             .add(TableColumn<LogDoc>().label("错误信息").accessor({ l => l.error }).minWidth(160).showOverflowTooltip())
+        // 翻页/改每页条数由 Pagination 自己写 currentPage/pageSize 信号，派生查询跟着重跑，
+        // 因此不再挂 onChange（挂了也只是重复查一次）
         let pager = Pagination()
             .currentPage(this.currentPage)
             .pageSize(this.pageSize)
             .total(this.total.get())
             .layout("total, prev, pager, next, sizes")
-            .onChange(onPageChange)
         let confirmDlg = Dialog([
             div([text("清理范围：")]),
             Select(cleanOptions.toArray()).bind(this.cleanKind),

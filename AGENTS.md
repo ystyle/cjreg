@@ -45,6 +45,10 @@ CJREG_PORT=8066 docker compose build && CJREG_PORT=8066 docker compose up -d
 
 - ⚠️ **必须显式传 `CJREG_PORT=8066`**：`docker-compose.yml` 是 `"${CJREG_PORT:-8060}:8060"`，不传会改成 8060。
 - 镜像只打包**宿主编译产物**（`Dockerfile` 里 `COPY ${CJREG_BIN} /app/cjreg`），所以必须先 `cjpm build`。
+- ⚠️ **宿主机 glibc 升级后要先拉基础镜像**：基础镜像是 `archlinux:latest`（本地那份可能很旧），二进制动态依赖
+  `libm.so.6`，宿主 glibc 一升级就会报 `/app/cjreg: /usr/lib/libm.so.6: version 'GLIBC_2.44' not found`
+  → 容器**反复重启**、healthcheck 永远不 healthy。处置：`docker pull archlinux:latest` 后重新
+  `docker compose build && up -d`（2026-09-22 实测：宿主 glibc 2.44、本地基础镜像还是 2.43，拉了新的才起来）。
 - 部署后硬校验：`docker exec cjreg sha256sum /app/cjreg` 应等于 `sha256sum target/release/bin/ystyle::cjreg`。
 - 重置管理员口令需先停容器独占数据目录：`docker compose stop` → `./target/release/bin/ystyle::cjreg admin reset-password -d data --username admin --password '<新口令>'` → `CJREG_PORT=8066 docker compose start`。
 

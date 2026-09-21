@@ -4,15 +4,20 @@
 //
 // 1. cjxt 的 `Table.data()` **只接受 `Signal<ArrayList<T>>`**（components/Table.cj:103），
 //    所以"过滤结果"只能由一个信号承载；
-// 2. 前端对同一元素的监听是**先 action 后 bind**（public/js/cangjie-ui.js:333 收到 input
-//    立刻发 action，而 bind 有 300ms 防抖，见 :490）——action 里读信号拿到的是**上一次**
-//    的关键字；
-// 3. 更致命的是：过滤结果被缓存进 rows 信号、而 render 只读 rows 不读 search，
+// 2. 更致命的是：过滤结果被缓存进 rows 信号、而 render 只读 rows 不读 search，
 //    于是 bind 写完信号后**没有任何作用域重算表格** → 表现为"搜索完全无效"，
 //    只有再点一次「刷新」才生效。
 //
 // 正确做法是让「过滤后的行」成为**信号变化时自动重算的派生值**：`source()` 内部读哪些
 // 信号，Effect 就订阅哪些信号（读取即订阅）。仓库里同样的教训见 pages_plan.cj:290-296。
+//
+// ⚠️ **绑定输入框不许再挂同一个 input 动作**（这是"打字完全没反应"的那一半根因）：
+// 前端对同一元素是**先 action 后 bind**（public/js/cangjie-ui.js:333 收到 input 立刻发 action，
+// 而 bind 有 300ms 防抖，见 :490）。那个 action 立刻换来一次补丁，而补丁应用完会无条件清掉
+// 焦点元素的 `bindDirty` 守卫（:710），随后 applyAttrs 认为"输入已与服务端同步"、把输入框的值
+// 退回服务端旧值（:309-312）——300ms 后真正发出的 bind 读到的已是空串，写回信号等于什么都没搜。
+// 所以：输入框/下拉只 bind；"回第一页"交给 bindPaged 的本地钳制（Pagination 自己会把显示页
+// 夹进有效范围），或交给点击类控件（Select 的 onChange 由一次点击触发，没有待发的输入）。
 package ystyle::cjreg.ui
 
 import cjxt.*

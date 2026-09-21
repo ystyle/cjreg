@@ -372,12 +372,18 @@ class UpstreamsPage <: Component {
     }
 
     // ===== 渲染 =====
-    func renderList(): IComponent {
+    // 空态提示走 listBody 的固定槽位（见 layout.cj）：表格永远渲染，提示只是"有没有内容"
+    func listHint(): String {
         if (this.rows.get().size == 0) {
-            return emptyState("暂无上游，点击「新增上游」添加")
+            return "暂无上游，点击「新增上游」添加"
         }
+        ""
+    }
+
+    func renderList(): IComponent {
         Table<Upstream>()
             .data(this.rows)
+            .emptyText("暂无数据")
             .stripe()
             .add(TableColumn<Upstream>().label("ID").accessor({ u => u.id.toString() }).width(50))
             .add(TableColumn<Upstream>().label("名称").accessor({ u => u.name }).minWidth(130))
@@ -490,7 +496,8 @@ class UpstreamsPage <: Component {
             .onChange(onPageChange)
         adminLayout("/admin/upstreams", [
             div([text("上游管理")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
-            adminCard("多仓上游配置", [toolbar, this.renderList(), pager, this.renderFormDialog(), this.renderConfirmDialog()]),
+            adminCard("多仓上游配置", [toolbar, listBody(this.listHint(), this.renderList()), pager,
+                this.renderFormDialog(), this.renderConfirmDialog()]),
         ])
     }
 }
@@ -513,8 +520,13 @@ class PackagesPage <: Component {
     var pageSize = Signal<Int64>(20)
     var total = Signal<Int64>(0)
     // 右栏（子表）：选中的包 + 它的各版本
-    var selectedOrg: String = ""
-    var selectedName: String = ""
+    // 选中的包（主子表的"主"）。**必须是信号**：点「查看版本」是动作驱动的，
+    // 而动作只写信号；页面上没人读它时不会产生任何补丁 —— 站在"未选中"分支的渲染
+    // 根本不读 verTitle/verRows，于是"点一下没反应"（实测：浏览器里右栏一直停在空态，
+    // 而单测直接调 select() + render() 是好的，差别就在这里）。
+    // 做成信号后每次渲染都会读它，选中即脏 → 服务端下发补丁。
+    var selOrg = Signal<String>("")
+    var selName = Signal<String>("")
     var verRows = Signal<ArrayList<PackageDoc>>(ArrayList<PackageDoc>())
     var verTitle = Signal<String>("")
     // 删除确认（mode: soft = 软删可恢复；hard = 硬删不可恢复）
@@ -584,12 +596,9 @@ class PackagesPage <: Component {
         out
     }
 
-    // 过滤条件一变就回第一页。这个动作**不读关键字**，因此不受「前端先 action 后 bind」
-    // 影响——真正的过滤由 bind 落在信号上、再由 Effect 重算。
-    func resetPage(ctx: ActionContext): PatchResult {
-        this.currentPage.set(1)
-        PatchResult.ReRender
-    }
+    // 过滤条件变化时**不回写页码**：分页器的 total 是创建时的快照，页码一变它就变脏，
+    // 同一批补丁里旧实例会重渲一次并排在页面补丁之后 → 把新的「共 N 条」顶回旧值。
+    // 页越界由 bindPaged 本地钳制（分页器自己也会夹显示页），不回写同样不会错位。
 
     func doRefresh(ctx: ActionContext): PatchResult {
         this.bump()
@@ -604,10 +613,10 @@ class PackagesPage <: Component {
     // ===== 主子表：选中一个包 → 右栏列出它的版本 =====
     // 选中逻辑独立成无 ctx 的方法：渲染层测试可以直接驱动（动作只负责转调 + 重画）
     func select(org: String, name: String): Unit {
-        this.selectedOrg = org
-        this.selectedName = name
+        this.selOrg.set(org)
+        this.selName.set(name)
         match (this.state) {
-            case Some(st) => this.refreshVersions(st)
+            case Some(st) => this.refreshVersions(st, org, name)
             case None => ()
         }
     }
@@ -618,16 +627,16 @@ class PackagesPage <: Component {
     }
 
     // 刷新右栏版本表（软删/恢复/硬删/重拉后保持同步）
-    func refreshVersions(st: CjregState): Unit {
-        if (this.selectedName == "") {
+    func refreshVersions(st: CjregState, org: String, name: String): Unit {
+        if (name == "") {
             return
         }
         let data = ArrayList<PackageDoc>()
-        for (d in st.pkgStore.listVersions(this.selectedOrg, this.selectedName)) {
+        for (d in st.pkgStore.listVersions(org, name)) {
             data.add(d)
         }
         this.verRows.set(data)
-        this.verTitle.set("${pkgKeyText(this.selectedOrg, this.selectedName)} 的版本（${data.size}）")
+        this.verTitle.set("${pkgKeyText(org, name)} 的版本（${data.size}）")
     }
 
     // ===== 三级删除：软删 / 恢复 / 硬删 =====
@@ -676,7 +685,7 @@ class PackagesPage <: Component {
             this.msg.set("恢复失败：${r.message}")
             uiAudit(st, ctx, "restore_package", target, status: "failed", error: r.message)
         }
-        this.refreshVersions(st)
+        this.refreshVersions(st, this.selOrg.get(), this.selName.get())
         this.bump()
         PatchResult.ReRender
     }
@@ -733,7 +742,7 @@ class PackagesPage <: Component {
         }
         this.confirmVisible.set(false)
         this.pendingDeleteId = 0
-        this.refreshVersions(st)
+        this.refreshVersions(st, this.selOrg.get(), this.selName.get())
         this.bump()
         PatchResult.ReRender
     }
@@ -819,7 +828,7 @@ class PackagesPage <: Component {
                 this.refetchVisible.set(false)
                 this.refetchDocId = 0
         }
-        this.refreshVersions(st)
+        this.refreshVersions(st, this.selOrg.get(), this.selName.get())
         this.bump()
         PatchResult.ReRender
     }
@@ -944,16 +953,23 @@ class PackagesPage <: Component {
     }
 
     // ===== 渲染：左主（包）右子（版本）=====
-    func renderList(): IComponent {
+    func listHint(): String {
         if (this.rows.get().size == 0) {
-            return emptyState("没有匹配的包")
+            return "没有匹配的包"
         }
+        ""
+    }
+
+    func renderList(): IComponent {
         Table<PackageRow>()
             .data(this.rows)
+            .emptyText("暂无数据")
             .stripe()
             .add(TableColumn<PackageRow>().label("包").minWidth(200).render({ r, i =>
                 let label = pkgKeyText(r.organization, r.name)
-                let sel = this.selectedOrg == r.organization && this.selectedName == r.name
+                let curOrg = this.selOrg.get()
+                let curName = this.selName.get()
+                let sel = curOrg == r.organization && curName == r.name
                 if (sel) {
                     Tag([text("● " + label)]).kind(ComponentKind.Primary)
                 } else {
@@ -980,22 +996,27 @@ class PackagesPage <: Component {
     }
 
     func renderVersionPanel(): IComponent {
-        if (this.selectedName == "") {
+        if (this.selName.get() == "") {
             return emptyState("左侧选一个包，这里显示它的版本")
         }
         div([
             div([text(this.verTitle.get())],
                 attrs: Some(HashMap<String, String>([("class", cls("dialog-section"))]))),
-            this.renderVersionTable(),
+            listBody(this.versionHint(), this.renderVersionTable()),
         ])
     }
 
-    func renderVersionTable(): IComponent {
+    func versionHint(): String {
         if (this.verRows.get().size == 0) {
-            return emptyState("该包还没有版本记录")
+            return "该包还没有版本记录"
         }
+        ""
+    }
+
+    func renderVersionTable(): IComponent {
         Table<PackageDoc>()
             .data(this.verRows)
+            .emptyText("暂无数据")
             .stripe()
             .add(TableColumn<PackageDoc>().label("ID").accessor({ d => d.id.toString() }).width(56))
             .add(TableColumn<PackageDoc>().label("版本").accessor({ d => d.version }).width(96))
@@ -1069,15 +1090,14 @@ class PackagesPage <: Component {
             }
         }
         let toolbar = div([
-            // 搜索框只 bind（输入即写信号 → 派生重算）；这里的 action 只负责回第一页，
-            // 它不读关键字，所以不受「先 action 后 bind」影响
-            Input().bind(this.search).placeholder("搜索包名 / 组织 / 描述").on("input", { _ =>
-                this.currentPage.set(1)
-                PatchResult.ReRender
-            }),
-            Select(orgOptions.toArray()).bind(this.orgFilter).placeholder("组织").onChange({ c =>
-                this.resetPage(c)
-            }),
+            // 搜索框**只 bind，绝不能同时挂 input 动作**：动作会在输入的那一刻就回一次
+            // 服务端并推回补丁，而补丁应用完会把客户端的 bindDirty 守卫清掉、把输入框的值
+            // 退回服务端旧值（cjxt public/js/cangjie-ui.js:710）——300ms 后才发的 bind 于是
+            // 把**空串**写回信号，表现就是"打字完全没反应"。回第一页由 bindPaged 本地钳制
+            // （页越界只影响切片，Pagination 自己会把显示页夹进有效范围）。
+            Input().bind(this.search).placeholder("搜索包名 / 组织 / 描述"),
+            // 只 bind：改条件不回写页码（见下面 resetPage 处的说明）
+            Select(orgOptions.toArray()).bind(this.orgFilter).placeholder("组织"),
             Button([text("刷新")]).onClick(doRefresh),
             if (this.msg.get() != "") {
                 Tag([text(this.msg.get())]).kind(ComponentKind.Success)
@@ -1093,7 +1113,7 @@ class PackagesPage <: Component {
             .onChange(onPageChange)
         // 主子表：左主（包，带分页）右子（该包的版本）
         let master = div([
-            this.renderList(),
+            listBody(this.listHint(), this.renderList()),
             pager,
         ], attrs: Some(HashMap<String, String>([("style", "flex:1 1 46%;min-width:520px;")])))
         let detail = div([

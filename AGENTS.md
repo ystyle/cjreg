@@ -103,14 +103,28 @@ CJREG_PORT=8066 docker compose build && CJREG_PORT=8066 docker compose up -d
 
 管理端所有列表的搜索/筛选都是**信号派生**，不是动作触发（`src/ui/list_binding.cj` 的 `bindRows` /
 `bindPaged` / `bindVisible`）：cjxt 的 `Table.data()` 只接受 `Signal<ArrayList<T>>`，过滤结果只能由信号
-承载；而前端对同一元素是**先 action 后 bind**（`public/js/cangjie-ui.js:333` 立即发 action，`:490` 的
-bind 有 300ms 防抖）——在 `on("input")` 里 `refresh()` 读到的关键字是**上一次**的，还会因为"render 不读
-过滤信号"而永不重算，表现为「搜索完全无效，必须再点一次刷新/筛选」。
+承载。
 
-- 输入框/下拉**只 bind**；动作里只做"回第一页"这类**不读关键字**的事（不受先 action 后 bind 影响）。
+- **输入框/下拉只 bind，绝不挂 `on("input")` 动作**：前端对同一元素是**先 action 后 bind**
+  （`public/js/cangjie-ui.js:333` 立即发 action，`:490` 的 bind 有 300ms 防抖），那个 action 立刻换来一次
+  补丁，而补丁应用完会无条件清掉焦点元素的 `bindDirty` 守卫（`:710`），随后 `applyAttrs` 把输入框的值
+  退回服务端旧值（`:309`）——300ms 后才发出的 bind 读到的是**空串**，写回信号等于没搜。
+  实测症状：**浏览器里打字完全没反应**（单测里直接 set 信号是好的，所以单测抓不到）。
+- **过滤条件变化时不要回写页码信号**：cjxt `Pagination` 的 `total` 是**创建时的快照**，页码一变它自己就
+  变脏，同一批补丁里旧实例会重渲一次、且排在页面补丁**之后** → 把刚算好的「共 N 条」顶回上一次的值。
+  页越界交给本地钳制（服务端分页退到最后一页重查；`bindPaged` 只影响切片，`Pagination.render` 会把
+  显示页夹进有效范围）。
+- **空态提示与表格并存，槽位固定**（`layout.cj` 的 `listBody`）：不要按"有没有行"在提示与表格之间换
+  节点类型——同批补丁里父（页面）与子（表格）都会变脏，子补丁后应用，会把中文提示顶成空表格的
+  "No Data"。表格自带的空文案用 `Table.emptyText("暂无数据")`。
+- 动作只写信号，**页面上必须有人读它**，否则组件不会变脏、服务端不下发补丁（"点一下没反应"）；
+  单选类状态（如"当前选中的包"）要做成**信号**并在渲染里读，不能留普通字段。
 - store 不是信号：写库后 `bump()` 一个 `dataVersion` 信号让派生重算（`refreshXxx()` 现在就干这个）。
 - 派生绑定必须 `onMount` 重建、`onUnmount` 释放：页面实例是路由注册期创建、跨请求复用的。
-- 服务端分页的页（日志页）越界时**本地退到最后一页**重查，不回写页码信号（避免 Effect 自订阅成环）。
+- 回归测试：`list_binding_test.cj`、`pages_manage_render_test.cj`、`pages_users_render_test.cj`、
+  `pages_plan_render_test.cj`、`logs_search_test.cj`、`team_dialog_search_test.cj`
+  （含"输入框没有挂 input 动作"、"改条件不动页码且条数跟着变"、"空态提示与表格并存"、
+  "选中/开关会标脏"这几条结构性断言，它们守的正是单测最容易漏掉的补丁行为）。
 
 **重拉的语义与护栏**（`src/server/refetch_service.cj`）：
 

@@ -58,6 +58,36 @@ public class LogsPageSearchTest {
         @Expect(page.rows.get().size, 2)
     }
 
+    // 关键字输入框只 bind，不许再挂 input 动作（见 list_binding.cj 头部说明）
+    @TestCase
+    public func testKeywordInputCarriesNoInputAction(): Unit {
+        let state = makePortalState("team")
+        let _ = seedLog(state, LogKind.Admin, "clean_logs")
+        let page = mountLogs(state)
+        let json = renderExpanded(page.render())
+        @Expect(json.contains("\"input\":"), false)
+        @Expect(json.contains("data-bind-id"), true)
+    }
+
+    // 分页器文案必须跟着条件走：改筛选后**不回写页码**（回写会让旧分页器实例的快照补丁
+    // 排在页面补丁之后，把新总数顶回旧值），所以这里守住"渲染出来的条数就是过滤后的条数"
+    @TestCase
+    public func testPagerTotalFollowsFilter(): Unit {
+        let state = makePortalState("team")
+        let _ = seedLog(state, LogKind.Auth, "login", createdAt: 3000)
+        let _ = seedLog(state, LogKind.Admin, "clean_logs", createdAt: 2000)
+        let _ = seedLog(state, LogKind.Publish, "publish alpha@1.0.0", createdAt: 1000)
+
+        let page = mountLogs(state)
+        @Expect(renderExpanded(page.render()).contains("共 3 条"), true)
+
+        page.kindFilter.set("admin")
+        let after = renderExpanded(page.render())
+        @Expect(after.contains("共 1 条"), true)
+        @Expect(after.contains("共 3 条"), false)
+        @Expect(page.currentPage.get(), 1)     // 条件变化不动页码
+    }
+
     // 类型/结果下拉：同样是 bind 落地即重查（动作只负责回第一页，不参与过滤）
     @TestCase
     public func testKindAndStatusFiltersApplyImmediately(): Unit {
@@ -124,5 +154,25 @@ public class LogsPageSearchTest {
         page.bump()
         @Expect(page.rows.get().size, 1)
         @Expect(page.rows.get()[0].action, "clean_logs")
+    }
+}
+
+// 临时诊断（跑完删）：筛选后页面组件本身是否变脏
+@Test
+public class LogsDirtyDiag {
+    @TestCase
+    public func diagPageDirtyOnFilter(): Unit {
+        let state = makePortalState("team")
+        let _ = seedLog(state, LogKind.Admin, "clean_logs")
+        let page = mountLogs(state)
+        let _ = RenderContext.expandTree(page, "")
+        RenderContext.clearDirty()
+        @Expect(RenderContext.collectDirty().size, 0)
+        page.kindFilter.set("admin")
+        let dirty = RenderContext.collectDirty()
+        var paths = ""
+        for (c in dirty) { paths += "[" + c.getPath() + "]" }
+        @Expect(paths.contains("[]"), true)
+        RenderContext.clearDirty()
     }
 }

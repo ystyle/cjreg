@@ -155,12 +155,17 @@ class PublishPlansPage <: Component {
         PatchResult.ReRender
     }
 
-    func renderList(): IComponent {
+    func listHint(): String {
         if (this.rows.get().size == 0) {
-            return emptyState("暂无发布计划，点击「创建计划」新建")
+            return "暂无发布计划，点击「创建计划」新建"
         }
+        ""
+    }
+
+    func renderList(): IComponent {
         Table<PlanRow>()
             .data(this.rows)
+            .emptyText("暂无数据")
             .stripe()
             .add(TableColumn<PlanRow>().label("ID").accessor({ r => r.doc.id.toString() }).width(50))
             .add(TableColumn<PlanRow>().label("计划名").accessor({ r => r.doc.name }).minWidth(140))
@@ -220,7 +225,8 @@ class PublishPlansPage <: Component {
             .onChange(onPageChange)
         adminLayout("/admin/publish-plans", [
             div([text("发布计划")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
-            adminCard("发布计划列表", [toolbar, this.renderList(), pager, this.renderConfirmDialog()]),
+            adminCard("发布计划列表", [toolbar, listBody(this.listHint(), this.renderList()), pager,
+                this.renderConfirmDialog()]),
         ])
     }
 }
@@ -1387,14 +1393,20 @@ class PublishPlanDetailPage <: Component {
         ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))])))
     }
 
-    func renderItems(): IComponent {
-        // 全被隐藏时给一句话：否则只看到一张空表，像是项丢了
+    // 全被隐藏时给一句话：否则只看到一张空表，像是项丢了。
+    // 走 listBody 的固定槽位（见 layout.cj）——提示不能和表格换节点类型。
+    func itemsHint(): String {
         if (this.itemRows.get().size == 0 && this.items.get().size > 0) {
-            return div([text("没有会推送的项（${this.items.get().size} 项都已勾掉或已判为未推送）—— 关掉「隐藏不推送的项」可以查看全部")])
+            return "没有会推送的项（${this.items.get().size} 项都已勾掉或已判为未推送）—— 关掉「隐藏不推送的项」可以查看全部"
         }
+        ""
+    }
+
+    func renderItems(): IComponent {
         let canOverwrite = this.targetOverwriteAllowed()
         Table<PlanItemDoc>()
             .data(this.itemRows)
+            .emptyText("暂无数据")
             .stripe()
             .add(TableColumn<PlanItemDoc>().label("序").accessor({ d => d.order.toString() }).width(50))
             .add(TableColumn<PlanItemDoc>().label("包").accessor({ d =>
@@ -1525,7 +1537,8 @@ class PublishPlanDetailPage <: Component {
                             },
                         ], attrs: Some(HashMap<String, String>([("class", cls("card-actions"))]))),
                     ]),
-                        adminCard("发布项", [this.renderItemsToolbar(), this.renderItems()]),
+                        adminCard("发布项", [this.renderItemsToolbar(),
+                            listBody(this.itemsHint(), this.renderItems())]),
                     ]),
                 ])
             case None =>
@@ -1768,11 +1781,12 @@ class LogsPage <: Component {
         PatchResult.ReRender
     }
 
-    // 下拉改条件时回第一页：这个动作**不读条件**，所以不受"先 action 后 bind"影响
-    func resetPage(ctx: ActionContext): PatchResult {
-        this.currentPage.set(1)
-        PatchResult.ReRender
-    }
+    // 过滤条件变化时**不回写页码**：分页器（cjxt Pagination）的 total 是创建时的快照，
+    // 而页码一变它自己就变脏、会在同一批补丁里被旧实例重渲染一次，那条补丁排在页面补丁
+    // **之后** → 把页面刚算好的「共 N 条」又顶回上一次的值（实测：改筛选后行是对的、
+    // 条数却是旧的，旧实例的 total 快照只有在页面重渲时才刷新）。
+    // 页越界交给本地钳制：reload() 会退到最后一页重查，Pagination.render 也会把显示页
+    // 夹进有效范围，所以不回写页码也不会出现"表格第 1 页、页码显示第 3 页"。
 
     func askClear(ctx: ActionContext): PatchResult {
         this.confirmVisible.set(true)
@@ -1828,9 +1842,10 @@ class LogsPage <: Component {
         let toolbar = div([
             div([Input().bind(this.keyword).placeholder("搜索操作者/操作/对象/错误")],
                 attrs: Some(HashMap<String, String>([("style", "width:230px;display:inline-block;")]))),
-            div([Select(kindOptions.toArray()).bind(this.kindFilter).onChange(resetPage)],
+            // 下拉只 bind：**不挂 onChange 回写页码**（见下面 reload 前的说明）
+            div([Select(kindOptions.toArray()).bind(this.kindFilter)],
                 attrs: Some(HashMap<String, String>([("style", "width:130px;display:inline-block;")]))),
-            div([Select(statusOptions.toArray()).bind(this.statusFilter).onChange(resetPage)],
+            div([Select(statusOptions.toArray()).bind(this.statusFilter)],
                 attrs: Some(HashMap<String, String>([("style", "width:130px;display:inline-block;")]))),
             Button([text("筛选")]).kind(ButtonKind.Primary).onClick(doRefresh),
             Button([text("清理日志")]).kind(ButtonKind.Danger).onClick(askClear),
@@ -1842,6 +1857,7 @@ class LogsPage <: Component {
         ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))])))
         let table = Table<LogDoc>()
             .data(this.rows)
+            .emptyText("暂无数据")
             .stripe()
             .add(TableColumn<LogDoc>().label("时间").width(120).render({ l, i =>
                 text(formatTimeMs(l.createdAt))

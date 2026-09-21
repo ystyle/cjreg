@@ -57,6 +57,16 @@ public class UsersPageRenderTest {
     }
 
     // 没有关键字时保持原空态文案（避免"没有匹配的用户"误导）
+    // 同包管理页：搜索输入框只 bind，不许再挂 input 动作（否则打字等于没反应）
+    @TestCase
+    public func testSearchInputCarriesNoInputAction(): Unit {
+        let state = makePortalState("team")
+        let _ = state.auth.createUser("alice", "AlicePass1", false, email: "alice@example.com").getOrThrow()
+        let json = renderExpanded(mountUsers(state).render())
+        @Expect(json.contains("\"input\":"), false)
+        @Expect(json.contains("data-bind-id"), true)
+    }
+
     @TestCase
     public func testEmptyStateTextDependsOnKeyword(): Unit {
         let state = makePortalState("team")

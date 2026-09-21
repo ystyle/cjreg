@@ -55,6 +55,23 @@ public class PublishPlanListAndDetailRenderTest {
         @Expect(json.contains("旧计划"), true)
     }
 
+    // 「点了没反应」的结构性回归：开关写的是信号，但页面上必须有人读它才会变脏、才有补丁
+    @TestCase
+    public func testHideToggleMarksPageDirty(): Unit {
+        let state = makePortalState("team")
+        let planId = seedPlan(state, "隐藏开关脏标记", "paused")
+        let _ = seedDetailItem(state, planId, "alpha", 1)
+        let page = PublishPlanDetailPage()
+        page.onMount(detailMountCtx(state, planId, true))
+        let _ = RenderContext.expandTree(page, "")
+        RenderContext.clearDirty()
+        @Expect(RenderContext.collectDirty().size, 0)
+
+        page.hideUnpublished.set(true)
+        @Expect(RenderContext.collectDirty().size > 0, true)
+        RenderContext.clearDirty()
+    }
+
     // 开关关闭（默认）：所有项都显示
     @TestCase
     public func testDetailShowsAllItemsByDefault(): Unit {

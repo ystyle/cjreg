@@ -331,15 +331,21 @@ class UsersPage <: Component {
     }
 
     // ===== 渲染 =====
-    func renderList(): IComponent {
-        if (this.rows.get().size == 0) {
-            if (this.userSearch.get().trimAscii() != "") {
-                return emptyState("没有匹配的用户")
-            }
-            return emptyState("暂无用户，点击「新增用户」创建")
+    // 空态提示走 listBody 的固定槽位（见 layout.cj）：区分"搜不到"与"一个都没有"
+    func listHint(): String {
+        if (this.rows.get().size > 0) {
+            return ""
         }
+        if (this.userSearch.get().trimAscii() != "") {
+            return "没有匹配的用户"
+        }
+        "暂无用户，点击「新增用户」创建"
+    }
+
+    func renderList(): IComponent {
         Table<User>()
             .data(this.rows)
+            .emptyText("暂无数据")
             .stripe()
             .add(TableColumn<User>().label("ID").accessor({ u => u.id.toString() }).width(60))
             .add(TableColumn<User>().label("用户名").accessor({ u => u.username }).minWidth(120))
@@ -446,11 +452,9 @@ class UsersPage <: Component {
     public func render(): IComponent {
         let msgKind = if (this.msgOk.get()) { ComponentKind.Success } else { ComponentKind.Danger }
         let toolbar = div([
-            // 搜索框只 bind（输入即写信号 → 派生重算）；这里的 action 只负责回第一页
-            Input().bind(this.userSearch).placeholder("搜索用户名 / 邮箱").on("input", { _ =>
-                this.currentPage.set(1)
-                PatchResult.ReRender
-            }),
+            // 搜索框**只 bind**：再挂一个 input 动作会立刻推回补丁、清掉客户端的 bindDirty
+            // 守卫并把输入框退回旧值，300ms 后的 bind 就把空串写回信号（见 packages 页同处注释）
+            Input().bind(this.userSearch).placeholder("搜索用户名 / 邮箱"),
             Button([text("新增用户")]).kind(ButtonKind.Primary).onClick(openCreate),
             if (this.msg.get() != "") {
                 Tag([text(this.msg.get())]).kind(msgKind)
@@ -466,7 +470,8 @@ class UsersPage <: Component {
             .onChange(onPageChange)
         adminLayout("/admin/users", [
             div([text("用户管理")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
-            adminCard("用户列表", [toolbar, this.renderList(), pager, this.renderCreateDialog(), this.renderTokenDialog(), this.renderConfirmDialog()]),
+            adminCard("用户列表", [toolbar, listBody(this.listHint(), this.renderList()), pager,
+                this.renderCreateDialog(), this.renderTokenDialog(), this.renderConfirmDialog()]),
         ])
     }
 }
@@ -637,12 +642,17 @@ class OrganizationsPage <: Component {
     }
 
     // ===== 渲染 =====
-    func renderList(): IComponent {
+    func listHint(): String {
         if (this.rows.get().size == 0) {
-            return emptyState("暂无组织，点击「新增组织」创建")
+            return "暂无组织，点击「新增组织」创建"
         }
+        ""
+    }
+
+    func renderList(): IComponent {
         Table<OrgDoc>()
             .data(this.rows)
+            .emptyText("暂无数据")
             .stripe()
             .add(TableColumn<OrgDoc>().label("ID").accessor({ o => o.id.toString() }).width(60))
             .add(TableColumn<OrgDoc>().label("组织名").accessor({ o => o.name }).minWidth(140))
@@ -730,7 +740,8 @@ class OrganizationsPage <: Component {
             .onChange(onPageChange)
         adminLayout("/admin/organizations", [
             div([text("组织管理")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
-            adminCard("组织列表", [toolbar, this.renderList(), pager, this.renderFormDialog(), this.renderConfirmDialog()]),
+            adminCard("组织列表", [toolbar, listBody(this.listHint(), this.renderList()), pager,
+                this.renderFormDialog(), this.renderConfirmDialog()]),
         ])
     }
 }
@@ -1152,12 +1163,17 @@ class TeamsPage <: Component {
         }
     }
 
-    func renderList(): IComponent {
+    func listHint(): String {
         if (this.rows.get().size == 0) {
-            return emptyState("暂无团队，点击「新增团队」创建")
+            return "暂无团队，点击「新增团队」创建"
         }
+        ""
+    }
+
+    func renderList(): IComponent {
         Table<TeamRow>()
             .data(this.rows)
+            .emptyText("暂无数据")
             .stripe()
             .add(TableColumn<TeamRow>().label("ID").accessor({ r => r.doc.id.toString() }).width(50))
             .add(TableColumn<TeamRow>().label("团队名").accessor({ r => r.doc.name }).minWidth(130))
@@ -1263,6 +1279,7 @@ class TeamsPage <: Component {
                 Input().bind(this.pkgSearch).placeholder("搜索包名"),
                 Table<PkgRow>()
                     .data(this.pkgRows)
+                    .emptyText("暂无数据")
                     .stripe()
                     .add(TableColumn<PkgRow>().label("包").minWidth(280).render({ r, i =>
                         text("${if (r.doc.organization.isEmpty()) { "-" } else { r.doc.organization }}/${r.doc.name}@${r.doc.version}")
@@ -1292,6 +1309,7 @@ class TeamsPage <: Component {
                 Input().bind(this.memberSearch).placeholder("搜索用户名"),   // 同 pkgSearch：只 bind
                 Table<MemberRow>()
                     .data(this.memberRows)
+                    .emptyText("暂无数据")
                     .stripe()
                     .add(TableColumn<MemberRow>().label("用户名").accessor({ r => r.user.username }).minWidth(200))
                     .add(TableColumn<MemberRow>().label("操作").width(100).render({ r, i =>
@@ -1343,7 +1361,9 @@ class TeamsPage <: Component {
             .onChange(onPageChange)
         adminLayout("/admin/teams", [
             div([text("团队管理")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
-            adminCard("团队列表", [toolbar, this.renderList(), pager, this.renderFormDialog(), this.renderOrgDialog(), this.renderPkgDialog(), this.renderMemberDialog(), this.renderConfirmDialog()]),
+            adminCard("团队列表", [toolbar, listBody(this.listHint(), this.renderList()), pager,
+                this.renderFormDialog(), this.renderOrgDialog(), this.renderPkgDialog(),
+                this.renderMemberDialog(), this.renderConfirmDialog()]),
         ])
     }
 }

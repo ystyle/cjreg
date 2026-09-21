@@ -125,3 +125,17 @@ public func emptyState(text: String): IComponent {
         Empty().description(text),
     ], attrs: Some(HashMap<String, String>([("class", cls("empty-line"))])))
 }
+
+/// 列表 = 空态提示槽 + 表格槽，**两个槽位永远都在**（提示为空时留一个空 div）。
+///
+/// 为什么不能按"有没有行"在提示与表格之间二选一：同一批补丁里，页面（父，path=""）与表格
+/// 组件（子）会同时变脏 —— 例如 Effect 里 `total.set` 让读它的页面变脏、`rows.set` 让表格
+/// 变脏；子补丁**后**应用，而它按当前状态渲染出的是一张空表格，于是把父补丁里的提示节点顶掉，
+/// 界面上显示的是组件自带的英文 "No Data" 而不是这句中文提示（实测：包管理搜索无命中、
+/// 发布计划项全部隐藏）。槽位固定后，两条补丁的内容一致，谁后应用都不打架。
+public func listBody(hint: String, table: IComponent): IComponent {
+    div([
+        if (hint != "") { emptyState(hint) } else { div() },
+        table,
+    ])
+}

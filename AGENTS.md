@@ -85,16 +85,32 @@ CJREG_PORT=8066 docker compose build && CJREG_PORT=8066 docker compose up -d
 补充：制品字节数（`tarballSize`）也在这个口径里（索引协议不带 size，只有下载/重拉后才知道），
 所以「只缺 size」的版本同样会被 `sync-metadata` 再补一轮（本地有 blob 就不用回源）。
 
-## 后台：包版本列表 / 单版本详情 / 上游重拉
+## 后台：包管理（左主右子）/ 单版本详情 / 上游重拉
 
-**版本列表**（包管理页「版本」按钮）：ID / 版本 / **来源**（本地发布 or `回源 · <上游名>`）/ **大小** /
-**sha256**（缩写）/ **时间**（本地发布=发布时刻，回源=收录时刻）/ 下载 / 状态 / 操作（详情 · 重拉 · 软删 | 恢复 · 硬删）。
+**包管理页是「左主（包）右子（版本）」主子表**：左栏是聚合行（一个 `org::name` 一行，显示版本数 /
+最新版本 / 下载合计），选中一行右栏即时列出该包的版本；版本表字段：ID / 版本 / **来源**（本地发布 or
+`回源 · <上游名>`）/ **大小** / **sha256**（缩写）/ **时间**（本地发布=发布时刻，回源=收录时刻）/
+下载 / 状态 / 操作（详情 · 重拉 · 软删 | 恢复 · 硬删）。
 
 - **重拉**只对**回源镜像**版本出现（`upstreamId != 0`）；本地发布的版本本地才是权威，后端直接 409。
-- **单版本详情**弹窗：全字段 + SHA256 全量 + 来源上游 + **README 全文**（Markdown 渲染，正文区独立滚动）。
+- **单版本详情**仍是弹窗（README 正文长，塞进右栏会把版本表挤没）：全字段 + SHA256 全量 + 来源上游 +
+  **README 全文**（Markdown 渲染，正文区独立滚动）。
 - 两者都有管理 API（给脚本/CI 用）：
   - `GET  /api/admin/packages/:id` → 详情 JSON（含 `readme`/`readmeLength`/`upstreamName`/`artifactPresent`）
   - `POST /api/admin/packages/:id/refetch[?force=1]` → 重拉并覆盖本地缓存
+
+### 列表页的「输入即过滤」写法（改这些页面前必读）
+
+管理端所有列表的搜索/筛选都是**信号派生**，不是动作触发（`src/ui/list_binding.cj` 的 `bindRows` /
+`bindPaged` / `bindVisible`）：cjxt 的 `Table.data()` 只接受 `Signal<ArrayList<T>>`，过滤结果只能由信号
+承载；而前端对同一元素是**先 action 后 bind**（`public/js/cangjie-ui.js:333` 立即发 action，`:490` 的
+bind 有 300ms 防抖）——在 `on("input")` 里 `refresh()` 读到的关键字是**上一次**的，还会因为"render 不读
+过滤信号"而永不重算，表现为「搜索完全无效，必须再点一次刷新/筛选」。
+
+- 输入框/下拉**只 bind**；动作里只做"回第一页"这类**不读关键字**的事（不受先 action 后 bind 影响）。
+- store 不是信号：写库后 `bump()` 一个 `dataVersion` 信号让派生重算（`refreshXxx()` 现在就干这个）。
+- 派生绑定必须 `onMount` 重建、`onUnmount` 释放：页面实例是路由注册期创建、跨请求复用的。
+- 服务端分页的页（日志页）越界时**本地退到最后一页**重查，不回写页码信号（避免 Effect 自订阅成环）。
 
 **重拉的语义与护栏**（`src/server/refetch_service.cj`）：
 

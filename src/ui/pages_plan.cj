@@ -639,17 +639,31 @@ class PublishPlanCreatePage <: Component {
             .add(TableColumn<PlanItem>().label("说明").minWidth(240).render({ it, i =>
                 text(categoryHint(it.category, it.overwriteAllowed))
             }).showOverflowTooltip())
+        // 注意区分两种提示：
+        //  - **说明**（对照中 / 未选上游 / "共 N 项 · 需发布 M" 摘要）是信息，用普通提示行；
+        //  - **空态**（还没选包）才用 emptyState（那张插图）。
+        // 一开始两者都走 listBody（插图版），于是"有 5 行数据 + 一张大插图 + 一句摘要"叠在一起，
+        // 看着像图裂了（实测反馈）。
         let busy = this.previewBusy.get()
-        var hint = ""
-        if (busy) {
-            hint = "对照中…（正在取目标仓索引）"
-        } else if (this.previewNote.get() != "") {
-            hint = this.previewNote.get()
-        } else if (this.previewRows.get().size == 0) {
-            hint = "选择包以后，这里会列出每一包的本地版本与目标仓版本"
+        let note = this.previewNote.get()
+        let rows = this.previewRows.get().size
+        let infoSlot = if (note != "") {
+            div([text(note)], attrs: Some(HashMap<String, String>([("class", cls("picker-hint"))])))
+        } else if (busy) {
+            div([text("对照中…（正在取目标仓索引）")],
+                attrs: Some(HashMap<String, String>([("class", cls("picker-hint"))])))
+        } else {
+            div()
+        }
+        // 空态只在"确实没东西可看、也没别的说明"时出现
+        let emptyHint = if (rows == 0 && note == "" && !busy) {
+            "选择包以后，这里会列出每一包的本地版本与目标仓版本"
+        } else {
+            ""
         }
         div([
-            listBody(hint, table),
+            infoSlot,
+            listBody(emptyHint, table),
         ])
     }
 

@@ -130,6 +130,9 @@ CJREG_PORT=8066 docker compose build && CJREG_PORT=8066 docker compose up -d
   做法见 `src/admin.css` 的 `.version-table-wrap` 一组规则（用**属性选择器**匹配 EP 类名，
   因为本仓 CSS 管线会给每个 `.class` 加哈希后缀；与 EP 同分的选择器靠 `!important` 压过）。
   表格自带的 `Table.emptyText("暂无数据")` 同属这类"EP 默认样式不适用"的收口。
+- 同一页的多张列表都按这套写法：**创建发布计划页**的「候选包（搜索+分页）/ 已选择的包 /
+  版本对照」就是三张表（`candidatePkgs()` / `selectedDocs()` / `previewRows`），
+  提示槽一律走 `listBody`，不要退回"每行一个按钮的纯文本列表"（列对不齐、也没法分页与排序）。
 - store 不是信号：写库后 `bump()` 一个 `dataVersion` 信号让派生重算（`refreshXxx()` 现在就干这个）。
 - 派生绑定必须 `onMount` 重建、`onUnmount` 释放：页面实例是路由注册期创建、跨请求复用的。
 - 回归测试：`list_binding_test.cj`、`pages_manage_render_test.cj`、`pages_users_render_test.cj`、

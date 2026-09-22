@@ -130,9 +130,9 @@ public class PackagesPageRenderTest {
         @Expect(json.contains("el-drawer"), true)
         @Expect(json.contains("ystyle::crc 的版本（2）"), true)
         @Expect(json.contains("1.0.1"), true)
-        // 版本表操作列是一个「操作」按钮（菜单本体默认不渲染）
+        // 版本表操作列是一个「操作」下拉菜单
         @Expect(json.contains("操作"), true)
-        @Expect(json.contains(">详情<"), false)
+        @Expect(json.contains("详情"), true)
         // 抽屉数据只含选中包的版本（主表那行 acme::demo 仍会显示它的最新版本）
         @Expect(page.verRows.get().size, 2)
         @Expect(page.verRows.get()[0].organization, "ystyle")
@@ -163,40 +163,49 @@ public class PackagesPageRenderTest {
         @Expect(json.contains("1.0.11"), true)
         @Expect(json.contains("1.0.0"), false)            // 第二页的版本不在第一页里
         @Expect(json.contains("\"ID\""), false)          // ID 列已去掉
-        // 操作列是个「操作」按钮；菜单本体默认不渲染（见下条用例）
+        // 操作列是个「操作」下拉（菜单项挂在 DOM 上、面板默认收起）
         @Expect(json.contains("操作"), true)
-        @Expect(json.contains("软删除"), false)
+        @Expect(json.contains("el-dropdown"), true)
     }
 
-    // 版本行「操作」菜单：默认不渲染；点开后是页面级底部面板，条目随版本状态变化
+    // 版本行「操作」是下拉菜单（cjxt Dropdown）：菜单项随版本状态变化，面板默认收起
     @TestCase
-    public func testVersionActionMenuOpensAsPageLevelPanel(): Unit {
+    public func testVersionActionsUseDropdownMenu(): Unit {
         let state = makePortalState("team")
         seedPkg(state, "ystyle", "crc", "1.0.0")
         let page = mountPackages(state)
         page.select("ystyle", "crc")
-        @Expect(renderPackages(page).contains("取消"), false)     // 没点就不渲染
-
-        let id = page.verAll.get()[0].id
-        page.openMenu(id)
         let json = renderPackages(page)
-        @Expect(json.contains("取消"), true)
+        @Expect(json.contains("el-dropdown"), true)
         @Expect(json.contains("详情"), true)
-        @Expect(json.contains("软删除"), true)                     // 未删除的版本：详情 / 软删除
+        @Expect(json.contains("软删除"), true)          // 未删除的版本：详情 / 软删除
+        @Expect(json.contains("重拉"), false)            // 本地发布的不给「重拉」
         @Expect(json.contains("恢复"), false)
 
-        // 软删过的版本：给恢复 / 硬删除
+        // 软删过的版本：给恢复 / 硬删除，且菜单收起时也挂在 DOM 上（Dropdown 面板靠 display 切换）
         for (d in state.pkgStore.listVersions("ystyle", "crc")) {
             d.deletedAt = 1
             state.pkgStore.save(d)
         }
         page.select("ystyle", "crc")
-        let deletedId = page.verAll.get()[0].id
-        page.openMenu(deletedId)
         let json2 = renderPackages(page)
         @Expect(json2.contains("恢复"), true)
         @Expect(json2.contains("硬删除"), true)
         @Expect(json2.contains("软删除"), false)
+    }
+
+    // 回源镜像版本才出现「重拉」
+    @TestCase
+    public func testMirroredVersionOffersRefetch(): Unit {
+        let state = makePortalState("team")
+        seedPkg(state, "ystyle", "crc", "1.0.0")
+        for (d in state.pkgStore.listVersions("ystyle", "crc")) {
+            d.upstreamId = 7
+            state.pkgStore.save(d)
+        }
+        let page = mountPackages(state)
+        page.select("ystyle", "crc")
+        @Expect(renderPackages(page).contains("重拉"), true)
     }
 
     // 翻到第二页：只剩最后两条（新→旧序的尾部）

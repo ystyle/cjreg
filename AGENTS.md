@@ -123,6 +123,13 @@ CJREG_PORT=8066 docker compose build && CJREG_PORT=8066 docker compose up -d
   "No Data"。表格自带的空文案用 `Table.emptyText("暂无数据")`。
 - 动作只写信号，**页面上必须有人读它**，否则组件不会变脏、服务端不下发补丁（"点一下没反应"）；
   单选类状态（如"当前选中的包"）要做成**信号**并在渲染里读，不能留普通字段。
+- **表格里的浮层（单元格内下拉菜单）会被 EP 的表格容器裁掉/压住**，三处都要放开，缺一不可：
+  ① `.cell`（`overflow:hidden`，面板的包含块 `div.el-dropdown` 在它里面）；
+  ② `.el-table__body-wrapper` / `.el-table__inner-wrapper`（`position:relative` + `overflow:hidden`，在面板包含块链上）；
+  ③ `td.el-table__cell` 的 `z-index:1`（给每个 td 建了层叠上下文，**后面几行会把面板盖住**）。
+  做法见 `src/admin.css` 的 `.version-table-wrap` 一组规则（用**属性选择器**匹配 EP 类名，
+  因为本仓 CSS 管线会给每个 `.class` 加哈希后缀；与 EP 同分的选择器靠 `!important` 压过）。
+  表格自带的 `Table.emptyText("暂无数据")` 同属这类"EP 默认样式不适用"的收口。
 - store 不是信号：写库后 `bump()` 一个 `dataVersion` 信号让派生重算（`refreshXxx()` 现在就干这个）。
 - 派生绑定必须 `onMount` 重建、`onUnmount` 释放：页面实例是路由注册期创建、跨请求复用的。
 - 回归测试：`list_binding_test.cj`、`pages_manage_render_test.cj`、`pages_users_render_test.cj`、

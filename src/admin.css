@@ -206,3 +206,23 @@
 /* 卡片底部的操作按钮行（计划详情等）：与上面的信息表之间要有一条分隔线，
    否则按钮紧贴表格边框，看着像表格的一部分。 */
 .card-actions { display: flex; gap: 12px; align-items: center; margin-top: 14px; padding-top: 12px; border-top: 1px solid #ebeef5; }
+
+/* ===== 表格里的浮层（单元格内的下拉菜单）=====
+   EP 的表格容器（.el-table / __body-wrapper / __inner-wrapper）是 position:relative + overflow:hidden，
+   它们在绝对定位浮层的**包含块链**上，会把浮层裁在表体下沿（实测抽屉里「操作」下拉一打开就被裁掉，
+   点击落点命中的还是分页器）。给这种"不需要横向滚动"的表格套一层 .version-table-wrap 放开裁剪。
+   注意：EP 的类名不能直接写成 .el-xxx —— 本仓 CSS 管线会给每个 .class 加哈希后缀
+   （cjxt 的 processCSSGet），那样永远匹配不上，所以这里用属性选择器。 */
+/* 注意 `.cell` 也要放开：下拉面板的包含块是单元格里的 `div.el-dropdown`（position:relative），
+   `.cell` 在它的包含块链上，`overflow:hidden` 一样会把面板裁掉。
+   这一组选择器与 EP 自带的 `.el-table .cell` 同分，而 EP 的 CSS 在本仓 bundle 之后加载 ——
+   所以用 !important 明确压过它（只作用在这个包装类之下，不影响别的表格）。 */
+/* 单元格的 `z-index: 1` 也必须去掉：它给每个 td 建了层叠上下文，面板的 z-index 再高也被
+   封在本行里，于是**后面几行会把面板盖住**（实测：16 行的版本表里，第一行的下拉只露出一角，
+   其余被第 2、3 行压住）。去掉后，面板在最外层包装类（z-index:2）的上下文里按 2000 分层，
+   整个表格都在它下面。 */
+.version-table-wrap [class~="el-table__cell"] { z-index: auto !important; }
+.version-table-wrap [class~="cell"],
+.version-table-wrap [class~="el-table"],
+.version-table-wrap [class*="el-table__body-wrapper"],
+.version-table-wrap [class*="el-table__inner-wrapper"] { overflow: visible !important; }

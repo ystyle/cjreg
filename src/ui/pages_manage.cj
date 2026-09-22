@@ -95,7 +95,7 @@ class DashboardPage <: Component {
             .data(this.recentLogs)
             .stripe()
             .add(TableColumn<LogDoc>().label("时间").width(150).render({ l, i =>
-                text(formatLogTime(l.createdAt))
+                timeCell(formatLogTime(l.createdAt))
             }))
             .add(TableColumn<LogDoc>().label("操作者").accessor({ l => l.actorName }).width(110))
             .add(TableColumn<LogDoc>().label("操作").accessor({ l => l.action }).minWidth(260).showOverflowTooltip())
@@ -162,6 +162,12 @@ class SignalView <: Component {
     public func render(): IComponent {
         this.build()
     }
+}
+
+// 时间单元格：不换行。时间戳里有空格（"09-16 00:24"），单元格宽度不足时会折成两行、
+// 整张表跟着变高；列宽已按格式给足，这里再钉一次 white-space。
+func timeCell(t: String): IComponent {
+    div([text(t)], attrs: Some(HashMap<String, String>([("style", "white-space:nowrap;")])))
 }
 
 // 版本来源：回源镜像显示上游名，本地发布标出来
@@ -540,10 +546,6 @@ class PackagesPage <: Component {
     var verAll = Signal<ArrayList<PackageDoc>>(ArrayList<PackageDoc>())
     var verRows = Signal<ArrayList<PackageDoc>>(ArrayList<PackageDoc>())
     var verTitle = Signal<String>("")
-    // 版本行「操作」菜单：打开的是哪个版本（0 = 没开）。
-    // 菜单必须渲染在**页面级**而不是表格单元格里：`td.el-table__cell` 自带 z-index 与层叠上下文，
-    // 单元格里的浮层会被下面的分页器盖住（实测 elementFromPoint 命中的是 .el-pagination）。
-    var verMenuId = Signal<Int64>(0)
     var verPage = Signal<Int64>(1)
     var verPageSize = Signal<Int64>(10)
     var verTotal = Signal<Int64>(0)
@@ -652,22 +654,6 @@ class PackagesPage <: Component {
             case None => ()
         }
         this.verDrawerVisible.set(true)
-    }
-
-    // 打开某版本的操作菜单。拆分出无 ctx 的 openMenu：渲染层测试可以直接驱动它
-    // （动作只负责转调 + 重画，与主子表的 select/selectPackage 同一写法）。
-    func openMenu(id: Int64): Unit {
-        this.verMenuId.set(id)
-    }
-
-    func openVersionMenu(ctx: ActionContext, id: Int64): PatchResult {
-        this.openMenu(id)
-        PatchResult.ReRender
-    }
-
-    func closeVersionMenu(ctx: ActionContext): PatchResult {
-        this.verMenuId.set(0)
-        PatchResult.ReRender
     }
 
     func closeVersionDrawer(ctx: ActionContext): PatchResult {
@@ -1048,7 +1034,8 @@ class PackagesPage <: Component {
             .add(TableColumn<PackageRow>().label("最新版本").accessor({ r => r.latestVersion }).width(100))
             .add(TableColumn<PackageRow>().label("版本数").accessor({ r => r.versionCount.toString() }).width(76))
             .add(TableColumn<PackageRow>().label("下载").accessor({ r => r.downloadCount.toString() }).width(70))
-            .add(TableColumn<PackageRow>().label("最近更新").accessor({ r => formatLogTime(r.updatedAt) }).width(96))
+            // 时间戳是 'MM-DD HH:MM'：96px 放不下会折成"日期 / 时间"两行，加宽并禁止换行
+            .add(TableColumn<PackageRow>().label("最近更新").width(122).render({ r, i => timeCell(formatLogTime(r.updatedAt)) }))
             .add(TableColumn<PackageRow>().label("状态").width(76).render({ r, i =>
                 if (r.allDeleted) {
                     Tag([text("已删")]).kind(ComponentKind.Danger)
@@ -1072,7 +1059,19 @@ class PackagesPage <: Component {
     // 就会渲染出上一次选择的内容。SignalView 在 render 里现读信号，谁后渲染都是新值。
     func renderVersionDrawer(): IComponent {
         Drawer([SignalView({ =>
-            div([listBody(this.versionHint(), this.renderVersionTable()), this.renderVersionPager()])
+            div([
+                // 表格外面包一层：① `position:relative; z-index:2` 让下拉面板浮在分页器之上
+                //（单元格 td 自带 z-index:1 的层叠上下文，面板的 z-index 再高出不去）；
+                // ② `version-table-wrap` 放开表格容器的 overflow —— 版本表不需要横向滚动，
+                // 而 EP 的表格容器是 `position:relative + overflow:hidden`、在面板包含块链上，
+                // 不放开就会把下拉面板裁在表体下沿（实测点到的还是分页器）。
+                listBody(this.versionHint(),
+                    div([this.renderVersionTable()],
+                        attrs: Some(HashMap<String, String>([
+                            ("class", cls("version-table-wrap")),
+                            ("style", "position:relative;z-index:2;")])))),
+                this.renderVersionPager(),
+            ])
         })])
             .visible(this.verDrawerVisible)
             .direction(DrawerDirection.RTL)
@@ -1081,71 +1080,26 @@ class PackagesPage <: Component {
             .footer([Button([text("关闭")]).onClick(closeVersionDrawer)])
     }
 
-    // 版本行的「操作」菜单：页面级固定浮层（底部操作面板），不在表格单元格里。
-    //
-    // 为什么不做贴着按钮的浮层：表格单元格 `td.el-table__cell` 是 `position: relative; z-index: 1`
-    // 的层叠上下文，单元格里的浮层出不去、会被分页器盖住（实测点击落点命中的是 .el-pagination）；
-    // 而 `position: fixed` 在抽屉里也会被 `.el-drawer` 的 transform 变成相对抽屉定位、同样被裁。
-    // 底部操作面板（action sheet）在手机上本来就是标准交互，桌面端也不受定位限制。
-    //
-    // 菜单项仍是普通 ActionHandler（带 ctx）：管理员校验 / 审计操作者 / 打开对话框都要 ctx。
-    func renderVersionMenu(): IComponent {
-        let id = this.verMenuId.get()
-        if (id == 0) {
-            return div()
-        }
-        var found: ?PackageDoc = None
+    // 版本行「操作」菜单的命令分发：命令字符串来自 DropdownItem().command(...)，
+    // ctx 来自 cjxt Dropdown 的 onCommandCtx（菜单项点击本身就在一个 action 里）。
+    // 删除/重拉/恢复这些动作要版本号与包名，从当前全量列表里按 id 现取，避免把状态塞进命令串。
+    func onVersionCommand(ctx: ActionContext, id: Int64, cmd: String): Unit {
+        var name = ""
+        var version = ""
         for (d in this.verAll.get()) {
             if (d.id == id) {
-                found = Some(d)
+                name = d.name
+                version = d.version
             }
         }
-        let doc = match (found) {
-            case Some(d) => d
-            case None =>
-                this.verMenuId.set(0)
-                return div()
+        let _ = match (cmd) {
+            case "detail" => this.showDetail(ctx, id)
+            case "refetch" => this.askRefetch(ctx, id, name, version, false, "")
+            case "soft" => this.askDelete(ctx, id, name, version)
+            case "restore" => this.doRestore(ctx, id, name, version)
+            case "hard" => this.askHardDelete(ctx, id, name, version)
+            case _ => PatchResult.ReRender
         }
-        let name = doc.name
-        let version = doc.version
-        let deleted = doc.deletedAt != 0
-        let mirrored = doc.upstreamId != 0
-        let items = ArrayList<IComponent>()
-        let close: ActionHandler = { c => this.closeVersionMenu(c) }
-        let make: (String, ActionHandler) -> IComponent = { label, h =>
-            let wrap: ActionHandler = { c =>
-                this.verMenuId.set(0)
-                h(c)
-            }
-            Button([text(label)]).onClick(wrap)
-        }
-        items.add(make("详情", { c => this.showDetail(c, id) }))
-        if (deleted) {
-            items.add(make("恢复", { c => this.doRestore(c, id, name, version) }))
-            items.add(make("硬删除", { c => this.askHardDelete(c, id, name, version) }))
-        } else {
-            // 重拉只对回源镜像版本开放（本地发布的版本本地才是权威）
-            if (mirrored) {
-                items.add(make("重拉", { c => this.askRefetch(c, id, name, version, false, "") }))
-            }
-            items.add(make("软删除", { c => this.askDelete(c, id, name, version) }))
-        }
-        let title = "${pkgKeyText(doc.organization, doc.name)}@${version}"
-        div([
-            div([], attrs: Some(HashMap<String, String>([("style", "position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2100;")])))
-                .onClick(close),
-            div([
-                div([text("${title} 操作")],
-                    attrs: Some(HashMap<String, String>([("style", "font-size:14px;color:#909399;padding:8px 4px 12px;")]))),
-                div(items.toArray(),
-                    attrs: Some(HashMap<String, String>([
-                        ("style", "display:flex;flex-direction:column;gap:10px;align-items:stretch;")]))),
-                Button([text("取消")]).onClick(close),
-            ], attrs: Some(HashMap<String, String>([
-                ("style", "position:fixed;left:0;right:0;bottom:0;z-index:2101;background:#fff;" +
-                    "border-radius:12px 12px 0 0;padding:16px 16px 20px;box-shadow:0 -4px 16px rgba(0,0,0,.15);" +
-                    "display:flex;flex-direction:column;gap:10px;max-height:70vh;overflow:auto;")]))),
-        ])
     }
 
     // 版本表分页（10 条/页）：版本多的包（mcp 19、jsonrpc 16）一屏放不下。
@@ -1181,7 +1135,7 @@ class PackagesPage <: Component {
             }))
             .add(TableColumn<PackageDoc>().label("大小").accessor({ d => fmtSize(d.tarballSize) }).width(68))
             .add(TableColumn<PackageDoc>().label("sha256").accessor({ d => shortSha(d.sha256) }).width(104))
-            .add(TableColumn<PackageDoc>().label("时间").accessor({ d => formatLogTime(versionTimeMs(d)) }).width(84))
+            .add(TableColumn<PackageDoc>().label("时间").width(110).render({ d, i => timeCell(formatLogTime(versionTimeMs(d))) }))
             .add(TableColumn<PackageDoc>().label("下载").accessor({ d => d.downloadCount.toString() }).width(56))
             .add(TableColumn<PackageDoc>().label("状态").width(62).render({ d, i =>
                 if (d.deletedAt != 0) {
@@ -1190,11 +1144,27 @@ class PackagesPage <: Component {
                     Tag([text("正常")]).kind(ComponentKind.Success)
                 }
             }))
-            // 操作收进菜单（见 renderVersionMenu）：抽屉里列宽有限，横排按钮会折行
+            // 操作收进下拉菜单（cjxt Dropdown）：抽屉里列宽有限，横排按钮会折行。
+            // 用 onCommandCtx 而不是 onCommand —— 这些动作要按操作者鉴权（isAdminSession）与写审计
+            // （sessionUid/sessionUsername），没有 ctx 就只能瞎记或自己再拼一份下拉结构。
             .add(TableColumn<PackageDoc>().label("操作").width(92).render({ d, i =>
                 let id = d.id
-                let openH: ActionHandler = { c => this.openVersionMenu(c, id) }
-                Button([text("操作")]).size(ButtonSize.Small).onClick(openH)
+                let items = ArrayList<IComponent>()
+                items.add(DropdownItem().content("详情").command("detail"))
+                if (d.deletedAt != 0) {
+                    items.add(DropdownItem().content("恢复").command("restore"))
+                    items.add(DropdownItem().content("硬删除").command("hard"))
+                } else {
+                    // 重拉只对回源镜像版本开放（本地发布的版本本地才是权威）
+                    if (d.upstreamId != 0) {
+                        items.add(DropdownItem().content("重拉").command("refetch"))
+                    }
+                    items.add(DropdownItem().content("软删除").command("soft"))
+                }
+                let onCmd: (ActionContext, String) -> Unit = { ctx, cmd => this.onVersionCommand(ctx, id, cmd) }
+                Dropdown(Button([text("操作")]).size(ButtonSize.Small))
+                    .menu(items.toArray())
+                    .onCommandCtx(onCmd)
             }))
     }
 
@@ -1246,7 +1216,7 @@ class PackagesPage <: Component {
             div([text("包管理")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
             adminCard("已发布包", [toolbar, listBody(this.listHint(), this.renderList()), pager,
                 this.renderDetailDialog(), this.renderRefetchDialog(), this.renderConfirmDialog(),
-                this.renderVersionDrawer(), this.renderVersionMenu()]),
+                this.renderVersionDrawer()]),
         ])
     }
 }

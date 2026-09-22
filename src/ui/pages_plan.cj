@@ -8,7 +8,9 @@ import ystyle::cjreg.store.*
 import ystyle::cjreg.config.*
 import ystyle::cjreg.server.*
 import ystyle::cjreg.index.*
+import ystyle::cjreg.semver_range.*
 import std.collection.*
+import std.sort.*
 import std.convert.*
 import std.time.*
 
@@ -245,8 +247,17 @@ class PublishPlanCreatePage <: Component {
     var nameError = Signal<String>("")
     var upstreamError = Signal<String>("")
     var planForm = Form([])
-    // 搜索结果一次最多渲染多少行（剩下的靠搜索缩小范围）
-    let MaxPickerRows: Int64 = 30
+    // 候选包表：搜索 + 分页都是**信号派生**（见 list_binding.cj）；页面实例跨请求复用，
+    // 所以绑定在 onMount 重建、onUnmount 释放。
+    var pkgRows = Signal<ArrayList<PackageDoc>>(ArrayList<PackageDoc>())
+    var pkgPage = Signal<Int64>(1)
+    var pkgPageSize = Signal<Int64>(10)
+    var pkgTotal = Signal<Int64>(0)
+    // 已选包表（按选择顺序；移除后立刻重排）
+    var selRows = Signal<ArrayList<PackageDoc>>(ArrayList<PackageDoc>())
+    var selCount = Signal<Int64>(0)
+    private var pkgBinding: Option<Effect> = None
+    private var selBinding: Option<Effect> = None
     // 「本地版本 ↔ 目标仓版本」对照预览：每次改动选择都异步重跑一次与创建时**同一份**分析
     //（依赖展开 + 目标仓索引），所以预览与创建出来的计划必然一致。
     // 网络在后台线程，结果经 App.pushUpdate 回推（异步线程不能直接改前端信号）。
@@ -259,6 +270,34 @@ class PublishPlanCreatePage <: Component {
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
+        this.rebind()
+    }
+
+    public func onUnmount(ctx: LifecycleContext): Unit {
+        match (this.pkgBinding) {
+            case Some(e) => e.dispose()
+            case None => ()
+        }
+        match (this.selBinding) {
+            case Some(e) => e.dispose()
+            case None => ()
+        }
+        this.pkgBinding = None
+        this.selBinding = None
+    }
+
+    private func rebind(): Unit {
+        match (this.pkgBinding) {
+            case Some(e) => e.dispose()
+            case None => ()
+        }
+        match (this.selBinding) {
+            case Some(e) => e.dispose()
+            case None => ()
+        }
+        this.pkgBinding = Some(bindPaged(this.pkgRows, this.pkgTotal, { => this.candidatePkgs() },
+            this.pkgPage, this.pkgPageSize))
+        this.selBinding = Some(bindRows(this.selRows, this.selCount, { => this.selectedDocs() }))
     }
 
     func backToList(ctx: ActionContext): PatchResult {
@@ -288,99 +327,156 @@ class PublishPlanCreatePage <: Component {
         false
     }
 
-    // 包选择区：搜索框 + 搜索结果（每条一个「添加」）+ 已选择列表（每条一个「移除」）。
+    // ===== 包选择区（候选表 + 已选表）=====
     //
-    // 两个关键点：
-    // 1. **只列本站为源站的包**（upstreamId == 0）。回源镜像（upstreamId != 0）是上游的包，
-    //    不能作为发布源推给别人；隐藏了多少个在提示里写明，免得看起来像"包丢了"。
-    // 2. 结果**不缓存到另一个信号**，而是在 render 里直接由 pkgSearch 算出：搜索框只做 bind，
-    //    输入即写信号 → 读它的 render 作用域自动重渲。旧实现用 Component.on("input", …) 触发
-    //    过滤是错的——前端对同一元素的监听是「先 action 后 bind」，过滤拿到的是**上一次**的
-    //    关键字，而 bind 之后没人再触发过滤 → 搜索看起来完全无效。
-    func pickerSections(): Array<IComponent> {
+    // 只列**本站为源站**的包（upstreamId == 0）：回源镜像（upstreamId != 0）是上游的包，
+    // 不能作为发布源推给别人；隐藏了多少个在提示里写明，免得看起来像"包丢了"。
+    //
+    // 候选表的数据走信号派生（search + 分页 → bindPaged），搜索框**只 bind**：
+    // 旧实现把过滤挂在 on("input") 动作上，而前端对同一元素是"先 action 后 bind"，
+    // 过滤拿到的是上一次的关键字 → 搜索看起来完全无效（详见 list_binding.cj 的根因说明）。
+    func candidatePkgs(): ArrayList<PackageDoc> {
         let st = match (this.state) {
             case Some(x) => x
-            case None => return []
+            case None => return ArrayList<PackageDoc>()
         }
         let kw = this.pkgSearch.get().trimAscii().toAsciiLower()
-        let selected = this.selectedPkgs.get()
-        var localTotal: Int64 = 0
-        var mirrorTotal: Int64 = 0
-        var matched: Int64 = 0
-        let hits = ArrayList<PackageDoc>()
+        let out = ArrayList<PackageDoc>()
         for (d in st.pkgStore.storm.all<PackageDoc>()) {
             if (d.deletedAt != 0) {
                 continue
             }
             if (d.upstreamId != 0) {
-                mirrorTotal++
                 continue
             }
-            localTotal++
             if (kw != "" && !pkgLabel(d).toAsciiLower().contains(kw)) {
                 continue
             }
-            matched++
-            if (hits.size < MaxPickerRows) {
-                hits.add(d)
+            out.add(d)
+        }
+        // 按包名 + 版本号倒序（同名的多个版本，新版本在前）
+        sort(out, lessThan: { a, b =>
+            let ka = pkgLabel(a)
+            let kb = pkgLabel(b)
+            if (ka != kb) { ka < kb } else { compareVersions(a.version, b.version) > 0 }
+        })
+        out
+    }
+
+    // 本站为源站 / 回源镜像的计数（提示文案用）
+    func sourceCounts(): (Int64, Int64) {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return (0, 0)
+        }
+        var local: Int64 = 0
+        var mirror: Int64 = 0
+        for (d in st.pkgStore.storm.all<PackageDoc>()) {
+            if (d.deletedAt != 0) {
+                continue
+            }
+            if (d.upstreamId != 0) { mirror++ } else { local++ }
+        }
+        (local, mirror)
+    }
+
+    // 已选包（按选择顺序解析成文档；包被删了就跳过，不显示 #id 这样的裸编号）
+    func selectedDocs(): ArrayList<PackageDoc> {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return ArrayList<PackageDoc>()
+        }
+        let ids = this.selectedPkgs.get()
+        let out = ArrayList<PackageDoc>()
+        for (id in ids) {
+            for (d in st.pkgStore.storm.all<PackageDoc>()) {
+                if (d.id == id) {
+                    out.add(d)
+                    break
+                }
             }
         }
-        let out = ArrayList<IComponent>()
-        out.add(div([text("选择要发布的包（依赖将自动按拓扑序纳入）")],
-            attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))))
-        out.add(Input().bind(this.pkgSearch).placeholder("搜索包名（只列本站为源站的包）"))
-        out.add(div([text("本站为源站 ${localTotal} 个 · 已隐藏回源镜像 ${mirrorTotal} 个（回源包不作为发布源）")],
-            attrs: Some(HashMap<String, String>([("class", cls("picker-hint"))]))))
-        if (hits.size == 0) {
-            let empty = if (localTotal == 0) {
-                "本站还没有自发布的包：回源镜像不作为发布源，请先发布到本仓"
-            } else {
-                "没有匹配的包"
-            }
-            out.add(div([text(empty)], attrs: Some(HashMap<String, String>([("class", cls("picker-empty"))]))))
-        } else {
-            let rows = ArrayList<IComponent>()
-            for (d in hits) {
+        out
+    }
+
+    func pickerHint(): String {
+        if (this.pkgTotal.get() > 0) {
+            return ""
+        }
+        let (local, _) = this.sourceCounts()
+        if (local == 0) {
+            return "本站还没有自发布的包：回源镜像不作为发布源，请先发布到本仓"
+        }
+        "没有匹配的包"
+    }
+
+    // 候选包卡片：搜索 + 分页 + 表格（每行一个「添加 / 移除」）
+    func renderCandidateCard(): IComponent {
+        let (local, mirror) = this.sourceCounts()
+        let toolbar = div([
+            // 搜索框只 bind（输入即写信号 → 派生重算）；不挂 input 动作（见上面注释）
+            div([Input().bind(this.pkgSearch).placeholder("搜索包名 / 组织")],
+                attrs: Some(HashMap<String, String>([("style", "width:280px;display:inline-block;")]))),
+            div([text("本站为源站 ${local} 个 · 已隐藏回源镜像 ${mirror} 个（回源包不作为发布源）")],
+                attrs: Some(HashMap<String, String>([("class", cls("picker-hint"))]))),
+        ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))])))
+        let pager = Pagination()
+            .currentPage(this.pkgPage)
+            .pageSize(this.pkgPageSize)
+            .pageSizes([10, 20, 50])
+            .total(this.pkgTotal.get())
+            .layout("total, prev, pager, next, sizes")
+        let table = Table<PackageDoc>()
+            .data(this.pkgRows)
+            .emptyText("暂无数据")
+            .stripe()
+            .add(TableColumn<PackageDoc>().label("包").width(240).render({ d, i =>
+                text(if (d.organization == "") { d.name } else { "${d.organization}::${d.name}" })
+            }).showOverflowTooltip())
+            .add(TableColumn<PackageDoc>().label("版本").width(110).accessor({ d => d.version }))
+            .add(TableColumn<PackageDoc>().label("描述").accessor({ d => d.description }).minWidth(240).showOverflowTooltip())
+            .add(TableColumn<PackageDoc>().label("操作").width(100).render({ d, i =>
                 let id = d.id
-                let sel = isSelected(selected, id)
                 let act: ActionHandler = { c => this.togglePkg(c, id) }
-                let btn = if (sel) {
-                    Button([text("已添加")]).size(ButtonSize.Small).disabled()
+                if (isSelected(this.selectedPkgs.get(), id)) {
+                    Button([text("移除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(act)
                 } else {
                     Button([text("添加")]).size(ButtonSize.Small).kind(ButtonKind.Primary).onClick(act)
                 }
-                rows.add(div([text(pkgLabel(d)), btn],
-                    attrs: Some(HashMap<String, String>([("class", cls("picker-row"))]))))
-            }
-            out.add(div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("picker-list"))]))))
-        }
-        if (matched > hits.size) {
-            out.add(div([text("仅显示前 ${hits.size} 个（共 ${matched} 个匹配），用搜索缩小范围")],
-                attrs: Some(HashMap<String, String>([("class", cls("picker-hint"))]))))
-        }
-        out.add(div([text("已选择 ${selected.size} 个（依赖会自动补齐）")],
-            attrs: Some(HashMap<String, String>([("class", cls("picker-title"))]))))
-        if (selected.size == 0) {
-            out.add(div([text("尚未选择：从上面的结果里点「添加」")],
-                attrs: Some(HashMap<String, String>([("class", cls("picker-empty"))]))))
-        } else {
-            let rows = ArrayList<IComponent>()
-            for (id in selected) {
-                var label = "#${id}"
-                for (d in st.pkgStore.storm.all<PackageDoc>()) {
-                    if (d.id == id) {
-                        label = pkgLabel(d)
-                        break
-                    }
-                }
+            }))
+        div([
+            toolbar,
+            listBody(this.pickerHint(), table),
+            pager,
+        ])
+    }
+
+    // 已选包卡片：列出已选（含被依赖自动补齐前的"手动选择"部分）+ 逐个移除
+    func renderSelectedCard(): IComponent {
+        let table = Table<PackageDoc>()
+            .data(this.selRows)
+            .emptyText("暂无数据")
+            .stripe()
+            .add(TableColumn<PackageDoc>().label("包").width(240).render({ d, i =>
+                text(if (d.organization == "") { d.name } else { "${d.organization}::${d.name}" })
+            }).showOverflowTooltip())
+            .add(TableColumn<PackageDoc>().label("版本").width(110).accessor({ d => d.version }))
+            .add(TableColumn<PackageDoc>().label("描述").accessor({ d => d.description }).minWidth(240).showOverflowTooltip())
+            .add(TableColumn<PackageDoc>().label("操作").width(100).render({ d, i =>
+                let id = d.id
                 let act: ActionHandler = { c => this.togglePkg(c, id) }
-                rows.add(div([text(label),
-                    Button([text("移除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(act)],
-                    attrs: Some(HashMap<String, String>([("class", cls("picker-row"))]))))
-            }
-            out.add(div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("picker-list"))]))))
+                Button([text("移除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(act)
+            }))
+        let hint = if (this.selCount.get() == 0) {
+            "尚未选择：从上面的结果里点「添加」（依赖会自动补齐）"
+        } else {
+            ""
         }
-        out.toArray()
+        div([
+            div([text("已选择 ${this.selCount.get()} 个（依赖会自动补齐）")],
+                attrs: Some(HashMap<String, String>([("class", cls("picker-title"))]))),
+            listBody(hint, table),
+        ])
     }
 
     func togglePkg(ctx: ActionContext, pkgId: Int64): PatchResult {
@@ -523,38 +619,38 @@ class PublishPlanCreatePage <: Component {
     }
 
     // 对照预览区：逐项列「本地版本 → 目标仓版本」+ 分类，创建前就看得出
-    // 哪些其实已经发过、目标仓那边现在是哪个版本
+    // 哪些其实已经发过、目标仓那边现在是哪个版本。数据直接用 previewRows（异步对照结果），
+    // 表格自订阅这个信号，所以 pushUpdate 回来时行会自己更新。
     func previewSection(): IComponent {
-        let out = ArrayList<IComponent>()
-        out.add(div([text("版本对照（本地 → 目标仓）")],
-            attrs: Some(HashMap<String, String>([("class", cls("picker-title"))]))))
-        if (this.previewBusy.get()) {
-            out.add(div([text("对照中…（正在取目标仓索引）")],
-                attrs: Some(HashMap<String, String>([("class", cls("picker-hint"))]))))
+        let table = Table<PlanItem>()
+            .data(this.previewRows)
+            .emptyText("暂无数据")
+            .stripe()
+            .add(TableColumn<PlanItem>().label("序").width(56).accessor({ it => it.order.toString() }))
+            .add(TableColumn<PlanItem>().label("包").minWidth(240).render({ it, i =>
+                text(packageLabel(it.org, it.name, it.version))
+            }).showOverflowTooltip())
+            .add(TableColumn<PlanItem>().label("目标仓").width(180).render({ it, i =>
+                text(targetCompareText(it.name, it.targetVersion, it.targetCompared))
+            }).showOverflowTooltip())
+            .add(TableColumn<PlanItem>().label("分类").width(130).render({ it, i =>
+                planCategoryTag(it.category, "")
+            }))
+            .add(TableColumn<PlanItem>().label("说明").minWidth(240).render({ it, i =>
+                text(categoryHint(it.category, it.overwriteAllowed))
+            }).showOverflowTooltip())
+        let busy = this.previewBusy.get()
+        var hint = ""
+        if (busy) {
+            hint = "对照中…（正在取目标仓索引）"
+        } else if (this.previewNote.get() != "") {
+            hint = this.previewNote.get()
+        } else if (this.previewRows.get().size == 0) {
+            hint = "选择包以后，这里会列出每一包的本地版本与目标仓版本"
         }
-        if (this.previewNote.get() != "") {
-            out.add(div([text(this.previewNote.get())],
-                attrs: Some(HashMap<String, String>([("class", cls("picker-hint"))]))))
-        }
-        let items = this.previewRows.get()
-        if (items.size == 0) {
-            if (!this.previewBusy.get()) {
-                out.add(div([text("选择包以后，这里会列出每一包的本地版本与目标仓版本")],
-                    attrs: Some(HashMap<String, String>([("class", cls("picker-empty"))]))))
-            }
-        } else {
-            let rows = ArrayList<IComponent>()
-            for (it in items) {
-                let local = packageLabel(it.org, it.name, it.version)
-                let remote = targetCompareText(it.name, it.targetVersion, it.targetCompared)
-                rows.add(div([
-                    text("${local} → 目标仓： ${remote}"),
-                    planCategoryTag(it.category, ""),
-                ], attrs: Some(HashMap<String, String>([("class", cls("picker-row"))]))))
-            }
-            out.add(div(rows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("picker-list"))]))))
-        }
-        div(out.toArray())
+        div([
+            listBody(hint, table),
+        ])
     }
 
     func submitCreate(ctx: ActionContext): PatchResult {
@@ -664,8 +760,10 @@ class PublishPlanCreatePage <: Component {
             cardStack([
                 adminCard("计划信息", [form]),
                 adminCard("选择要发布的包", [
-                    div(this.pickerSections()),
-                    this.previewSection(),
+                    this.renderCandidateCard(),
+                    div([text("已选择的包")],
+                        attrs: Some(HashMap<String, String>([("class", cls("picker-title"))]))),
+                    this.renderSelectedCard(),
                     if (this.msg.get() != "") {
                         Tag([text(this.msg.get())]).kind(ComponentKind.Success)
                     } else {
@@ -676,6 +774,7 @@ class PublishPlanCreatePage <: Component {
                         Button([text("分析并创建")]).kind(ButtonKind.Primary).onClick(submitCreate),
                     ], attrs: Some(HashMap<String, String>([("class", cls("toolbar"))]))),
                 ]),
+                adminCard("版本对照（本地 → 目标仓）", [this.previewSection()]),
             ]),
         ])
     }

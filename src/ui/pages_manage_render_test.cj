@@ -130,11 +130,107 @@ public class PackagesPageRenderTest {
         @Expect(json.contains("el-drawer"), true)
         @Expect(json.contains("ystyle::crc 的版本（2）"), true)
         @Expect(json.contains("1.0.1"), true)
-        @Expect(json.contains("软删除"), true)             // 版本表操作列在位
+        // 版本表操作列是一个「操作」按钮（菜单本体默认不渲染）
+        @Expect(json.contains("操作"), true)
+        @Expect(json.contains(">详情<"), false)
         // 抽屉数据只含选中包的版本（主表那行 acme::demo 仍会显示它的最新版本）
         @Expect(page.verRows.get().size, 2)
         @Expect(page.verRows.get()[0].organization, "ystyle")
         @Expect(page.verRows.get()[0].name, "crc")
+    }
+
+    // 版本表：倒序（新版本在前）+ 无 ID 列 + 分页（10 条/页）+ 操作收进下拉菜单
+    @TestCase
+    public func testVersionTableIsDescendingPaginatedWithoutId(): Unit {
+        let state = makePortalState("team")
+        for (i in 0..12) {
+            seedPkg(state, "ystyle", "many", "1.0.${i}")
+        }
+        let page = mountPackages(state)
+        page.select("ystyle", "many")
+
+        // 倒序：全量第一个是最新版本
+        @Expect(page.verAll.get().size, 12)
+        @Expect(page.verAll.get()[0].version, "1.0.11")
+        @Expect(page.verAll.get()[11].version, "1.0.0")
+        // 分页：第一页 10 条，总数 12
+        @Expect(page.verRows.get().size, 10)
+        @Expect(page.verRows.get()[0].version, "1.0.11")
+        @Expect(page.verTotal.get(), 12)
+
+        let json = renderPackages(page)
+        @Expect(json.contains("共 12 条"), true)          // 抽屉里的分页器
+        @Expect(json.contains("1.0.11"), true)
+        @Expect(json.contains("1.0.0"), false)            // 第二页的版本不在第一页里
+        @Expect(json.contains("\"ID\""), false)          // ID 列已去掉
+        // 操作列是个「操作」按钮；菜单本体默认不渲染（见下条用例）
+        @Expect(json.contains("操作"), true)
+        @Expect(json.contains("软删除"), false)
+    }
+
+    // 版本行「操作」菜单：默认不渲染；点开后是页面级底部面板，条目随版本状态变化
+    @TestCase
+    public func testVersionActionMenuOpensAsPageLevelPanel(): Unit {
+        let state = makePortalState("team")
+        seedPkg(state, "ystyle", "crc", "1.0.0")
+        let page = mountPackages(state)
+        page.select("ystyle", "crc")
+        @Expect(renderPackages(page).contains("取消"), false)     // 没点就不渲染
+
+        let id = page.verAll.get()[0].id
+        page.openMenu(id)
+        let json = renderPackages(page)
+        @Expect(json.contains("取消"), true)
+        @Expect(json.contains("详情"), true)
+        @Expect(json.contains("软删除"), true)                     // 未删除的版本：详情 / 软删除
+        @Expect(json.contains("恢复"), false)
+
+        // 软删过的版本：给恢复 / 硬删除
+        for (d in state.pkgStore.listVersions("ystyle", "crc")) {
+            d.deletedAt = 1
+            state.pkgStore.save(d)
+        }
+        page.select("ystyle", "crc")
+        let deletedId = page.verAll.get()[0].id
+        page.openMenu(deletedId)
+        let json2 = renderPackages(page)
+        @Expect(json2.contains("恢复"), true)
+        @Expect(json2.contains("硬删除"), true)
+        @Expect(json2.contains("软删除"), false)
+    }
+
+    // 翻到第二页：只剩最后两条（新→旧序的尾部）
+    @TestCase
+    public func testVersionPagerShowsSecondPage(): Unit {
+        let state = makePortalState("team")
+        for (i in 0..12) {
+            seedPkg(state, "ystyle", "many", "1.0.${i}")
+        }
+        let page = mountPackages(state)
+        page.select("ystyle", "many")
+        page.verPage.set(2)
+        @Expect(page.verRows.get().size, 2)
+        @Expect(page.verRows.get()[0].version, "1.0.1")
+        @Expect(page.verRows.get()[1].version, "1.0.0")
+    }
+
+    // 换包时页码必须回到第一页（否则会停在上一包的第 N 页，看起来像"版本丢了"）
+    @TestCase
+    public func testSwitchingPackageResetsVersionPage(): Unit {
+        let state = makePortalState("team")
+        for (i in 0..12) {
+            seedPkg(state, "ystyle", "many", "1.0.${i}")
+        }
+        seedPkg(state, "acme", "few", "2.0.0")
+        let page = mountPackages(state)
+        page.select("ystyle", "many")
+        page.verPage.set(2)
+        @Expect(page.verRows.get().size, 2)
+
+        page.select("acme", "few")
+        @Expect(page.verPage.get(), 1)
+        @Expect(page.verRows.get().size, 1)
+        @Expect(page.verRows.get()[0].version, "2.0.0")
     }
 
     // 主表「包」列收窄 + 新增「描述」列：包名不该把整行留白吃掉

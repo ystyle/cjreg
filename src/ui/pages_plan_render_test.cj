@@ -9,6 +9,7 @@ package ystyle::cjreg.ui
 import cjxt.*
 import bstorm.*
 import ystyle::cjreg.store.*
+import ystyle::cjreg.server.*
 import ystyle::cjreg.auth.*
 import ystyle::cjreg.auth.util.*
 import ystyle::cjreg.auth.model.*
@@ -34,6 +35,59 @@ func renderPlanList(state: CjregState): String {
     let page = PublishPlansPage()
     page.onMount(mountCtx(state, userCtxMap(1, "admin", true)))
     serializeSubtree(page.render(), HashMap<String, ActionHandler>())
+}
+
+// 创建计划页：候选包表 / 已选表 / 版本对照表（回归）
+func mountPlanCreate(state: CjregState): PublishPlanCreatePage {
+    let page = PublishPlanCreatePage()
+    page.onMount(mountCtx(state, userCtxMap(1, "admin", true)))
+    page
+}
+
+func renderPlanCreate(page: PublishPlanCreatePage): String {
+    serializeSubtree(page.render(), HashMap<String, ActionHandler>())
+}
+
+@Test
+public class PublishPlanCreateRenderTest {
+    // 三张表的表头都在（候选包 / 已选择的包 / 版本对照）
+    @TestCase
+    public func testPickerTablesRender(): Unit {
+        let state = makePortalState("team")
+        seedPkg(state, "ystyle", "alpha", "1.0.0")
+        seedPkg(state, "ystyle", "beta", "2.0.0")
+        let json = renderPlanCreate(mountPlanCreate(state))
+        @Expect(json.contains("描述"), true)
+        @Expect(json.contains("目标仓"), true)
+        @Expect(json.contains("分类"), true)
+        @Expect(json.contains("说明"), true)
+        // 候选表：本站为源站的包都在
+        @Expect(json.contains("ystyle::alpha"), true)
+        @Expect(json.contains("ystyle::beta"), true)
+    }
+
+    // 「说明」是信息、不是空态：有数据时不该再出现空态那句"选择包以后…"
+    @TestCase
+    public func testPreviewNoteIsNotAnEmptyState(): Unit {
+        let state = makePortalState("team")
+        seedPkg(state, "ystyle", "alpha", "1.0.0")
+        let page = mountPlanCreate(state)
+        let items = ArrayList<PlanItem>()
+        items.add(PlanItem(7, "alpha", "ystyle", "1.0.0", PlanCategory.NeedPublish, 1))
+        page.previewRows.set(items)
+        page.previewNote.set("共 1 项 · 需发布 1")
+        let json = renderPlanCreate(page)
+        @Expect(json.contains("共 1 项 · 需发布 1"), true)
+        @Expect(json.contains("选择包以后，这里会列出每一包的本地版本与目标仓版本"), false)
+    }
+
+    // 真的没东西可看时才给空态提示
+    @TestCase
+    public func testPreviewEmptyStateWhenNothingToShow(): Unit {
+        let state = makePortalState("team")
+        let json = renderPlanCreate(mountPlanCreate(state))
+        @Expect(json.contains("选择包以后，这里会列出每一包的本地版本与目标仓版本"), true)
+    }
 }
 
 @Test

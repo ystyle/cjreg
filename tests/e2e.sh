@@ -213,7 +213,12 @@ print('  清理动作自身入审计 ✓')
 plan = [x for x in d['items'] if x['action'] == 'execute_publish_plan']
 assert plan, d
 p0 = plan[0]
-assert p0['status'] == 'ok' and 'success=6/6' in p0['detail'], p0
+# detail 是 `key=value` 串（success/skipped/failed/total/aborted/roots/explicitToken）。
+# 早期断言写死 'success=6/6'，后来 detail 改成逐字段统计（多了 skipped/failed/total/aborted），
+# 断言就再没匹配上 → CI 从那时起一直红。这里按字段解析，既不脆也不怕以后加字段。
+fields = dict(kv.split('=', 1) for kv in p0['detail'].split() if '=' in kv)
+assert p0['status'] == 'ok' and fields.get('success') == '6' and fields.get('total') == '6' \
+    and fields.get('failed') == '0' and fields.get('aborted') == 'false', p0
 assert '18070' in p0['target'], p0
 assert 'target_token' not in json.dumps(p0) and p0['detail'].count('explicitToken=true') <= 1, p0
 assert p0['ipAddr'] and p0['userAgent'], p0

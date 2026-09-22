@@ -7,8 +7,10 @@ import cjxt.components.*
 import ystyle::cjreg.store.*
 import ystyle::cjreg.config.*
 import ystyle::cjreg.server.*
+import ystyle::cjreg.semver_range.*
 import std.collection.*
 import std.convert.*
+import std.sort.*
 import std.time.*
 
 // ===== 仪表盘 =====
@@ -198,7 +200,10 @@ class UpstreamsPage <: Component {
     // 删除确认 Dialog
     var confirmVisible = Signal<Bool>(false)
     var pendingDeleteId: Int64 = 0
-    var pendingDeleteName: String = ""
+    // **必须是信号**：确认框正文是渲染时插值的，而"点删除"只让 Dialog 组件自己变脏
+    //（页面并不读它）—— Dialog 的 children 是**页面渲染那一刻的快照**，用普通字段就会渲染出
+    // 首次渲染时的空名字。做成信号 + SignalView 现读，才会显示当前对象名。
+    var pendingDeleteName = Signal<String>("")
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
@@ -337,7 +342,7 @@ class UpstreamsPage <: Component {
         match (st.upStore.getById(id)) {
             case Some(u) =>
                 this.pendingDeleteId = u.id
-                this.pendingDeleteName = u.name
+                this.pendingDeleteName.set(u.name)
                 this.confirmVisible.set(true)
             case None => ()
         }
@@ -360,8 +365,8 @@ class UpstreamsPage <: Component {
         }
         let upSvc = UpstreamService(st.upStore)
         if (upSvc.remove(this.pendingDeleteId)) {
-            this.msg.set("已删除 ${this.pendingDeleteName}")
-            st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "delete upstream ${this.pendingDeleteName}", "ok", nowMs())
+            this.msg.set("已删除 ${this.pendingDeleteName.get()}")
+            st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "delete upstream ${this.pendingDeleteName.get()}", "ok", nowMs())
         } else {
             this.msg.set("删除失败（官方仓受保护）")
         }
@@ -468,8 +473,11 @@ class UpstreamsPage <: Component {
     }
 
     func renderConfirmDialog(): IComponent {
+        // 正文走 SignalView：Dialog 的静态子节点是首次渲染的快照，直写会显示空名字
         let dlg = Dialog([
-            div([text("确定要删除上游「${this.pendingDeleteName}」吗？此操作不可恢复。")]),
+            SignalView({ =>
+                div([text("确定要删除上游「${this.pendingDeleteName.get()}」吗？此操作不可恢复。")])
+            }),
         ])
             .visible(this.confirmVisible)
             .title("删除确认")
@@ -528,12 +536,22 @@ class PackagesPage <: Component {
     var selOrg = Signal<String>("")
     var selName = Signal<String>("")
     var verDrawerVisible = Signal<Bool>(false)
+    // 版本列表：verAll 是全量（**倒序**，新版本在前），verRows 是当前页（bindPaged 派生）
+    var verAll = Signal<ArrayList<PackageDoc>>(ArrayList<PackageDoc>())
     var verRows = Signal<ArrayList<PackageDoc>>(ArrayList<PackageDoc>())
     var verTitle = Signal<String>("")
+    // 版本行「操作」菜单：打开的是哪个版本（0 = 没开）。
+    // 菜单必须渲染在**页面级**而不是表格单元格里：`td.el-table__cell` 自带 z-index 与层叠上下文，
+    // 单元格里的浮层会被下面的分页器盖住（实测 elementFromPoint 命中的是 .el-pagination）。
+    var verMenuId = Signal<Int64>(0)
+    var verPage = Signal<Int64>(1)
+    var verPageSize = Signal<Int64>(10)
+    var verTotal = Signal<Int64>(0)
     // 删除确认（mode: soft = 软删可恢复；hard = 硬删不可恢复）
     var confirmVisible = Signal<Bool>(false)
     var pendingDeleteId: Int64 = 0
-    var pendingDeleteName: String = ""
+    // 同上游页：确认框正文要现读，否则显示首次渲染时的空名字（Dialog 保留静态子节点）
+    var pendingDeleteName = Signal<String>("")
     var pendingMode = Signal<String>("soft")
     // 单版本详情对话框（含 README 全文）：doc 用信号承载，SignalView 才能跟着刷新
     var detailVisible = Signal<Bool>(false)
@@ -545,6 +563,7 @@ class PackagesPage <: Component {
     var refetchInfo = Signal<String>("")
     // 派生绑定：页面实例是路由注册期创建、跨请求复用的，onMount 必须重建，否则订阅会累积
     private var binding: Option<Effect> = None
+    private var verBinding: Option<Effect> = None
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
@@ -556,7 +575,12 @@ class PackagesPage <: Component {
             case Some(e) => e.dispose()
             case None => ()
         }
+        match (this.verBinding) {
+            case Some(e) => e.dispose()
+            case None => ()
+        }
         this.binding = None
+        this.verBinding = None
     }
 
     private func rebind(): Unit {
@@ -564,8 +588,15 @@ class PackagesPage <: Component {
             case Some(e) => e.dispose()
             case None => ()
         }
+        match (this.verBinding) {
+            case Some(e) => e.dispose()
+            case None => ()
+        }
         this.binding = Some(bindPaged(this.rows, this.total, { => this.filteredRows() },
             this.currentPage, this.pageSize))
+        // 版本表分页：全量（倒序）按 10 条/页切片
+        this.verBinding = Some(bindPaged(this.verRows, this.verTotal, { => this.verAll.get() },
+            this.verPage, this.verPageSize))
     }
 
     // store 不是信号：写库后 bump 一次，主表派生自动重算
@@ -623,6 +654,22 @@ class PackagesPage <: Component {
         this.verDrawerVisible.set(true)
     }
 
+    // 打开某版本的操作菜单。拆分出无 ctx 的 openMenu：渲染层测试可以直接驱动它
+    // （动作只负责转调 + 重画，与主子表的 select/selectPackage 同一写法）。
+    func openMenu(id: Int64): Unit {
+        this.verMenuId.set(id)
+    }
+
+    func openVersionMenu(ctx: ActionContext, id: Int64): PatchResult {
+        this.openMenu(id)
+        PatchResult.ReRender
+    }
+
+    func closeVersionMenu(ctx: ActionContext): PatchResult {
+        this.verMenuId.set(0)
+        PatchResult.ReRender
+    }
+
     func closeVersionDrawer(ctx: ActionContext): PatchResult {
         this.verDrawerVisible.set(false)
         PatchResult.ReRender
@@ -638,18 +685,24 @@ class PackagesPage <: Component {
         if (name == "") {
             return
         }
+        // **先复位页码**：写页码会让"上一轮渲染留下的旧分页器实例"变脏，它的 total 是创建时的
+        // 快照；先写页码，这条补丁就排在内容补丁之前，会被随后的抽屉内容覆盖（反过来写就会把
+        // 新条数顶回旧值——这个坑在日志页踩过一次）。
+        this.verPage.set(1)
         let data = ArrayList<PackageDoc>()
         for (d in st.pkgStore.listVersions(org, name)) {
             data.add(d)
         }
-        this.verRows.set(data)
+        // 倒序：新版本在前（库里是插入序，界面上"刚发的"要在最上面）
+        sort(data, lessThan: { a, b => compareVersions(a.version, b.version) > 0 })
+        this.verAll.set(data)
         this.verTitle.set("${pkgKeyText(org, name)} 的版本（${data.size}）")
     }
 
     // ===== 三级删除：软删 / 恢复 / 硬删 =====
     func askDelete(ctx: ActionContext, id: Int64, name: String, version: String): PatchResult {
         this.pendingDeleteId = id
-        this.pendingDeleteName = "${name}@${version}"
+        this.pendingDeleteName.set("${name}@${version}")
         this.pendingMode.set("soft")
         this.confirmVisible.set(true)
         PatchResult.ReRender
@@ -657,7 +710,7 @@ class PackagesPage <: Component {
 
     func askHardDelete(ctx: ActionContext, id: Int64, name: String, version: String): PatchResult {
         this.pendingDeleteId = id
-        this.pendingDeleteName = "${name}@${version}"
+        this.pendingDeleteName.set("${name}@${version}")
         this.pendingMode.set("hard")
         this.confirmVisible.set(true)
         PatchResult.ReRender
@@ -738,7 +791,7 @@ class PackagesPage <: Component {
         } else {
             r = softDeleteVersion(st.pkgStore, Some(st.adminData), doc, now)
         }
-        let target = this.pendingDeleteName
+        let target = this.pendingDeleteName.get()
         let detail = "skippedPlanItems=${r.skippedPlanItems} blobRemoved=${r.blobRemoved}"
         if (r.outcome == LifecycleOutcome.Ok || r.outcome == LifecycleOutcome.AlreadyDeleted) {
             this.msg.set("${if (hard) { "已硬删除" } else { "已软删除（可恢复）" }} ${target}")
@@ -934,22 +987,29 @@ class PackagesPage <: Component {
         ])
     }
 
-    func renderConfirmDialog(): IComponent {
-        let hard = this.pendingMode.get() == "hard"
-        let body = if (hard) {
-            div([
-                div([text("确定要硬删除「${this.pendingDeleteName}」吗？")]),
+    // 删除确认正文（现读信号：模式与对象名都可能在上一次渲染之后才变）
+    func buildConfirmBody(): IComponent {
+        if (this.pendingMode.get() == "hard") {
+            return div([
+                div([text("确定要硬删除「${this.pendingDeleteName.get()}」吗？")]),
                 div([text("将同时删除制品文件（若仍被其它版本引用则保留），且不可恢复——请确认该版本已软删且无人依赖。")]),
             ])
-        } else {
-            div([
-                div([text("确定要软删除「${this.pendingDeleteName}」吗？")]),
-                div([text("索引/下载/公开 API 立即不可见，可在包列表随时恢复。")]),
-            ])
         }
-        let dlg = Dialog([body])
+        div([
+            div([text("确定要软删除「${this.pendingDeleteName.get()}」吗？")]),
+            div([text("索引/下载/公开 API 立即不可见，可在包列表随时恢复。")]),
+        ])
+    }
+
+    func renderConfirmDialog(): IComponent {
+        let hard = this.pendingMode.get() == "hard"
+        // 正文与标题都走 SignalView/现读：Dialog 的静态子节点与 title 是**首次渲染**的快照，
+        // 而"点删除"只会让 Dialog 组件自己变脏（页面并不读它）→ 直写会显示空名字/旧标题。
+        let dlg = Dialog([SignalView({ => this.buildConfirmBody() })])
             .visible(this.confirmVisible)
-            .title(if (hard) { "硬删除确认" } else { "软删除确认" })
+            .header([SignalView({ =>
+                div([text(if (this.pendingMode.get() == "hard") { "硬删除确认" } else { "软删除确认" })])
+            })])
             .width("460px")
             .closeOnClickModal(false)
             .footer([
@@ -1012,7 +1072,7 @@ class PackagesPage <: Component {
     // 就会渲染出上一次选择的内容。SignalView 在 render 里现读信号，谁后渲染都是新值。
     func renderVersionDrawer(): IComponent {
         Drawer([SignalView({ =>
-            div([listBody(this.versionHint(), this.renderVersionTable())])
+            div([listBody(this.versionHint(), this.renderVersionTable()), this.renderVersionPager()])
         })])
             .visible(this.verDrawerVisible)
             .direction(DrawerDirection.RTL)
@@ -1021,8 +1081,86 @@ class PackagesPage <: Component {
             .footer([Button([text("关闭")]).onClick(closeVersionDrawer)])
     }
 
+    // 版本行的「操作」菜单：页面级固定浮层（底部操作面板），不在表格单元格里。
+    //
+    // 为什么不做贴着按钮的浮层：表格单元格 `td.el-table__cell` 是 `position: relative; z-index: 1`
+    // 的层叠上下文，单元格里的浮层出不去、会被分页器盖住（实测点击落点命中的是 .el-pagination）；
+    // 而 `position: fixed` 在抽屉里也会被 `.el-drawer` 的 transform 变成相对抽屉定位、同样被裁。
+    // 底部操作面板（action sheet）在手机上本来就是标准交互，桌面端也不受定位限制。
+    //
+    // 菜单项仍是普通 ActionHandler（带 ctx）：管理员校验 / 审计操作者 / 打开对话框都要 ctx。
+    func renderVersionMenu(): IComponent {
+        let id = this.verMenuId.get()
+        if (id == 0) {
+            return div()
+        }
+        var found: ?PackageDoc = None
+        for (d in this.verAll.get()) {
+            if (d.id == id) {
+                found = Some(d)
+            }
+        }
+        let doc = match (found) {
+            case Some(d) => d
+            case None =>
+                this.verMenuId.set(0)
+                return div()
+        }
+        let name = doc.name
+        let version = doc.version
+        let deleted = doc.deletedAt != 0
+        let mirrored = doc.upstreamId != 0
+        let items = ArrayList<IComponent>()
+        let close: ActionHandler = { c => this.closeVersionMenu(c) }
+        let make: (String, ActionHandler) -> IComponent = { label, h =>
+            let wrap: ActionHandler = { c =>
+                this.verMenuId.set(0)
+                h(c)
+            }
+            Button([text(label)]).onClick(wrap)
+        }
+        items.add(make("详情", { c => this.showDetail(c, id) }))
+        if (deleted) {
+            items.add(make("恢复", { c => this.doRestore(c, id, name, version) }))
+            items.add(make("硬删除", { c => this.askHardDelete(c, id, name, version) }))
+        } else {
+            // 重拉只对回源镜像版本开放（本地发布的版本本地才是权威）
+            if (mirrored) {
+                items.add(make("重拉", { c => this.askRefetch(c, id, name, version, false, "") }))
+            }
+            items.add(make("软删除", { c => this.askDelete(c, id, name, version) }))
+        }
+        let title = "${pkgKeyText(doc.organization, doc.name)}@${version}"
+        div([
+            div([], attrs: Some(HashMap<String, String>([("style", "position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2100;")])))
+                .onClick(close),
+            div([
+                div([text("${title} 操作")],
+                    attrs: Some(HashMap<String, String>([("style", "font-size:14px;color:#909399;padding:8px 4px 12px;")]))),
+                div(items.toArray(),
+                    attrs: Some(HashMap<String, String>([
+                        ("style", "display:flex;flex-direction:column;gap:10px;align-items:stretch;")]))),
+                Button([text("取消")]).onClick(close),
+            ], attrs: Some(HashMap<String, String>([
+                ("style", "position:fixed;left:0;right:0;bottom:0;z-index:2101;background:#fff;" +
+                    "border-radius:12px 12px 0 0;padding:16px 16px 20px;box-shadow:0 -4px 16px rgba(0,0,0,.15);" +
+                    "display:flex;flex-direction:column;gap:10px;max-height:70vh;overflow:auto;")]))),
+        ])
+    }
+
+    // 版本表分页（10 条/页）：版本多的包（mcp 19、jsonrpc 16）一屏放不下。
+    // 分页器整块在 SignalView 里，total 是现读的，不会出现"条数停在上一包"的旧快照问题。
+    func renderVersionPager(): IComponent {
+        Pagination()
+            .currentPage(this.verPage)
+            .pageSize(this.verPageSize)
+            .pageSizes([10, 20, 50])
+            .total(this.verTotal.get())
+            .layout("total, prev, pager, next, sizes")
+    }
+
     func versionHint(): String {
-        if (this.verRows.get().size == 0) {
+        if (this.verAll.get().size == 0) {
             return "该包还没有版本记录"
         }
         ""
@@ -1033,8 +1171,7 @@ class PackagesPage <: Component {
             .data(this.verRows)
             .emptyText("暂无数据")
             .stripe()
-            .add(TableColumn<PackageDoc>().label("ID").accessor({ d => d.id.toString() }).width(48))
-            .add(TableColumn<PackageDoc>().label("版本").accessor({ d => d.version }).width(88))
+            .add(TableColumn<PackageDoc>().label("版本").accessor({ d => d.version }).width(96))
             .add(TableColumn<PackageDoc>().label("来源").width(108).render({ d, i =>
                 if (d.upstreamId == 0) {
                     Tag([text("本地发布")]).kind(ComponentKind.Primary)
@@ -1043,7 +1180,7 @@ class PackagesPage <: Component {
                 }
             }))
             .add(TableColumn<PackageDoc>().label("大小").accessor({ d => fmtSize(d.tarballSize) }).width(68))
-            .add(TableColumn<PackageDoc>().label("sha256").accessor({ d => shortSha(d.sha256) }).width(96))
+            .add(TableColumn<PackageDoc>().label("sha256").accessor({ d => shortSha(d.sha256) }).width(104))
             .add(TableColumn<PackageDoc>().label("时间").accessor({ d => formatLogTime(versionTimeMs(d)) }).width(84))
             .add(TableColumn<PackageDoc>().label("下载").accessor({ d => d.downloadCount.toString() }).width(56))
             .add(TableColumn<PackageDoc>().label("状态").width(62).render({ d, i =>
@@ -1053,35 +1190,11 @@ class PackagesPage <: Component {
                     Tag([text("正常")]).kind(ComponentKind.Success)
                 }
             }))
-            .add(TableColumn<PackageDoc>().label("操作").width(220).render({ d, i =>
-                let name = d.name
-                let version = d.version
+            // 操作收进菜单（见 renderVersionMenu）：抽屉里列宽有限，横排按钮会折行
+            .add(TableColumn<PackageDoc>().label("操作").width(92).render({ d, i =>
                 let id = d.id
-                let restoreH: ActionHandler = { c => this.doRestore(c, id, name, version) }
-                let hardH: ActionHandler = { c => this.askHardDelete(c, id, name, version) }
-                let deleteH: ActionHandler = { c => this.askDelete(c, id, name, version) }
-                let detailH: ActionHandler = { c => this.showDetail(c, id) }
-                let refetchH: ActionHandler = { c => this.askRefetch(c, id, name, version, false, "") }
-                if (d.deletedAt != 0) {
-                    div([
-                        Button([text("详情")]).size(ButtonSize.Small).onClick(detailH),
-                        Button([text("恢复")]).size(ButtonSize.Small).kind(ButtonKind.Success).onClick(restoreH),
-                        Button([text("硬删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(hardH),
-                    ],
-                        attrs: Some(HashMap<String, String>([("style", "display:flex;gap:6px;align-items:center;flex-wrap:nowrap;")])))
-                } else {
-                    div([
-                        Button([text("详情")]).size(ButtonSize.Small).onClick(detailH),
-                        // 重拉只对回源镜像版本开放（本地发布的版本本地才是权威）
-                        if (d.upstreamId != 0) {
-                            Button([text("重拉")]).size(ButtonSize.Small).kind(ButtonKind.Warning).onClick(refetchH)
-                        } else {
-                            div()
-                        },
-                        Button([text("软删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteH),
-                    ],
-                        attrs: Some(HashMap<String, String>([("style", "display:flex;gap:6px;align-items:center;flex-wrap:nowrap;")])))
-                }
+                let openH: ActionHandler = { c => this.openVersionMenu(c, id) }
+                Button([text("操作")]).size(ButtonSize.Small).onClick(openH)
             }))
     }
 
@@ -1133,7 +1246,7 @@ class PackagesPage <: Component {
             div([text("包管理")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
             adminCard("已发布包", [toolbar, listBody(this.listHint(), this.renderList()), pager,
                 this.renderDetailDialog(), this.renderRefetchDialog(), this.renderConfirmDialog(),
-                this.renderVersionDrawer()]),
+                this.renderVersionDrawer(), this.renderVersionMenu()]),
         ])
     }
 }

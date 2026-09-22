@@ -16,6 +16,8 @@ public class PackageRow {
     public var key: String = ""
     public var latestVersion: String = ""
     public var versionCount: Int64 = 0
+    /// 最新版本（versionCount 里最大号那个）的描述：列表页「描述」列显示它
+    public var latestDesc: String = ""
     /// 组内最大 updatedAt（"最近更新"）
     public var updatedAt: Int64 = 0
     /// 组内全部版本都已软删（主行标「已删」，子表逐个给恢复/硬删）
@@ -48,6 +50,7 @@ public func groupPackages(all: ArrayList<PackageDoc>): ArrayList<PackageRow> {
                 if (d.updatedAt > row.updatedAt) { row.updatedAt = d.updatedAt }
                 if (compareVersions(d.version, row.latestVersion) > 0) {
                     row.latestVersion = d.version
+                    row.latestDesc = d.description
                 }
                 if (!d.description.isEmpty()) {
                     row.searchText += " " + d.description.toAsciiLower()
@@ -58,6 +61,7 @@ public func groupPackages(all: ArrayList<PackageDoc>): ArrayList<PackageRow> {
                 row.name = d.name
                 row.key = key
                 row.latestVersion = d.version
+                row.latestDesc = d.description
                 row.versionCount = 1
                 row.updatedAt = d.updatedAt
                 row.allDeleted = d.deletedAt != 0

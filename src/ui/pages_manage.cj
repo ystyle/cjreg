@@ -405,7 +405,10 @@ class UpstreamsPage <: Component {
             .add(TableColumn<Upstream>().label("优先级").accessor({ u => u.priority.toString() }).width(80))
             .add(TableColumn<Upstream>().label("缓存").accessor({ u => "${u.cacheTtl}s" }).width(90))
             .add(TableColumn<Upstream>().label("最后同步").accessor({ u => if (u.lastSyncAt > 0) { u.lastSyncAt.toString() } else { "-" } }).minWidth(110))
-            .add(TableColumn<Upstream>().label("操作").minWidth(280).render({ u, i =>
+            // 操作列：三个按钮要在一行内放下。minWidth 单独用不够 —— 单元格被压到小于按钮总宽时
+            // 最后一个按钮会掉到第二行（实测「编辑 禁用」一行、「删除」另起一行），所以给足宽度
+            // 并用不换行的 flex 容器排按钮。
+            .add(TableColumn<Upstream>().label("操作").width(260).render({ u, i =>
                 let id = u.id
                 let editH: ActionHandler = { c => this.openEdit(c, id) }
                 let toggleH: ActionHandler = { c => this.toggleEnabled(c, id) }
@@ -418,7 +421,7 @@ class UpstreamsPage <: Component {
                     } else {
                         Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteH)
                     },
-                ])
+                ], attrs: Some(HashMap<String, String>([("style", "display:flex;gap:8px;align-items:center;flex-wrap:nowrap;")])))
             }))
     }
 
@@ -519,14 +522,12 @@ class PackagesPage <: Component {
     var currentPage = Signal<Int64>(1)
     var pageSize = Signal<Int64>(20)
     var total = Signal<Int64>(0)
-    // 右栏（子表）：选中的包 + 它的各版本
-    // 选中的包（主子表的"主"）。**必须是信号**：点「查看版本」是动作驱动的，
-    // 而动作只写信号；页面上没人读它时不会产生任何补丁 —— 站在"未选中"分支的渲染
-    // 根本不读 verTitle/verRows，于是"点一下没反应"（实测：浏览器里右栏一直停在空态，
-    // 而单测直接调 select() + render() 是好的，差别就在这里）。
-    // 做成信号后每次渲染都会读它，选中即脏 → 服务端下发补丁。
+    // 选中的包（子表 = 该包的版本列表，走 Drawer 抽屉）。**必须是信号**：点「查看版本」是
+    // 动作驱动的，而动作只写信号；页面上没人读它时不会产生任何补丁 —— 于是"点一下没反应"
+    // （实测：浏览器里抽屉一直不出现，而单测直接调 select() + render() 是好的）。
     var selOrg = Signal<String>("")
     var selName = Signal<String>("")
+    var verDrawerVisible = Signal<Bool>(false)
     var verRows = Signal<ArrayList<PackageDoc>>(ArrayList<PackageDoc>())
     var verTitle = Signal<String>("")
     // 删除确认（mode: soft = 软删可恢复；hard = 硬删不可恢复）
@@ -619,6 +620,12 @@ class PackagesPage <: Component {
             case Some(st) => this.refreshVersions(st, org, name)
             case None => ()
         }
+        this.verDrawerVisible.set(true)
+    }
+
+    func closeVersionDrawer(ctx: ActionContext): PatchResult {
+        this.verDrawerVisible.set(false)
+        PatchResult.ReRender
     }
 
     func selectPackage(ctx: ActionContext, org: String, name: String): PatchResult {
@@ -965,7 +972,8 @@ class PackagesPage <: Component {
             .data(this.rows)
             .emptyText("暂无数据")
             .stripe()
-            .add(TableColumn<PackageRow>().label("包").minWidth(200).render({ r, i =>
+            // 包名给固定宽度就够（原先的 minWidth 让它把整行留白全吃掉）；多出来的空间给「描述」列
+            .add(TableColumn<PackageRow>().label("包").width(220).render({ r, i =>
                 let label = pkgKeyText(r.organization, r.name)
                 let curOrg = this.selOrg.get()
                 let curName = this.selName.get()
@@ -976,6 +984,7 @@ class PackagesPage <: Component {
                     text(label)
                 }
             }).showOverflowTooltip())
+            .add(TableColumn<PackageRow>().label("描述").accessor({ r => r.latestDesc }).minWidth(220).showOverflowTooltip())
             .add(TableColumn<PackageRow>().label("最新版本").accessor({ r => r.latestVersion }).width(100))
             .add(TableColumn<PackageRow>().label("版本数").accessor({ r => r.versionCount.toString() }).width(76))
             .add(TableColumn<PackageRow>().label("下载").accessor({ r => r.downloadCount.toString() }).width(70))
@@ -995,15 +1004,21 @@ class PackagesPage <: Component {
             }))
     }
 
-    func renderVersionPanel(): IComponent {
-        if (this.selName.get() == "") {
-            return emptyState("左侧选一个包，这里显示它的版本")
-        }
-        div([
-            div([text(this.verTitle.get())],
-                attrs: Some(HashMap<String, String>([("class", cls("dialog-section"))]))),
-            listBody(this.versionHint(), this.renderVersionTable()),
-        ])
+    // 版本列表用 **Drawer（抽屉）**：同页左右分栏在窄屏（手机）会被挤到换行，宽屏上主表的
+    // 包名那一列又会被拉着填满整行；抽屉从右侧滑出，主表就能占满整行。
+    //
+    // 抽屉内容必须包在 SignalView 里：Drawer 的 children 是**页面渲染那一刻的快照**，而"打开抽屉"
+    // 本身会让 Drawer 组件变脏 —— 同一批补丁里父页面与子组件都会脏、子补丁后应用，直接塞表格
+    // 就会渲染出上一次选择的内容。SignalView 在 render 里现读信号，谁后渲染都是新值。
+    func renderVersionDrawer(): IComponent {
+        Drawer([SignalView({ =>
+            div([listBody(this.versionHint(), this.renderVersionTable())])
+        })])
+            .visible(this.verDrawerVisible)
+            .direction(DrawerDirection.RTL)
+            .size("min(94vw, 880px)")
+            .header([SignalView({ => div([text(this.verTitle.get())]) })])
+            .footer([Button([text("关闭")]).onClick(closeVersionDrawer)])
     }
 
     func versionHint(): String {
@@ -1018,27 +1033,27 @@ class PackagesPage <: Component {
             .data(this.verRows)
             .emptyText("暂无数据")
             .stripe()
-            .add(TableColumn<PackageDoc>().label("ID").accessor({ d => d.id.toString() }).width(56))
-            .add(TableColumn<PackageDoc>().label("版本").accessor({ d => d.version }).width(96))
-            .add(TableColumn<PackageDoc>().label("来源").width(118).render({ d, i =>
+            .add(TableColumn<PackageDoc>().label("ID").accessor({ d => d.id.toString() }).width(48))
+            .add(TableColumn<PackageDoc>().label("版本").accessor({ d => d.version }).width(88))
+            .add(TableColumn<PackageDoc>().label("来源").width(108).render({ d, i =>
                 if (d.upstreamId == 0) {
                     Tag([text("本地发布")]).kind(ComponentKind.Primary)
                 } else {
                     Tag([text(versionSource(d))]).kind(ComponentKind.Warning)
                 }
             }))
-            .add(TableColumn<PackageDoc>().label("大小").accessor({ d => fmtSize(d.tarballSize) }).width(80))
-            .add(TableColumn<PackageDoc>().label("sha256").accessor({ d => shortSha(d.sha256) }).width(110))
-            .add(TableColumn<PackageDoc>().label("时间").accessor({ d => formatLogTime(versionTimeMs(d)) }).width(96))
-            .add(TableColumn<PackageDoc>().label("下载").accessor({ d => d.downloadCount.toString() }).width(64))
-            .add(TableColumn<PackageDoc>().label("状态").width(70).render({ d, i =>
+            .add(TableColumn<PackageDoc>().label("大小").accessor({ d => fmtSize(d.tarballSize) }).width(68))
+            .add(TableColumn<PackageDoc>().label("sha256").accessor({ d => shortSha(d.sha256) }).width(96))
+            .add(TableColumn<PackageDoc>().label("时间").accessor({ d => formatLogTime(versionTimeMs(d)) }).width(84))
+            .add(TableColumn<PackageDoc>().label("下载").accessor({ d => d.downloadCount.toString() }).width(56))
+            .add(TableColumn<PackageDoc>().label("状态").width(62).render({ d, i =>
                 if (d.deletedAt != 0) {
                     Tag([text("已删")]).kind(ComponentKind.Danger)
                 } else {
                     Tag([text("正常")]).kind(ComponentKind.Success)
                 }
             }))
-            .add(TableColumn<PackageDoc>().label("操作").minWidth(240).render({ d, i =>
+            .add(TableColumn<PackageDoc>().label("操作").width(220).render({ d, i =>
                 let name = d.name
                 let version = d.version
                 let id = d.id
@@ -1052,7 +1067,8 @@ class PackagesPage <: Component {
                         Button([text("详情")]).size(ButtonSize.Small).onClick(detailH),
                         Button([text("恢复")]).size(ButtonSize.Small).kind(ButtonKind.Success).onClick(restoreH),
                         Button([text("硬删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(hardH),
-                    ])
+                    ],
+                        attrs: Some(HashMap<String, String>([("style", "display:flex;gap:6px;align-items:center;flex-wrap:nowrap;")])))
                 } else {
                     div([
                         Button([text("详情")]).size(ButtonSize.Small).onClick(detailH),
@@ -1063,7 +1079,8 @@ class PackagesPage <: Component {
                             div()
                         },
                         Button([text("软删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteH),
-                    ])
+                    ],
+                        attrs: Some(HashMap<String, String>([("style", "display:flex;gap:6px;align-items:center;flex-wrap:nowrap;")])))
                 }
             }))
     }
@@ -1112,19 +1129,11 @@ class PackagesPage <: Component {
             .layout("total, prev, pager, next, sizes")
             .onChange(onPageChange)
         // 主子表：左主（包，带分页）右子（该包的版本）
-        let master = div([
-            listBody(this.listHint(), this.renderList()),
-            pager,
-        ], attrs: Some(HashMap<String, String>([("style", "flex:1 1 46%;min-width:520px;")])))
-        let detail = div([
-            this.renderVersionPanel(),
-        ], attrs: Some(HashMap<String, String>([("style", "flex:1 1 54%;min-width:560px;")])))
-        let split = div([master, detail],
-            attrs: Some(HashMap<String, String>([("style", "display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;")])))
         adminLayout("/admin/packages", [
             div([text("包管理")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
-            adminCard("已发布包", [toolbar, split, this.renderDetailDialog(),
-                this.renderRefetchDialog(), this.renderConfirmDialog()]),
+            adminCard("已发布包", [toolbar, listBody(this.listHint(), this.renderList()), pager,
+                this.renderDetailDialog(), this.renderRefetchDialog(), this.renderConfirmDialog(),
+                this.renderVersionDrawer()]),
         ])
     }
 }

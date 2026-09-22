@@ -110,26 +110,41 @@ public class PackagesPageRenderTest {
         @Expect(json.contains("el-table"), true)       // 表格也还在（槽位没换）
     }
 
-    // 主子表：未选中给提示；选中后右栏出现该包的版本与操作按钮
+    // 版本列表是 Drawer（抽屉）：没点「查看版本」时抽屉不渲染；点了就有标题与版本行。
+    // 抽屉里必须走 SignalView（children 是页面渲染时的快照，Drawer 自己变脏时子补丁会后应用）。
     @TestCase
-    public func testMasterDetailShowsVersionsOfSelectedPackage(): Unit {
+    public func testVersionDrawerOpensOnSelect(): Unit {
         let state = makePortalState("team")
         seedPkg(state, "ystyle", "crc", "1.0.0")
         seedPkg(state, "ystyle", "crc", "1.0.1")
         seedPkg(state, "acme", "demo", "9.9.9")
 
         let page = mountPackages(state)
-        @Expect(renderPackages(page).contains("左侧选一个包"), true)
+        let closed = renderPackages(page)
+        @Expect(page.verDrawerVisible.get(), false)
+        @Expect(closed.contains("el-drawer"), false)      // 关着就不该有抽屉节点
 
         page.select("ystyle", "crc")
+        @Expect(page.verDrawerVisible.get(), true)
         let json = renderPackages(page)
+        @Expect(json.contains("el-drawer"), true)
         @Expect(json.contains("ystyle::crc 的版本（2）"), true)
         @Expect(json.contains("1.0.1"), true)
-        @Expect(json.contains("软删除"), true)      // 子表操作列在位
-        // 子表数据只含选中包的版本（直接断信号：主表那行 acme::demo 仍会显示它的最新版本）
+        @Expect(json.contains("软删除"), true)             // 版本表操作列在位
+        // 抽屉数据只含选中包的版本（主表那行 acme::demo 仍会显示它的最新版本）
         @Expect(page.verRows.get().size, 2)
         @Expect(page.verRows.get()[0].organization, "ystyle")
         @Expect(page.verRows.get()[0].name, "crc")
+    }
+
+    // 主表「包」列收窄 + 新增「描述」列：包名不该把整行留白吃掉
+    @TestCase
+    public func testMasterColumnsAreCompact(): Unit {
+        let state = makePortalState("team")
+        seedPkg(state, "ystyle", "crc", "1.0.0", desc: "CRC 校验库")
+        let json = renderPackages(mountPackages(state))
+        @Expect(json.contains("描述"), true)
+        @Expect(json.contains("CRC 校验库"), true)
     }
 
     // 绑定输入框不得再挂 input 动作：动作会在输入那一刻换来一次补丁，补丁应用完会清掉

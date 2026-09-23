@@ -930,8 +930,14 @@ public class AdminService {
         if (!requireAdmin(ctx)) {
             return
         }
-        let idStr = ctx.param("id")
-        let id = Int64.parse(idStr)
+        // 路径参数可能是任意串（例如误传上游名）：解析失败要回 400，
+        // 不能让 Int64.parse 的异常冒到框架层变成 500
+        let id = match (Int64.tryParse(ctx.param("id").trimAscii())) {
+            case Some(n) => n
+            case None =>
+                writeJson(ctx, 400u16, "{\"error\":\"invalid upstream id (expect numeric id)\"}")
+                return
+        }
         let (delActorId, delActorName) = this.actorOf(ctx)
         // 目标名尽量取真实上游名（删除后查不到，故先查）
         var upName = "#${id}"

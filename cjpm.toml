@@ -26,7 +26,7 @@
   "gjson" = "1.2.2"
   # 制品（.cjp = gzip + tar）内的 README / cjpm.toml 提取：tar 用自研 tar-cj（ystyle::tar）
   "ystyle::tar" = "1.1.0"
-  "cjxt" = { path = "../cjxt" }
+  "cjxt" = "1.1.0"
 
 # badger-cj（bstorm 底层）的 io_uring 支持
 [target.x86_64-unknown-linux-gnu]

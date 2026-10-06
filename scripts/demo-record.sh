@@ -297,10 +297,15 @@ shot_label() {
   esac
 }
 
-# 正式成片：片头卡 + 每格字幕条 + 淡入淡出 + 静音音轨（配音后替换即可）
+# 正式成片：片头卡 + 每格字幕条 + 交叉淡化转场 + 末尾定格留白 + 静音音轨（配音后替换）
+# 转场为什么用 xfade 而不是各自 fade：两个 fade 相邻会叠出近 1 秒黑场，
+# 首格又是终端命令，观众正好在这段看不清；xfade 是前格淡出与后格淡入重叠进行，无黑场。
+# 末尾 tpad 定格：命令结果刚输出完就切走会读不完，统一补一段静帧留白。
 cmd_final() {  # [输出名]
   local out="$REC/${1:-final}.mp4" tmp="$REC/.final"
   local font=/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc
+  local trans="${CJREG_FINAL_XFADE:-0.5}"
+  local hold="${CJREG_FINAL_HOLD:-1.6}"
   local order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs term-03-resolve pip-03-publish web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs term-07-audit-api web-08-delete}"
   rm -rf "$tmp"; mkdir -p "$tmp"
   say "片头卡"
@@ -308,36 +313,48 @@ cmd_final() {  # [输出名]
 "drawtext=fontfile=$font:text='cjreg':x=(w-text_w)/2:y=(h-text_h)/2-90:fontsize=120:fontcolor=0xcdd6f4,\
 drawtext=fontfile=$font:text='仓颉私有中心仓与多仓工具':x=(w-text_w)/2:y=(h-text_h)/2+40:fontsize=44:fontcolor=0x9399b2,\
 drawtext=fontfile=$font:text='发布 · 多仓解析 · 权限 · 发布计划 · 审计 · 三级删除':x=(w-text_w)/2:y=(h-text_h)/2+120:fontsize=28:fontcolor=0x6c7086,\
-fade=in:0:20,fade=out:st=3.0:d=0.5" -r 30 -c:v libx264 -crf 18 -pix_fmt yuv420p "$tmp/00-intro.mp4"
-  local i=1 shot label dur
+fade=in:0:20,settb=AVTB,fps=30" -c:v libx264 -crf 18 -pix_fmt yuv420p "$tmp/00-intro.mp4"
+  local i=1 shot label
   for shot in $order; do
     [ -f "$REC/$shot.mp4" ] || { warn "缺素材：$shot"; continue; }
     label=$(shot_label "$shot")
     label=${label//:/\\:}
-    dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$REC/$shot.mp4")
-    local fo; fo=$(awk "BEGIN{d=$dur-0.5; if(d<0)d=0; printf \"%.2f\", d}")
     ffmpeg_run -y -v error -i "$REC/$shot.mp4" -vf \
 "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,\
-fade=in:0:12,fade=out:st=$fo:d=0.5,\
+tpad=stop_mode=clone:stop_duration=$hold,\
 drawbox=x=0:y=992:w=1920:h=88:color=0x000000@0.62:t=fill,\
-drawtext=fontfile=$font:text='$label':x=64:y=1016:fontsize=30:fontcolor=0xffffff" \
-      -r 30 -c:v libx264 -crf 18 -pix_fmt yuv420p "$tmp/$(printf '%02d' "$i")-$shot.mp4" || die "处理 $shot 失败"
+drawtext=fontfile=$font:text='$label':x=64:y=1016:fontsize=30:fontcolor=0xffffff,\
+settb=AVTB,fps=30" -c:v libx264 -crf 18 -pix_fmt yuv420p "$tmp/$(printf '%02d' "$i")-$shot.mp4" || die "处理 $shot 失败"
     i=$((i+1))
   done
   say "片尾卡"
   ffmpeg_run -y -v error -f lavfi -i "color=c=0x11111b:s=1920x1080:d=3" -vf \
 "drawtext=fontfile=$font:text='谢谢观看':x=(w-text_w)/2:y=(h-text_h)/2-30:fontsize=72:fontcolor=0xcdd6f4,\
 drawtext=fontfile=$font:text='cjreg · 仓颉私有仓':x=(w-text_w)/2:y=(h-text_h)/2+70:fontsize=32:fontcolor=0x9399b2,\
-fade=in:0:20,fade=out:st=2.5:d=0.5" -r 30 -c:v libx264 -crf 18 -pix_fmt yuv420p "$tmp/99-outro.mp4"
-  rm -f "$tmp/list.txt"
-  for f in "$tmp"/*.mp4; do echo "file '$f'" >> "$tmp/list.txt"; done
-  say "拼接并挂静音音轨（配音后替换即可）"
-  ffmpeg_run -y -v error -f concat -safe 0 -i "$tmp/list.txt" \
-    -f lavfi -i anullsrc=r=48000:cl=stereo -shortest \
-    -c:v copy -c:a aac -b:a 128k -movflags +faststart "$out" || die "成片合成失败"
+fade=out:st=2.5:d=0.5,settb=AVTB,fps=30" -c:v libx264 -crf 18 -pix_fmt yuv420p "$tmp/99-outro.mp4"
+
+  local -a parts=() durs=() args=()
+  for f in "$tmp"/*.mp4; do
+    parts+=("$f")
+    durs+=("$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$f")")
+    args+=(-i "$f")
+  done
+  local n=${#parts[@]}
+  local fc="" prev="0:v" off
+  off=$(awk "BEGIN{printf \"%.3f\", ${durs[0]}-$trans}")
+  local k
+  for ((k=1; k<n; k++)); do
+    fc="$fc[$prev][$k:v]xfade=transition=fade:duration=$trans:offset=$off[v$k];"
+    prev="v$k"
+    off=$(awk "BEGIN{printf \"%.3f\", $off+${durs[$k]}-$trans}")
+  done
+  say "交叉淡化拼接 $n 段"
+  ffmpeg_run -y -v error "${args[@]}" -f lavfi -i anullsrc=r=48000:cl=stereo \
+    -filter_complex "${fc}[$prev]null[vout]" -map "[vout]" -map "$n:a" -shortest \
+    -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart "$out" || die "成片合成失败"
   rm -rf "$tmp"
   local total; total=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$out" | cut -d. -f1)
-  say "完成：$out（${total}s，$(ls "$REC"/*.mp4 | wc -l) 个素材文件）"
+  say "完成：$out（${total}s）"
 }
 
 cmd_list() { ls -la "$REC" 2>/dev/null | tail -n +2; }

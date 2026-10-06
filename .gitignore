@@ -8,3 +8,4 @@ data
 *.gcno
 cov_output/
 .demo/
+.qa-shots/

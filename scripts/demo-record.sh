@@ -131,7 +131,7 @@ shot_web_login() {  # <shot> <login-path> <target-path> <user> <pass> [secs]
 # ops 文件是纯命令行（# 注释、sleep N、其余原样交给 agent-browser），便于逐条改与复现。
 shot_web_ops() {  # <shot> <path> [secs]
   local shot="$1" path="$2" secs="${3:-12}"
-  local ops="$ROOT/.demo/ops/web-$shot.ops" frames="$REC/frames-$shot" out="$REC/web-$shot.mp4"
+  local ops="$ROOT/scripts/demo-ops/web-$shot.ops" frames="$REC/frames-$shot" out="$REC/web-$shot.mp4"
   local port="${CJREG_REC_CDP_PORT:-9222}" url
   case "$path" in http://*|https://*) url="$path" ;; *) url="$MAIN/admin$path" ;; esac
   [ -f "$ops" ] || die "缺少操作脚本：$ops"

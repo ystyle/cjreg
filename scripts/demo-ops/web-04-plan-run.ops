@@ -1,0 +1,7 @@
+# 计划详情：查看版本对照 → 开始执行 → 看推送进度
+sleep 1
+scroll down 500
+sleep 2
+find text "开始执行" click
+sleep 4
+scroll up 300

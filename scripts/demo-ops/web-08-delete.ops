@@ -1,0 +1,21 @@
+# 三级删除（界面）：软删除 → 状态可见 → 恢复
+sleep 1
+fill 'input[placeholder="搜索包名 / 组织 / 描述"]' "strUtils"
+sleep 2
+eval "document.querySelectorAll('table tbody tr:first-child button')[0].click()"
+sleep 3
+eval "[...document.querySelectorAll('button')].filter(b=>b.innerText.trim()==='操作'&&b.offsetParent)[0].click()"
+sleep 1
+eval "[...document.querySelectorAll('.el-dropdown-menu__item')].filter(i=>i.innerText.trim()==='软删除'&&i.offsetParent)[0].click()"
+sleep 2
+eval "[...document.querySelectorAll('.el-message-box__btns button, .el-dialog__footer button')].filter(b=>b.innerText.trim()==='软删除')[0].click()"
+sleep 3
+scroll down 180
+sleep 2
+eval "[...document.querySelectorAll('button')].filter(b=>b.innerText.trim()==='操作'&&b.offsetParent)[0].click()"
+sleep 1
+eval "[...document.querySelectorAll('.el-dropdown-menu__item')].filter(i=>i.innerText.trim()==='恢复'&&i.offsetParent)[0].click()"
+sleep 2
+eval "[...document.querySelectorAll('.el-message-box__btns button, .el-dialog__footer button')].filter(b=>/恢复|确定/.test(b.innerText.trim()))[0].click()"
+sleep 3
+scroll up 180

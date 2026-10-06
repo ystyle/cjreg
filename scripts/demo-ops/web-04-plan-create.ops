@@ -1,0 +1,14 @@
+# 创建发布计划：命名 → 选目标上游 → 搜演示包 → 添加 → 分析并创建
+sleep 1
+fill 'input[placeholder="计划名称"]' UI演示计划
+sleep 1
+click .el-select
+sleep 1
+find text "demo-upstream" click
+sleep 1
+fill 'input[placeholder="搜索包名 / 组织"]' "demo::"
+sleep 2
+eval document.querySelectorAll('table tbody tr button')[0].click()
+sleep 2
+find text "分析并创建" click
+sleep 4

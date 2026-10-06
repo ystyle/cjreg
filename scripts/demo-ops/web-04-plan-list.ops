@@ -1,0 +1,5 @@
+# 发布计划列表：滚动看已有计划与状态/进度
+sleep 1
+scroll down 400
+sleep 2
+scroll up 400

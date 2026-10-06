@@ -9,12 +9,12 @@
 | web-03-portal | Web 界面 | `.demo/recordings/web-03-portal.mp4` | 5 | 门户首页 | 见 §3 对应镜头 |
 | web-03-packages | Web 界面 | `.demo/recordings/web-03-packages.mp4` | 5 | 包列表：浏览与搜索仓颉包 | 见 §3 对应镜头 |
 | web-03-docs | Web 界面 | `.demo/recordings/web-03-docs.mp4` | 4 | 内置帮助文档 | 见 §3 对应镜头 |
-| term-03-resolve | 终端 | `.demo/recordings/term-03-resolve.mp4` | 10 | 多仓解析：cd 源码目录 → cjpm update（私有仓 + 官方仓分工） | 见 §3 对应镜头 |
 | pip-03-publish | 同屏（画中画） | `.demo/recordings/pip-03-publish.mp4` | 6 | 发布：终端 cjpm publish ＋ 后台包管理（同屏） | 见 §3 对应镜头 |
+| term-04-resolve | 终端 | `.demo/recordings/term-04-resolve.mp4` | 10 | 多仓解析：cd 源码目录 → cjpm update（私有仓 + 官方仓分工） | 见 §3 对应镜头 |
 | web-04-upstreams | Web 界面 | `.demo/recordings/web-04-upstreams.mp4` | 5 | 上游管理：官方仓 / 演示空站 | 见 §3 对应镜头 |
 | web-04-plan-list | Web 界面 | `.demo/recordings/web-04-plan-list.mp4` | 5 | 发布计划列表：状态 / 目标上游 / 进度 | 见 §3 对应镜头 |
-| web-04-plan-create | Web 界面 | `.demo/recordings/web-04-plan-create.mp4` | 14 | 创建发布计划：选包 → 自动补依赖 → 版本对照 | 见 §3 对应镜头 |
-| web-04-plan-run | Web 界面 | `.demo/recordings/web-04-plan-run.mp4` | 9 | 计划详情：开始执行 / 推送进度 | 见 §3 对应镜头 |
+| web-04-plan-create | Web 界面 | `.demo/recordings/web-04-plan-create.mp4` | 26 | 创建发布计划：选包 → 自动补依赖 → 版本对照 | 见 §3 对应镜头 |
+| web-04-plan-run | Web 界面 | `.demo/recordings/web-04-plan-run.mp4` | 15 | 计划详情：开始执行 / 推送进度 | 见 §3 对应镜头 |
 | web-04-target | Web 界面 | `.demo/recordings/web-04-target.mp4` | 5 | 演示空站：推送后的结果 | 见 §3 对应镜头 |
 | web-05-org | Web 界面 | `.demo/recordings/web-05-org.mp4` | 5 | 组织与团队管理 | 见 §3 对应镜头 |
 | pip-05-permission | 同屏（画中画） | `.demo/recordings/pip-05-permission.mp4` | 13 | 权限：终端越权发布被拒 ＋ 组织管理（同屏） | 见 §3 对应镜头 |

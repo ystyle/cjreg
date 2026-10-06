@@ -197,7 +197,7 @@ cmd_timeline() {
     echo "| 镜头 | 轨 | 素材 | 时长(s) | 画面内容 | 配音提示（demo-video.md §3） |"
     echo "|---|---|---|---|---|---|"
     local label shot order
-    order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs term-03-resolve pip-03-publish web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs term-07-audit-api web-08-delete}"
+    order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs pip-03-publish term-04-resolve web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs term-07-audit-api web-08-delete}"
     for shot in $order; do
       local f="$REC/$shot.mp4"
       [ -f "$f" ] || continue
@@ -272,7 +272,7 @@ drawtext=fontfile=$font:text='$title_esc':x=82:y=21:fontsize=16:fontcolor=0xcdd6
 }
 
 cmd_preview() {  # 按演示顺序拼接成片（各轨分辨率不同，统一 pad 到 1080p）
-  local order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs term-03-resolve pip-03-publish web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs term-07-audit-api web-08-delete}"
+  local order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs pip-03-publish term-04-resolve web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs term-07-audit-api web-08-delete}"
   local out="$REC/preview-all.mp4" args=() fc="" n=0
   for shot in $order; do
     [ -f "$REC/$shot.mp4" ] || { warn "缺素材：$shot.mp4（跳过）"; continue; }
@@ -297,7 +297,7 @@ shot_label() {
     03-portal)         echo "门户首页" ;;
     03-packages)       echo "包列表：浏览与搜索仓颉包" ;;
     03-docs)           echo "内置帮助文档" ;;
-    03-resolve)        echo "多仓解析：cd 源码目录 → cjpm update（私有仓 + 官方仓分工）" ;;
+    04-resolve)        echo "多仓解析：cd 源码目录 → cjpm update（私有仓 + 官方仓分工）" ;;
     pip-03-publish)    echo "发布：终端 cjpm publish ＋ 后台包管理（同屏）" ;;
     04-upstreams)      echo "上游管理：官方仓 / 演示空站" ;;
     04-plan-list)      echo "发布计划列表：状态 / 目标上游 / 进度" ;;
@@ -323,7 +323,7 @@ cmd_final() {  # [输出名]
   local font=/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc
   local trans="${CJREG_FINAL_XFADE:-0.5}"
   local hold="${CJREG_FINAL_HOLD:-1.6}"
-  local order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs term-03-resolve pip-03-publish web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs term-07-audit-api web-08-delete}"
+  local order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs pip-03-publish term-04-resolve web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs term-07-audit-api web-08-delete}"
   rm -rf "$tmp"; mkdir -p "$tmp"
   say "片头卡"
   ffmpeg_run -y -v error -f lavfi -i "color=c=0x11111b:s=1920x1080:d=3.5" -vf \

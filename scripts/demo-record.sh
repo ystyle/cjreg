@@ -235,8 +235,10 @@ cmd_timeline() {
   say "已生成 $out"
 }
 
-# 画中画合成：浏览器画面为主，终端回放做右下角小窗（带标题栏）。
-# 用于「终端操作 + 对应界面」的配对镜头，让观众同屏看到"命令生效了"。
+# 画中画合成：主画面（浏览器）抽一帧**定格**，终端回放做右下角小窗。
+# 为什么要定格：主素材原本带轻微滚动（单轨播放时显得生动），一旦叠了小窗，
+# 背景滚动会和终端动作抢注意力 —— 主画面静、小窗动，观众才知道该看哪里。
+# 关掉定格：CJREG_PIP_FREEZE=0（退回主画面播放）。
 cmd_pip() {  # <主镜头> <小窗镜头> <输出名> [小窗标题]
   local main="$1" pip="$2" out_shot="$3" title="${4:-终端}"
   local mf="$REC/$main.mp4" pf="$REC/$pip.mp4" out="$REC/$out_shot.mp4"
@@ -244,17 +246,30 @@ cmd_pip() {  # <主镜头> <小窗镜头> <输出名> [小窗标题]
   [ -f "$pf" ] || die "缺小窗素材：$pf"
   local font=/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc
   local title_esc="${title//:/\\:}"   # ffmpeg filter 里 : 是分隔符，标题必须转义
-  say "画中画：$main（主） + $pip（右下小窗）→ $out_shot"
-  ffmpeg_run -y -v error -i "$mf" -i "$pf" -filter_complex \
-"[1:v]scale=720:-2,pad=752:ih+72:16:40:color=0x181825,\
+  local dur; dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$pf")
+  local win="[1:v]scale=720:-2,pad=752:ih+72:16:40:color=0x181825,\
 drawbox=x=16:y=16:w=720:h=28:color=0x313244:t=fill,\
 drawbox=x=30:y=24:w=9:h=9:color=0xf38ba8:t=fill,\
 drawbox=x=45:y=24:w=9:h=9:color=0xf9e2af:t=fill,\
 drawbox=x=60:y=24:w=9:h=9:color=0xa6e3a1:t=fill,\
 drawbox=x=16:y=40:w=736:h=ih-24:color=0x585b70:t=2,\
 drawtext=fontfile=$font:text='$title_esc':x=82:y=21:fontsize=16:fontcolor=0xcdd6f4[t];\
-[0:v][t]overlay=W-w-40:H-h-40:shortest=1[out]" -map "[out]" \
-    -c:v libx264 -crf 18 -pix_fmt yuv420p -movflags +faststart "$out" || die "画中画合成失败"
+[0:v][t]overlay=W-w-40:H-h-40[out]"
+  if [ "${CJREG_PIP_FREEZE:-1}" = "1" ]; then
+    local still="$REC/.pip-still-$out_shot.png"
+    # 抽帧点必须落在**主画面**自己的时长内（取 60% 处，避开可能的加载态）
+    local mdur; mdur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$mf")
+    local mid; mid=$(awk "BEGIN{printf \"%.2f\", $mdur*0.6}")
+    ffmpeg_run -y -v error -ss "$mid" -i "$mf" -frames:v 1 "$still" || die "抽主画面定帧失败"
+    say "画中画（主画面定格）：$main ＋ $pip → $out_shot"
+    ffmpeg_run -y -v error -loop 1 -i "$still" -i "$pf" -filter_complex "$win" -map "[out]" \
+      -t "$dur" -c:v libx264 -crf 18 -pix_fmt yuv420p -movflags +faststart "$out" || die "画中画合成失败"
+    rm -f "$still"
+  else
+    say "画中画（主画面播放）：$main ＋ $pip → $out_shot"
+    ffmpeg_run -y -v error -i "$mf" -i "$pf" -filter_complex "$win" -map "[out]" \
+      -c:v libx264 -crf 18 -pix_fmt yuv420p -movflags +faststart "$out" || die "画中画合成失败"
+  fi
   [ -s "$out" ] || die "画中画产物为空：$out"
   say "完成：$out"
 }

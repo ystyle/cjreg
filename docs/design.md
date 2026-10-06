@@ -93,8 +93,24 @@ cjreg <command> [options]
 
 ```
 Upstream { id, name(唯一), url, enabled, cacheTtl(默认 86400s),
-           authToken, isOfficial, priority, lastSyncAt }
+           authToken, isOfficial, priority, lastSyncAt,
+           proxyEnabled, asTarget }
 ```
+
+**上游的三个开关（总闸 + 两个正交能力）**：
+
+- `enabled` **总闸**：关 = 整行不生效（不回源、也不可选作目标仓）；
+- `proxyEnabled` **读路径**：本地没有的包是否去它那里取并缓存落库（回源 / 镜像同步）。
+  回源链 = `enabled && proxyEnabled`，按 priority 升序（`proxySorted()`）；
+- `asTarget` **写路径**：是否出现在发布计划的「目标上游」下拉里（可被推送）。
+  下拉 = `enabled && asTarget`（`planTargets()`）——向官方中心仓推送不可逆，这个能力
+  必须显式授权，不能只是"下拉里恰好有它"。
+
+**默认值分两层，别混**：**字段默认 `true/true`** 是给 bstorm 反序列化兜底的——旧文档没有
+这两个键，`@Model` 的 `fromJson` 先按字段默认值构造对象再按键赋值，于是存量上游读出来仍是
+`true/true`，升级不改变行为；**新建上游**由 `UpstreamService.add` 给
+`proxyEnabled=true / asTarget=false`，`init` 建出来的 `official` 同理——即**官方仓默认参与
+回源，但默认不出现在发布计划的目标下拉里**。
 
 - `isOfficial`：是否**官方中心仓**（`https://pkg.cangjie-lang.cn/registry`）。录入时按 URL 自动识别，也可显式指定。
 - `authToken` 两种用途：
@@ -117,7 +133,7 @@ Upstream { id, name(唯一), url, enabled, cacheTtl(默认 86400s),
 | 端点 | 说明 |
 |---|---|
 | `GET/POST /api/admin/upstreams` | 上游列表（含 isOfficial）/ 添加 |
-| `PUT/DELETE /api/admin/upstreams/:id` | 更新（url/priority/enabled/cacheTtl）/ 删除（官方仓拒绝） |
+| `PUT/DELETE /api/admin/upstreams/:id` | 局部更新（enabled/proxyEnabled/asTarget/priority/cacheTtl/authToken；url 不可改）/ 删除（官方仓拒绝） |
 | `POST /api/admin/upstreams/:id/test` | 连通性测试 |
 | `GET /api/admin/upstreams/:id/cache-stats` | 缓存统计 |
 | `POST /api/admin/upstreams/:id/clear-cache` | 清缓存 |

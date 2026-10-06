@@ -69,8 +69,10 @@ GET    /api/admin/me                 当前用户
 GET    /api/admin/users              用户列表（admin）
 POST   /api/admin/users              创建用户（admin，JSON body {username,password,isAdmin?,email?}）
 PUT    /api/admin/users/:id/admin    提升/取消管理员（admin，JSON body {isAdmin}；最后一个启用管理员不可取消，409）
-GET    /api/admin/upstreams          上游列表（admin）
-POST   /api/admin/upstreams          添加上游（admin，JSON body {name,url,priority}）
+GET    /api/admin/upstreams          上游列表（admin，含 proxyEnabled/asTarget 两个开关）
+POST   /api/admin/upstreams          添加上游（admin，{name,url,priority,proxy_enabled,as_target}；
+                                     默认 proxy_enabled=true、as_target=false）
+PUT    /api/admin/upstreams/:id      局部更新上游（enabled/proxyEnabled/asTarget/priority/cacheTtl/authToken）
 DELETE /api/admin/upstreams/:id      删除上游（官方仓受保护）
 GET    /api/admin/resolve            多仓解析诊断 ?name=&organization=&require=
 POST   /api/admin/publish-plans/analyze  发布计划依赖分析（拓扑排序）

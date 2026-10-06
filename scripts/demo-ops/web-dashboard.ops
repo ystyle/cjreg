@@ -1,0 +1,5 @@
+# 仪表盘：作为终端同屏的统一背景（数据概览）
+sleep 1
+scroll down 120
+sleep 2
+scroll up 120

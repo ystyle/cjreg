@@ -153,6 +153,25 @@ print('演示用户 alice/bob:', [n for n in ('alice','bob') if n in names] or '
 }
 
 # ---------- 子命令：prepare ----------
+sync_upstream_token() {  # 把演示上游站的发布 Token 写进主站的上游配置
+  # 没有它，发布计划执行到目标仓会 401（missing publish token）：Token 不在计划里，
+  # 而是取自上游配置 —— reset-upstream 重建空站会换新 Token，必须同步一次。
+  local sess pub up_id
+  sess=$(curl -s -m 8 -X POST "$UPSTREAM/api/admin/login" -H 'Content-Type: application/json' \
+    -d "{\"username\":\"admin\",\"password\":\"$UP_PASS\"}" | json_get token)
+  [ -n "$sess" ] || { warn "取空站会话失败，跳过上游 Token 同步"; return 0; }
+  pub=$(curl -s -m 8 -X POST "$UPSTREAM/api/user/me/publish-token" -H "Authorization: Bearer $sess" | json_get publishToken)
+  [ -n "$pub" ] || { warn "取空站发布 Token 失败"; return 0; }
+  local admin; admin=$(curl -s -m 8 -X POST "$MAIN/api/admin/login" -H 'Content-Type: application/json' \
+    -d "{\"username\":\"admin\",\"password\":\"$MAIN_PASS\"}" | json_get token)
+  up_id=$(curl -s -m 8 "$MAIN/api/admin/upstreams" -H "Authorization: Bearer $admin" \
+    | python3 -c "import os,sys,json;print(next((u['id'] for u in json.load(sys.stdin) if u['name']==os.environ.get('CJREG_LIVE_UPSTREAM_NAME','demo-upstream')), ''))" 2>/dev/null)
+  [ -n "$up_id" ] || { warn "未找到演示上游记录"; return 0; }
+  curl -s -m 8 -X PUT "$MAIN/api/admin/upstreams/$up_id" -H "Authorization: Bearer $admin" \
+    -H 'Content-Type: application/json' -d "{\"authToken\":\"$pub\"}" -o /dev/null
+  echo "  已同步空站发布 Token 到上游（id=$up_id）"
+}
+
 cmd_prepare() {
   guard_url "$MAIN"; guard_url "$UP"
   say "0/5 连通性检查"
@@ -277,6 +296,8 @@ for u in json.load(sys.stdin):
                        target_token=${UP_PUB:-（取 Token 失败，去 $UP/admin 个人门户取）}
   演示包目录: $PKG_DIR/{${DEMO_PKGS[*]}}（现场发布：cd 进去 cjpm publish）
   上游: 主站已注册 $UP_NAME → $UP_FROM_MAIN（priority=50）
+
+  sync_upstream_token
 
   演示流程见 docs/demo-video.md（分镜 + 解说词）；录完清理：bash scripts/demo-live.sh clean
 EOF

@@ -149,7 +149,7 @@ func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
     let authSvc = AuthService(userStore, 86400)
     let upSvc = UpstreamService(upStore)
     let blobStore: BlobStore = DiskBlobStore(dataDir + "/blobs")
-    let proxySvc = ProxyService(pkgStore, blobStore, upSvc)
+    let proxySvc = ProxyService(pkgStore, blobStore, upSvc, tmpDir: dataDir + "/blobs")
     // 权限/审计数据单实例：UI（CjregState）与 HTTP handler 必须共用，否则 id 计数器各自递增会撞车
     let adminData = AdminDataStore(userStore.storm)
     let admin = AdminService(authSvc, upSvc, userStore, upStore,

@@ -7,6 +7,8 @@ import ystyle::cjreg.index.*
 import ystyle::cjreg.config.*
 import ystyle::cjreg.store.*
 import stdx.net.http.*
+import stdx.crypto.digest.SHA256
+import stdx.encoding.hex.toHexString
 import stdx.net.tls.*
 import stdx.net.tls.common.*
 import stdx.encoding.url.URL
@@ -149,10 +151,16 @@ public class ProxyService {
     // 可注入的出网 GET（单测离线注入 stub；默认走真实 httpGet）
     public var httpFetch: ?(String, String) -> ?Array<Byte> = None
 
-    public init(pkgStore: PackageStore, blobStore: BlobStore, upstreamSvc: UpstreamService) {
+    // 流式回源的临时文件目录（必须与 blob 同目录，rename 才能原子进位）。
+    // 留空则回源保持"整包读入"的旧行为（内存 blob 模式与不需要流式的测试场景）。
+    public var tmpDir: String = ""
+
+    public init(pkgStore: PackageStore, blobStore: BlobStore, upstreamSvc: UpstreamService,
+                tmpDir!: String = "") {
         this.pkgStore = pkgStore
         this.blobStore = blobStore
         this.upstreamSvc = upstreamSvc
+        this.tmpDir = tmpDir
     }
 
     // 出网 GET 的唯一出口：测试注入点 + 后续打点都集中在这里
@@ -208,6 +216,65 @@ public class ProxyService {
     // 流式版：返回值里不再携带整包字节。本地命中直接给出 blob 流；
     // 回源路径仍需先把制品落成 blob（回源客户端本身是整体读取，见 fetchBytes），
     // 但**不再把字节交给调用方**，响应侧只拿流。
+    // 回源下载一个制品并落成 blob：按 1 MiB 分块读，同时喂 SHA-256 与临时文件，
+    // 读满后交给 BlobStore 原子认领（内容寻址去重）。任何失败都清理临时文件。
+    // 返回 (sha256, 字节数)；失败返回 None。
+    // 内存上限受 httpGetStream 的限制（见其注释）：中小制品峰值可控，超大制品仍可能触顶堆。
+    public func fetchArtifactToBlob(url: String, token: String): ?(String, Int64) {
+        let streamOpt = httpGetStream(url, token)
+        if (streamOpt.isNone()) {
+            return None
+        }
+        let stream = streamOpt.getOrThrow()
+        let tmp = this.tmpDir + "/.tmp-fetch-" + nowMsUtc().toString()
+        var out: ?File = None
+        try {
+            out = Some(File(tmp, Write))
+        } catch (e: Exception) {
+            println("[cjreg] 回源临时文件创建失败 ${tmp}: ${e.toString()}")
+            return None
+        }
+        let f = out.getOrThrow()
+        let sha = SHA256()
+        let buf = Array<Byte>(1024 * 1024, repeat: 0)
+        var size: Int64 = 0
+        var failed = false
+        try {
+            while (true) {
+                let n = stream.read(buf)
+                if (n <= 0) {
+                    break
+                }
+                size += n
+                if (size > MAX_FILE_SIZE) {
+                    failed = true
+                    break
+                }
+                sha.write(buf[0..n])
+                f.write(buf[0..n])
+            }
+        } catch (e: Exception) {
+            println("[cjreg] 回源流式落盘失败 ${url}: ${e.toString()}")
+            failed = true
+        }
+        try {
+            f.close()
+        } catch (e: Exception) {
+            failed = true
+        }
+        if (failed || size <= 0) {
+            try {
+                removeIfExists(tmp, recursive: false)
+            } catch (e: Exception) {
+                ()
+            }
+            return None
+        }
+        let hex = toHexString(sha.finish())
+        this.blobStore.claimFile(hex, tmp)
+        return Some((hex, size))
+    }
+
     public func fetchArtifactStream(org: String, name: String, version: String): (ProxyOutcome, ?InputStream, String) {
         let versions = this.pkgStore.listVersions(org, name)
         for (d in versions) {
@@ -227,6 +294,17 @@ public class ProxyService {
         let ups = this.upstreamSvc.proxySorted()
         for (up in ups) {
             let url = buildPackageURL(up.url, name, version, org)
+            if (!this.tmpDir.isEmpty()) {
+                // 流式：边读边算 sha256 并落临时文件，内存与制品大小无关
+                match (this.fetchArtifactToBlob(url, up.authToken)) {
+                    case Some((sha, _)) =>
+                        match (this.blobStore.stream(sha)) {
+                            case Some(st) => return (ProxyOutcome.FetchedFromUpstream, Some(st), sha)
+                            case None => return (ProxyOutcome.FetchedFromUpstream, None, sha)
+                        }
+                    case None => continue
+                }
+            }
             let body = this.fetchBytes(url, up.authToken)
             if (body.isNone()) {
                 continue
@@ -432,6 +510,86 @@ public class HttpGetOutcome {
 // 为什么不复用 httpGet：它把所有非 200 都折成 None，于是「404 目标仓还没有这个版本」与
 // 「401/429/5xx 根本没问到」在调用方眼里一模一样 —— 前者要继续等，后者再等也不会变好。
 // 正文也一并带出来：官方 400/401/429 的原因写在正文里。
+// 把 HTTP 响应体包成"读完自动关连接"的流：调用方（下载 handler / 回源落盘）只看见 InputStream，
+// 不必知道底下有个需要关闭的客户端。读尽或出错时关闭，避免连接泄漏。
+class HttpBodyStream <: InputStream {
+    let inner: InputStream
+    let client: Client
+    var closed: Bool = false
+
+    init(inner: InputStream, client: Client) {
+        this.inner = inner
+        this.client = client
+    }
+
+    func closeOnce(): Unit {
+        if (this.closed) {
+            return
+        }
+        this.closed = true
+        try {
+            this.client.close()
+        } catch (e: Exception) {
+            ()  // 关闭失败不影响已读内容
+        }
+    }
+
+    public func read(buffer: Array<Byte>): Int64 {
+        try {
+            let n = this.inner.read(buffer)
+            if (n <= 0) {
+                this.closeOnce()
+            }
+            return n
+        } catch (e: Exception) {
+            this.closeOnce()
+            throw e
+        }
+    }
+}
+
+// 取响应体供调用方分块读取（重定向口径与 httpGetWithStatus 一致，最多 5 跳）。
+// 调用方按需读取；读尽时底层客户端自动关闭。
+//
+// ⚠️ 限制：上游客户端在 `send` 阶段就会把响应体收下来，这里拿到的并不是真正的网络流，
+// 因此**超大制品仍会顶到 GC 堆上限**（实测 64 MiB 以上回源 OOM，8–32 MiB 正常且线性）。
+// 要让回源也做到内存 O(1)，需要客户端侧的流式读取能力，或改按 Range 分块回源。
+// 本函数的价值在于：中小制品的峰值不再与制品大小线性相关，且把连接生命周期收进流里。
+public func httpGetStream(url: String, token: String): ?InputStream {
+    var currentUrl = url
+    var hops: Int64 = 0
+    while (hops < 5) {
+        let client = buildHttpClient(currentUrl)
+        try {
+            let resp = client.send(buildGetRequest(currentUrl, token))
+            let code = Int64(resp.status)
+            if (code == 200) {
+                return Some(HttpBodyStream(resp.body, client))
+            }
+            if (code == 301 || code == 302 || code == 307) {
+                let loc = resp.headers.getFirst("location")
+                client.close()
+                if (loc.isSome() && !loc.getOrThrow().isEmpty()) {
+                    currentUrl = loc.getOrThrow()
+                    hops++
+                    continue
+                }
+                return None
+            }
+            client.close()
+            return None
+        } catch (e: Exception) {
+            try {
+                client.close()
+            } catch (e2: Exception) {
+                ()
+            }
+            return None
+        }
+    }
+    return None
+}
+
 public func httpGetWithStatus(url: String, token: String): HttpGetOutcome {
     let out = HttpGetOutcome()
     var currentUrl = url

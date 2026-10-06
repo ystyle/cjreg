@@ -23,39 +23,51 @@
 | 声音 | 用脚本录旁白（推荐先录音再配画面），或录屏时对着 §3 台词念 |
 | 备用 | 提前跑一遍全流程，把耗时操作（`cjpm publish`、docker 构建）的输出留好，必要时用剪辑拼接 |
 
-## 2. 演示环境准备（一条命令）
+## 2. 演示环境准备
+
+**路径 A｜生产主站实景（录制用，推荐）** —— 主站就是团队日常在用的私有仓（真实包、真实审计，最有说服力），
+另有一台**演示专用空站**（`~/docker/cjreg-demo`，宿主 8067）当上游与发布计划推送目标：
 
 ```bash
-# 宿主机准备：仓颉 1.1.3 + stdx（cjvs 管理）、Docker
-eval "$(cjvs env zsh)" && eval "$(cjvs stdx-env zsh)"
+# 两站都已常驻：生产 ~/docker/cjreg（8066）、演示上游 ~/docker/cjreg-demo（8067）
+# 首次准备凭据（不进 git；生产 admin 口令不写进仓库）：
+printf "CJREG_LIVE_ADMIN_PASS='<生产 admin 口令>'\n" > ~/.cjreg-live.env && chmod 600 ~/.cjreg-live.env
 
-# 1) 构建（约 1 分钟）
-cjpm build -j 16
-
-# 2) 一键造演示数据：起 A 仓（team 模式，:18080）与 B 仓（:18081），
-#    建用户 alice/bob、组织 demo、发布 demo::mathUtils|strUtils|encryptUtils，
-#    把 B 注册为上游并把包推过去，最后造一批审计记录
-CJREG_DEMO_PORT=18080 CJREG_DEMO_RESET=1 bash scripts/demo-data.sh
+bash scripts/demo-live.sh status          # 只读盘点：两站健康 / demo::* 包 / 上游注册情况
+bash scripts/demo-live.sh prepare         # 幂等造数：建 alice+bob、准备演示包目录、注册上游 demo-upstream
+bash scripts/demo-live.sh reset-upstream  # 每轮录制前把演示上游站清空重建（空站才有「推送」的对比）
+# bash scripts/demo-live.sh clean         # 录完从生产移除演示痕迹（上游 + demo::* 包）
 ```
-
-脚本产出（结束时终端会打印同样的清单）：
 
 | 对象 | 地址 / 账号 |
 |---|---|
-| A 仓（演示主仓，team 模式） | `http://127.0.0.1:18080` |
-| 管理后台 | `http://127.0.0.1:18080/admin` — `admin` / `AdminPass1` |
-| 用户门户 | `http://127.0.0.1:18080/user/login` — `alice` / `AlicePass1`、`bob` / `BobPass1` |
-| B 仓（镜像/目标仓） | `http://127.0.0.1:18081` — `admin` / `AdminPass1` |
-| 演示包源码 | `.demo/pkgs/{mathUtils,strUtils,encryptUtils}`（组织已改成 `demo`） |
+| 主站（生产，真实数据） | `http://127.0.0.1:8066` |
+| 管理后台 | `http://127.0.0.1:8066/admin` — `admin` / 生产口令 |
+| 用户门户 | `http://127.0.0.1:8066/user/login` — `alice` / `AlicePass1`、`bob` / `BobPass1` |
+| 演示上游站（空站，可重建） | `http://127.0.0.1:8067` — `admin` / `DemoPass1` |
+| 演示包源码 | `.demo/live-pkgs/{mathUtils,strUtils,encryptUtils}`（组织已改成 `demo`） |
+| 上游 | 主站已注册 `demo-upstream` → `http://127.0.0.1:8067`（priority 50，低于 official 的 0，不影响真实回源） |
 
-停止：`bash scripts/demo-data.sh stop`。
+> `demo-live.sh` 只做幂等造数，**没有任何清空主站的路径**；重建只作用于演示专用空站。
 
-> **Docker 版演示**（若想用容器录部署段）：`ADMIN_PASS='<口令>' bash scripts/docker-deploy.sh`，
-> 然后在容器里 `cjreg init` 的那份数据上重复上面的建用户/组织/发布步骤（脚本里的 curl 段可直接复用，换端口即可）。
+**路径 B｜本地双仓全功能演示（开发自测 / 评审复现）** —— 一键起 A/B 两个本机仓（可 RESET）：
+
+```bash
+eval "$(cjvs env zsh)" && eval "$(cjvs stdx-env zsh)"
+cjpm build -j 16
+CJREG_DEMO_PORT=18080 CJREG_DEMO_RESET=1 bash scripts/demo-data.sh
+```
+
+产出：A 仓 `http://127.0.0.1:18080`（team 模式，`admin`/`AdminPass1`，用户 `alice`/`AlicePass1`、`bob`/`BobPass1`）、
+B 仓 `http://127.0.0.1:18081`；包源码在 `.demo/pkgs/`；停止 `bash scripts/demo-data.sh stop`。
+§6 给评审的复现命令走这条。
+
+> **Docker 部署段**（镜头 2）：`ADMIN_PASS='<口令>' bash scripts/docker-deploy.sh` 起的是**独立实例**
+> （容器 `cjreg-dev`、宿主 8060），与生产容器（`cjreg`、8066）不冲突，可放心录。
 
 ## 3. 分镜与解说词
 
-> 下面的命令与页面地址按 §2 的端口写（A 仓 `18080`、B 仓 `18081`）；若录 Docker 段，端口换成 `8060` 即可。
+> 下面的命令与页面地址按 §2 路径 A 写（主站 `8066`、演示上游站 `8067`）；走本地双仓演示时换成 `18080` / `18081`。
 > 每个镜头都给了可直接照做的命令，旁白可以后期配音，也可以边说边操作。
 
 ### 镜头 1｜片头 0:00–0:18
@@ -69,10 +81,13 @@ CJREG_DEMO_PORT=18080 CJREG_DEMO_RESET=1 bash scripts/demo-data.sh
 
 - **操作**：终端执行
   ```bash
+  # 生产实例已常驻（本次演示主站）：
+  docker ps --filter name=cjreg --format '{{.Names}}\t{{.Status}}\t{{.Ports}}'
+  curl -s http://127.0.0.1:8066/api/health
+  # 若要补「从零部署」的画面，另起独立实例录（容器 cjreg-dev / 8060，不碰生产）：
   ADMIN_PASS='Demo-Pass-2026' bash scripts/docker-deploy.sh
   ```
-  （或者切到本机二进制：`./target/release/bin/ystyle::cjreg serve -d .demo/data-a`）
-- **画面重点**：脚本五步输出（编译 → 构建镜像 → 首次 init → 启动 → 健康检查），最后一行 `✓ http://127.0.0.1:8060/api/health`；再补一个 `curl -s .../api/health` 与 `docker ps` 的镜头
+- **画面重点**：`docker ps` 里生产容器 `cjreg`（healthy、`0.0.0.0:8066->8060`）+ 健康检查 JSON；补录部署时脚本五步输出（编译 → 构建镜像 → 首次 init → 启动 → 健康检查），最后一行 `✓ http://127.0.0.1:8060/api/health`
 - **解说**：
   > 「部署只有一条命令：宿主机编译出二进制，镜像只做打包，容器以非 root 运行、数据目录挂卷持久化。
   > 首次启动会自动建管理员、注册官方上游、生成配置文件。健康检查通过即可用。」
@@ -80,9 +95,9 @@ CJREG_DEMO_PORT=18080 CJREG_DEMO_RESET=1 bash scripts/demo-data.sh
 ### 镜头 3｜发布一个包 0:55–1:45
 
 - **操作**：
-  1. 浏览器打开 `http://127.0.0.1:8060/`（门户首页）与 `http://127.0.0.1:8060/docs`（内置帮助）各停留 3 秒；
-  2. 终端展示客户端配置（`cat .demo/pkgs/mathUtils/cangjie-repo.toml`）；
-  3. 终端执行 `cd .demo/pkgs/mathUtils && cjpm publish`，停在 `cjpm publish success`；
+  1. 浏览器打开 `http://127.0.0.1:8066/`（门户首页）与 `http://127.0.0.1:8066/docs`（内置帮助）各停留 3 秒；
+  2. 终端展示客户端配置（`cat .demo/live-pkgs/mathUtils/cangjie-repo.toml`）；
+  3. 终端执行 `cd .demo/live-pkgs/mathUtils && cjpm publish`，停在 `cjpm publish success`；
   4. 切到管理后台 **仪表盘**（包数/版本数/下载数变化）与 **包管理**（新增 `demo::mathUtils@1.0.0`）。
 - **解说**：
   > 「客户端只需要在 `cangjie-repo.toml` 里填上私有仓地址和发布 Token，
@@ -92,20 +107,20 @@ CJREG_DEMO_PORT=18080 CJREG_DEMO_RESET=1 bash scripts/demo-data.sh
 ### 镜头 4｜多仓与代理 1:45–2:35
 
 - **操作**：
-  1. 管理后台 **上游管理**：展示 `official`（官方仓）与 `mirrorB`（演示用第二私有仓），点 **连通性测试**；
+  1. 管理后台 **上游管理**：展示 `official`（官方仓）与 `demo-upstream`（演示用空站），点 **连通性测试**；
   2. 终端执行解析诊断：
      ```bash
-     curl -s "http://127.0.0.1:8060/api/admin/resolve?name=mathUtils&organization=demo&require=>=1.0.0" \
+     curl -s "http://127.0.0.1:8066/api/admin/resolve?name=mathUtils&organization=demo&require=>=1.0.0" \
        -H "Authorization: Bearer $TOKEN" | python3 -m json.tool | head -30
      ```
-  3. 终端执行发布计划推送（也可在 UI 的「发布计划」页做）：
+  3. 终端执行发布计划推送（也可在 UI 的「发布计划」页做；目标地址与 Token 见 `demo-live.sh prepare` 的输出）：
      ```bash
-     curl -s -X POST http://127.0.0.1:8060/api/admin/publish-plans/execute \
+     curl -s -X POST http://127.0.0.1:8066/api/admin/publish-plans/execute \
        -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
        -d '{"packages":[{"organization":"demo","name":"encryptUtils","version":"1.0.0"}],
-            "target_url":"http://127.0.0.1:8061","target_token":"<B 仓发布 Token>"}'
+            "target_url":"http://127.0.0.1:8067","target_token":"<演示上游站发布 Token>"}'
      ```
-  4. 打开 B 仓 `http://127.0.0.1:8061/api/packages?size=50`，展示包已到位（含依赖）。
+  4. 打开演示上游站 `http://127.0.0.1:8067/api/packages?size=50`，展示包已到位（含依赖）。
 - **解说**：
   > 「多仓是本项目的重点：上游按优先级依次回源，索引与制品都会缓存到本地；
   > `resolve` 端点把候选版本、SHA 冲突和裁决过程全部摊开，便于排障。
@@ -120,7 +135,7 @@ CJREG_DEMO_PORT=18080 CJREG_DEMO_RESET=1 bash scripts/demo-data.sh
      ```bash
      # bob 的发布 Token 在门户 /me 领取（或用 POST /api/user/me/publish-token 重置）
      # 注意：必须发一个「新版本」（如 1.0.1）——同版本同 sha 是幂等的，不会触发权限检查
-     cp -r .demo/pkgs/strUtils /tmp/bob-pkg && cd /tmp/bob-pkg
+     cp -r .demo/live-pkgs/strUtils /tmp/bob-pkg && cd /tmp/bob-pkg
      sed -i 's/version = "1.0.0"/version = "1.0.1"/' cjpm.toml
      sed -i "s/^    token = .*/    token = \"<bob 的发布 Token>\"/" cangjie-repo.toml
      cjpm publish
@@ -136,7 +151,7 @@ CJREG_DEMO_PORT=18080 CJREG_DEMO_RESET=1 bash scripts/demo-data.sh
 
 ### 镜头 6｜用户门户 3:15–3:45
 
-- **操作**：`http://127.0.0.1:8060/user/login` 用 `alice` 登录 → `/me` 页面自上而下滚动：发布 Token（只显示自己的）、我的包（含 owner 标记）、我的团队与权限、`cangjie-repo.toml` 示例。
+- **操作**：`http://127.0.0.1:8066/user/login` 用 `alice` 登录 → `/me` 页面自上而下滚动：发布 Token（只显示自己的）、我的包（含 owner 标记）、我的团队与权限、`cangjie-repo.toml` 示例。
 - **解说**：
   > 「普通用户有独立门户：领取/重置自己的发布 Token、查看自己发布过的包和所属团队权限，
   > 页面里的示例配置直接读服务端配置，复制即用——不需要管理员代为配置。」
@@ -147,8 +162,8 @@ CJREG_DEMO_PORT=18080 CJREG_DEMO_RESET=1 bash scripts/demo-data.sh
   1. 管理后台 **审计日志**：类型切「发布」看成功记录（含 IP/UA），再切「认证」看一次失败登录，演示关键字筛选与「清理日志」弹窗（可取消）；
   2. 终端：
      ```bash
-     curl -s http://127.0.0.1:8060/api/stats | python3 -m json.tool
-     curl -s "http://127.0.0.1:8060/api/packages?q=demo::&size=5" | python3 -m json.tool | head -25
+     curl -s http://127.0.0.1:8066/api/stats | python3 -m json.tool
+     curl -s "http://127.0.0.1:8066/api/packages?q=demo::&size=5" | python3 -m json.tool | head -25
      ```
 - **解说**：
   > 「所有发布、认证和管理操作都落审计：操作者、对象、结果、IP 和 User-Agent，支持按类型、结果、关键字和时间过滤，也能按范围清理。
@@ -159,7 +174,7 @@ CJREG_DEMO_PORT=18080 CJREG_DEMO_RESET=1 bash scripts/demo-data.sh
 - **操作**：在 **包管理 → 版本** 弹窗里对 `demo::strUtils@1.0.0`：
   1. 点「软删除」→ 终端 `curl -o /dev/null -w '%{http_code}' .../pkg/strUtils/1.0.0?organization=demo` 返回 **404**；
   2. 点「恢复」→ 同一条命令返回 **200**；
-  3. 再「软删除」→「硬删除」→ 终端 `ls data-a/blobs | grep <sha>` 已无该制品。
+  3. 再「软删除」→「硬删除」→ 终端 `ls ~/docker/cjreg/data/blobs | grep <sha>` 已无该制品。
 - **解说**：
   > 「删除分三级：软删除只标记，索引和下载立刻不可见但制品保留，可随时恢复——恢复时还会校验制品是否还在；
   > 硬删除需要先软删，会同时删掉制品文件，并写进审计。这样既防误删，也能真正释放空间。」
@@ -167,10 +182,10 @@ CJREG_DEMO_PORT=18080 CJREG_DEMO_RESET=1 bash scripts/demo-data.sh
 ### 镜头 9｜收尾 4:40–5:00
 
 - **画面**：GitHub Release 页（`v0.1.0` 的三个产物）+ ghcr 镜像页 + 文档站 `https://ystyle.top/cjreg/`，最后一屏文字卡：
-  `静态单二进制 · Docker/Compose · 179 项单测 · 9 步端到端验证 · MIT`
+  `静态单二进制 · Docker/Compose · 349 项单测 · 9 步端到端验证 · MIT`
 - **解说**：
   > 「项目以 tag 驱动发版：推一个 tag 就产出二进制、GitHub Release 和容器镜像；
-  > 仓库带 179 项单元测试和 9 步双仓端到端脚本，文档站有完整指南与 API 说明。谢谢观看。」
+  > 仓库带 349 项单元测试和 9 步双仓端到端脚本，文档站有完整指南与 API 说明。谢谢观看。」
 
 ## 4. 可裁剪 / 可加长的段落
 
@@ -184,7 +199,8 @@ CJREG_DEMO_PORT=18080 CJREG_DEMO_RESET=1 bash scripts/demo-data.sh
 
 - [ ] 时长 4:30–5:00，分辨率 1080p，音量一致（无爆音/底噪）
 - [ ] 中文字幕与解说同步；专有名词统一：**中心仓**、**团队**、**审计日志**、**发布计划**、**三级删除**
-- [ ] 无敏感信息（真实 Token、口令、内网地址、其他项目）
+- [ ] 敏感信息：本次演示**有意直接使用真实生产站**（真实口令 / 发布 Token / 内网地址会出镜）——
+      按既定策略执行；若临时改主意，用 §2 路径 B 的本地双仓录制，并清掉画面里的真实地址与口令
 - [ ] 视频文件命名：`cjreg-演示视频-v0.1.0.mp4`；同时导出 封面图 `cover.png`
 - [ ] 配合统一作品提交模板 PDF：把本脚本 §2 的复现命令、§3 的时间轴、`docs/verification.md` 的实测数据一并附上（技术课题要求「实验过程 / 验证方法 / 数据或结果 / 复现说明」）
 
@@ -195,9 +211,12 @@ CJREG_DEMO_PORT=18080 CJREG_DEMO_RESET=1 bash scripts/demo-data.sh
 git clone https://atomgit.com/ystyle/cjreg && cd cjreg
 eval "$(cjvs env zsh)" && eval "$(cjvs stdx-env zsh)"
 
-cjpm test -j 16 --no-progress          # 179 项单元测试
+cjpm test -j 16 --no-progress          # 349 项单元测试
 bash tests/e2e.sh                      # 9 步双仓端到端（含审计、公开 API、三级删除、组织 CRUD）
-CJREG_DEMO_PORT=18080 CJREG_DEMO_RESET=1 bash scripts/demo-data.sh   # 本视频的演示环境
+CJREG_DEMO_PORT=18080 CJREG_DEMO_RESET=1 bash scripts/demo-data.sh   # 本地双仓演示环境（评审复现走这条）
+
+# 说明：本视频「路径 A」用的是录制者自己的生产实例（~/docker/cjreg，含真实数据），
+# 它不可被复现也不应被复现；复现请用上面这条本地双仓命令，分镜端口 8066/8067 对应换成 18080/18081。
 
 # 或直接用发布镜像
 docker pull ghcr.io/ystyle/cjreg:v0.1.0

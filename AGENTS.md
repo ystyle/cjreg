@@ -70,6 +70,22 @@ cd ~/docker/cjreg && docker compose build && docker compose up -d
 **发布权限模式**：生产实例用 `permission_mode = "team"`（`effectivePermission` 里平台管理员直通 overwrite=3），
 所以**同一版本可以反复发**——这是预演发布必需的；`open` 模式对同版本不同 sha 会返 409 且不覆盖。
 
+## 演示环境（录屏 / 线下演示）
+
+两条路径，脚本分工明确（分镜与解说词见 `docs/demo-video.md` §2）：
+
+- **生产主站实景（推荐）**：主站 = 生产实例 `~/docker/cjreg`（宿主 8066，真实包与审计），
+  上游 / 发布计划推送目标 = **演示专用空站** `~/docker/cjreg-demo`（宿主 8067，compose 与生产同构、可整体重建）。
+  脚本：`bash scripts/demo-live.sh {status|prepare|reset-upstream|clean}` ——
+  `prepare` 只做幂等造数（演示用户 alice/bob、`.demo/live-pkgs/` 演示包目录、注册上游 `demo-upstream`），
+  **没有任何清空主站的路径**；`reset-upstream` 才重建空站；`clean` 从生产移除演示痕迹（上游 + `demo::*` 包）。
+  生产管理员口令走 `CJREG_LIVE_ADMIN_PASS` 或 `~/.cjreg-live.env`（chmod 600）——**本仓是公开仓，口令不许进仓**。
+- **本地双仓全功能（评审复现）**：`CJREG_DEMO_PORT=18080 CJREG_DEMO_RESET=1 bash scripts/demo-data.sh`，
+  起 A/B 两个本机进程（可 RESET），停止 `bash scripts/demo-data.sh stop`。
+
+演示上游站与生产共用同一镜像 `cjreg:latest` 与同一 `Dockerfile`（`build:` 指源码仓），
+生产镜像更新后它 `docker compose build && up -d` 即可跟上。
+
 ## 展示元数据与 README（制品提取）
 
 **为什么服务端要解压制品**：官方发布协议是「meta-data.json 段 + .cjp 段」，README **不在** meta 里；

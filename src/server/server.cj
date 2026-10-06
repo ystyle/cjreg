@@ -280,6 +280,8 @@ public func buildServer(
             app.get("/api/admin/resolve", { ctx => adm.resolvePackage(ctx) })
             app.post("/api/admin/publish-plans/analyze", { ctx => adm.analyzePlan(ctx) })
             app.post("/api/admin/publish-plans/execute", { ctx => adm.executePlan(ctx) })
+            // 进度流（SSE）：每次连接推一份状态快照，终态附 done；管理页轮询作为兜底
+            app.get("/api/admin/publish-plans/:id/events", { ctx => adm.planEvents(ctx) })
             app.get("/api/admin/logs/:kind", { ctx => adm.queryLogs(ctx) })
             app.post("/api/admin/logs/clean", { ctx => adm.cleanLogs(ctx) })
         case None => ()

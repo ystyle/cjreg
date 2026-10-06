@@ -1360,8 +1360,8 @@ public class PublishExecutor {
                     case Some(probe) =>
                         it.status = PlanItemStatus.WaitingIndex
                         onItem(it, true, "等待目标仓索引就绪")
-                        waitCode = waitIndexReady(probe, doc.organization, doc.name, doc.version,
-                            pollTimeoutSec, shouldCancel: shouldCancel,
+                        waitCode = waitIndexReady(probe, doc.organization, doc.name, doc.version, pollTimeoutSec,
+                            sha: doc.sha256, shouldCancel: shouldCancel,
                             ladder: indexWaitLadder, steadySec: indexWaitSteadySec,
                             onWaiting: { waited, step, res =>
                                 lastProbe.value = res
@@ -1504,8 +1504,10 @@ public class PublishExecutor {
         }
         let probe = indexProbe.getOrThrow()
         let targets = ArrayList<(String, String, String)>()
+        let targetShas = ArrayList<String>()
         for (it in deferred) {
             targets.add((it.org, it.name, it.version))
+            targetShas.add(it.localSha256)
         }
         let lastProbe = Box<IndexProbe>(IndexProbe(404, ""))
         let (ready, code) = waitIndexesReady(probe, targets, pollTimeoutSec,
@@ -1518,7 +1520,7 @@ public class PublishExecutor {
                     onItem(it, true, text)
                 }
             },
-            ladder: ladder, steadySec: steadySec)
+            ladder: ladder, steadySec: steadySec, shas: targetShas)
         if (code == WAIT_CANCELLED) {
             // 与"等单项索引时被停止"同一语义：内容已推出去，记「等索引」，续跑接着确认
             report.aborted = true
@@ -1612,14 +1614,17 @@ func isRetryable(code: Int64): Bool {
 // 返回 WAIT_READY / WAIT_TIMEOUT / WAIT_CANCELLED / WAIT_FATAL。
 func waitIndexReady(probe: (String, String) -> IndexProbe, org: String, name: String, version: String,
                     pollTimeoutSec: Int64,
+                    sha!: String = "",
                     shouldCancel!: () -> Bool = { => false },
                     onWaiting!: (Int64, Int64, IndexProbe) -> Unit = { _, _, _ => () },
                     ladder!: Array<Int64> = IndexWaitLadder,
                     steadySec!: Int64 = IndexWaitSteadySec): Int64 {
     let one = ArrayList<(String, String, String)>()
     one.add((org, name, version))
+    let shas = ArrayList<String>()
+    shas.add(sha)
     let (_, code) = waitIndexesReady(probe, one, pollTimeoutSec, shouldCancel: shouldCancel,
-        onWaiting: onWaiting, ladder: ladder, steadySec: steadySec)
+        onWaiting: onWaiting, ladder: ladder, steadySec: steadySec, shas: shas)
     return code
 }
 
@@ -1634,7 +1639,9 @@ func waitIndexesReady(probe: (String, String) -> IndexProbe,
                       shouldCancel!: () -> Bool = { => false },
                       onWaiting!: (Int64, Int64, IndexProbe) -> Unit = { _, _, _ => () },
                       ladder!: Array<Int64> = IndexWaitLadder,
-                      steadySec!: Int64 = IndexWaitSteadySec): (ArrayList<Bool>, Int64) {
+                      steadySec!: Int64 = IndexWaitSteadySec,
+                      // 与 targets 下标对应的期望 sha256（空串 = 退化为「版本存在」）
+                      shas!: ArrayList<String> = ArrayList<String>()): (ArrayList<Bool>, Int64) {
     let ready = ArrayList<Bool>()
     for (_ in targets) {
         ready.add(false)
@@ -1642,6 +1649,8 @@ func waitIndexesReady(probe: (String, String) -> IndexProbe,
     var pending = targets.size
     var waited: Int64 = 0
     var round: Int64 = 0
+    let t0 = nowMsUtc()  // 用**实际经过时间**计时：等待节奏里 step 可能为 0（紧凑/测试节奏），
+    // 靠 `waited += step` 累加会让总超时永远不触发（忙等不退出）—— 这是实测踩到的缺陷。
     while (pending > 0) {
         if (shouldCancel()) {
             return (ready, WAIT_CANCELLED)
@@ -1650,8 +1659,10 @@ func waitIndexesReady(probe: (String, String) -> IndexProbe,
         round++
         if (step > 0) {
             sleep(Duration.second * step)
-            waited += step
+        } else {
+            sleep(Duration.millisecond)  // step=0：至少让出一次，避免忙等打满 CPU
         }
+        waited = (nowMsUtc() - t0) / 1000
         var last = IndexProbe(404, "")
         var fatal = false
         for (i in 0..targets.size) {
@@ -1662,7 +1673,8 @@ func waitIndexesReady(probe: (String, String) -> IndexProbe,
             let res = probe(org, name)
             last = res
             if (res.ok()) {
-                if (indexHasVersion(res.body, name, version)) {
+                let expectedSha = if (i < shas.size) { shas[i] } else { "" }
+                if (indexHasVersionWithSha(res.body, name, version, expectedSha)) {
                     ready[i] = true
                     pending--
                 }
@@ -1717,6 +1729,21 @@ public func indexHasVersion(indexJson: String, name: String, version: String): B
     for (e in parseNDJSON(indexJson)) {
         if (e.name == name && e.version == version) {
             return true
+        }
+    }
+    false
+}
+
+// 「版本已就绪」的完整判据：索引里出现该版本 **且 sha256 与本地制品一致**。
+// 只看版本号会误判 —— 目标仓可能先收录过同版本的别的产物（历史重发、上游换过内容），
+// 那种情况下推送虽然成功，目标仓对外给的仍是旧内容。
+// 兼容：期望 sha 为空、或索引条目没带 sha 时，退化为「版本存在」。
+public func indexHasVersionWithSha(indexJson: String, name: String, version: String, sha: String): Bool {
+    for (e in parseNDJSON(indexJson)) {
+        if (e.name == name && e.version == version) {
+            if (sha.isEmpty() || e.sha256sum.isEmpty() || e.sha256sum == sha) {
+                return true
+            }
         }
     }
     false

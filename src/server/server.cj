@@ -188,15 +188,16 @@ public func buildServer(
         downloadSvc.find(org, name, version)
         match (proxySvc) {
             case Some(proxy) =>
-                let (outcome, blob, sha) = proxy.fetchArtifact(org, name, version)
-                match (blob) {
-                    case Some(bytes) =>
-                        // 制品到手 → 顺手补齐该版本的展示字段/README
-                        // （回源聚合的包只有索引字段，展示信息只存在于制品内部，见 artifact_enrich.cj）
-                        let _ = enrichDocByVersion(store, org, name, version, bytes)
+                // 流式下载：制品直接以流接入响应，不再整包读进内存。
+                // 代价是这里不再做"顺路补齐展示字段/README"——那需要把制品整个读进内存，
+                // 与流式互斥。已补齐的文档不受影响；未补齐的回源包保持现状（补齐失败本就不影响下载，
+                // 需要补的时候走 admin sync-metadata 或再次触发回源聚合）。
+                let (outcome, stream, sha) = proxy.fetchArtifactStream(org, name, version)
+                match (stream) {
+                    case Some(st) =>
                         ctx.attachment("${name}-${version}.cjp")
                             .set("Content-Type", "application/x-gzip")
-                        ctx.write(bytes)
+                        ctx.responseBuilder.body(st)
                     case None =>
                         ctx.status(404u16).writeStringWithCode(404u16, "{\"error\":\"not found\"}")
                 }

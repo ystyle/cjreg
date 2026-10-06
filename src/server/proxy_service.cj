@@ -57,6 +57,37 @@ public interface BlobStore {
     // 否则 rename 进位 —— 先落临时文件再 rename，读者不会看到半成品。
     // 供**流式发布**使用：制品不再整包驻留内存。
     func claimFile(sha256: String, tmpPath: String): Unit
+    // 流式读取制品：下载路径用它把字节直接接到 HTTP 响应，**不整包驻留内存**。
+    // 返回 None 表示制品不存在。
+    func stream(sha256: String): ?InputStream
+}
+
+// 把内存中的制品包装成 InputStream（内存 blob 模式用；磁盘模式直接返回 File 流）
+class BytesStream <: InputStream {
+    let data: Array<Byte>
+    var pos: Int64 = 0
+
+    init(data: Array<Byte>) {
+        this.data = data
+    }
+
+    public func read(buffer: Array<Byte>): Int64 {
+        if (this.pos >= this.data.size) {
+            return 0
+        }
+        var n = buffer.size
+        let remain = this.data.size - this.pos
+        if (n > remain) {
+            n = remain
+        }
+        var i: Int64 = 0
+        while (i < n) {
+            buffer[i] = this.data[this.pos + i]
+            i++
+        }
+        this.pos += n
+        return n
+    }
 }
 
 public class MemoryBlobStore <: BlobStore {
@@ -68,6 +99,13 @@ public class MemoryBlobStore <: BlobStore {
 
     public func put(sha256: String, data: Array<Byte>): Unit {
         this.blobs.add(sha256, data)
+    }
+
+    public func stream(sha256: String): ?InputStream {
+        match (this.blobs.get(sha256)) {
+            case Some(d) => Some(BytesStream(d))
+            case None => None
+        }
     }
 
     public func claimFile(sha256: String, tmpPath: String): Unit {
@@ -167,6 +205,43 @@ public class ProxyService {
 
     // 取制品：本地 blob 有 → 返回；否则回源
     // 纯取字节（展示字段补齐由调用方决定：下载路由 / admin sync-metadata 各做一次，避免重复解压）
+    // 流式版：返回值里不再携带整包字节。本地命中直接给出 blob 流；
+    // 回源路径仍需先把制品落成 blob（回源客户端本身是整体读取，见 fetchBytes），
+    // 但**不再把字节交给调用方**，响应侧只拿流。
+    public func fetchArtifactStream(org: String, name: String, version: String): (ProxyOutcome, ?InputStream, String) {
+        let versions = this.pkgStore.listVersions(org, name)
+        for (d in versions) {
+            if (d.version == version && d.deletedAt == 0) {
+                var sha = d.sha256
+                if (sha.isEmpty()) {
+                    sha = extractSha256(d.indexJson)
+                }
+                if (!sha.isEmpty()) {
+                    match (this.blobStore.stream(sha)) {
+                        case Some(st) => return (ProxyOutcome.HitLocal, Some(st), sha)
+                        case None => ()
+                    }
+                }
+            }
+        }
+        let ups = this.upstreamSvc.proxySorted()
+        for (up in ups) {
+            let url = buildPackageURL(up.url, name, version, org)
+            let body = this.fetchBytes(url, up.authToken)
+            if (body.isNone()) {
+                continue
+            }
+            let bytes = body.getOrThrow()
+            let sha = sha256Hex(bytes)
+            this.blobStore.put(sha, bytes)
+            match (this.blobStore.stream(sha)) {
+                case Some(st) => return (ProxyOutcome.FetchedFromUpstream, Some(st), sha)
+                case None => return (ProxyOutcome.FetchedFromUpstream, None, sha)
+            }
+        }
+        return (ProxyOutcome.NotFound, None, "")
+    }
+
     public func fetchArtifact(org: String, name: String, version: String): (ProxyOutcome, ?Array<Byte>, String) {
         // 本地 blob 查询（通过本地包的 sha）
         let versions = this.pkgStore.listVersions(org, name)
@@ -514,6 +589,19 @@ public class DiskBlobStore <: BlobStore {
             f.close()
         } catch (e: Exception) {
             println("[blob] put failed ${sha256}: ${e.message}")
+        }
+    }
+
+    public func stream(sha256: String): ?InputStream {
+        let path = dir + "/" + sha256
+        if (!exists(path)) {
+            return None
+        }
+        try {
+            return Some(File(path, Read))
+        } catch (e: Exception) {
+            println("[cjreg] 制品流式打开失败 " + path + ": " + e.toString())
+            return None
         }
     }
 

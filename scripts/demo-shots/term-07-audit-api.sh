@@ -12,7 +12,9 @@ printf '  $ curl -s "%s/api/packages?q=demo::&size=5"\n' "$MAIN"
 curl -s "$MAIN/api/packages?q=demo::&size=5" | python3 -m json.tool | head -20
 sleep 2
 say "管理审计日志（按类型过滤，含 IP / User-Agent）"
-TOKEN=$(curl -s -X POST "$MAIN/api/admin/login" -H 'Content-Type: application/json' -d '{"username":"admin","password":"__REDACTED__"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+ADMIN_PASS="${CJREG_LIVE_ADMIN_PASS:-}"
+[ -n "$ADMIN_PASS" ] || { echo "缺少 CJREG_LIVE_ADMIN_PASS（生产管理员口令，不入仓）" >&2; exit 1; }
+TOKEN=$(curl -s -X POST "$MAIN/api/admin/login" -H 'Content-Type: application/json' -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}" | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
 curl -s "$MAIN/api/admin/logs/admin?kind=admin&page=1&pageSize=4" -H "Authorization: Bearer $TOKEN" | python3 -c "
 import sys,json,datetime
 d=json.load(sys.stdin)

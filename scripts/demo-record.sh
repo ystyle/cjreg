@@ -37,6 +37,16 @@ say()  { printf '\033[36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m[!]\033[0m %s\n' "$*"; }
 die()  { printf '\033[31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 
+# 生产管理员口令：优先环境变量，其次 ~/.cjreg-live.env（chmod 600）——**绝不写进本仓**
+admin_pass() {
+  if [ -n "${CJREG_LIVE_ADMIN_PASS:-}" ]; then printf '%s' "$CJREG_LIVE_ADMIN_PASS"; return; fi
+  if [ -f "$HOME/.cjreg-live.env" ]; then
+    ( set -a; . "$HOME/.cjreg-live.env" >/dev/null 2>&1; set +a; printf '%s' "${CJREG_LIVE_ADMIN_PASS:-}" )
+    return
+  fi
+  printf ''
+}
+
 login_token() {  # login_token <user> <pass>
   curl -s -m 8 -X POST "$MAIN/api/admin/login" -H 'Content-Type: application/json' \
     -d "{\"username\":\"$1\",\"password\":\"$2\"}" \
@@ -63,7 +73,7 @@ shot_web() {  # <kind: web|web-admin|web-user> <shot> <path> [secs] [user] [pass
   local kind="$1" shot="$2" path="$3" secs="${4:-8}" user="${5:-}" pass="${6:-}"
   local frames="$REC/frames-$shot" out="$REC/web-$shot.mp4" url port="${CJREG_REC_CDP_PORT:-9222}"
   case "$kind" in
-    web-admin) url="$MAIN/admin$path"; user="${user:-admin}"; pass="${pass:-__REDACTED__}" ;;
+    web-admin) url="$MAIN/admin$path"; user="${user:-admin}"; pass="${pass:-$(admin_pass)}" ;;
     web-user)  url="$MAIN$path" ;;
     *)         url="$MAIN$path" ;;
   esac
@@ -136,8 +146,9 @@ shot_web_ops() {  # <shot> <path> [secs]
   case "$path" in http://*|https://*) url="$path" ;; *) url="$MAIN/admin$path" ;; esac
   [ -f "$ops" ] || die "缺少操作脚本：$ops"
   ensure_chrome
+  [ -n "$(admin_pass)" ] || die "缺少生产管理员口令：设 CJREG_LIVE_ADMIN_PASS 或写 ~/.cjreg-live.env"
   say "web 轨（界面操作）$shot → $url"
-  local tok; tok=$(login_token admin "${CJREG_LIVE_ADMIN_PASS:-__REDACTED__}")
+  local tok; tok=$(login_token admin "$(admin_pass)")
   agent-browser --cdp "$port" open "$MAIN/admin/login" >/dev/null 2>&1
   agent-browser --cdp "$port" eval "localStorage.setItem('cjxt_token','$tok')" >/dev/null 2>&1
   agent-browser --cdp "$port" open "$url" >/dev/null 2>&1
@@ -166,7 +177,7 @@ shot_web_ops() {  # <shot> <path> [secs]
 cmd_prepare() {
   say "演示环境：清空演示上游站 + 幂等造数"
   bash "$ROOT/scripts/demo-live.sh" reset-upstream
-  CJREG_LIVE_ADMIN_PASS="${CJREG_LIVE_ADMIN_PASS:-__REDACTED__}" bash "$ROOT/scripts/demo-live.sh" prepare | tail -20
+  CJREG_LIVE_ADMIN_PASS="$(admin_pass)" bash "$ROOT/scripts/demo-live.sh" prepare | tail -20
 }
 
 cmd_convert() {

@@ -3,7 +3,9 @@
 set -u
 say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 MAIN=http://127.0.0.1:8066
-TOKEN=$(curl -s -X POST "$MAIN/api/admin/login" -H 'Content-Type: application/json' -d '{"username":"admin","password":"__REDACTED__"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+ADMIN_PASS="${CJREG_LIVE_ADMIN_PASS:-}"
+[ -n "$ADMIN_PASS" ] || { echo "缺少 CJREG_LIVE_ADMIN_PASS（生产管理员口令，不入仓）" >&2; exit 1; }
+TOKEN=$(curl -s -X POST "$MAIN/api/admin/login" -H 'Content-Type: application/json' -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}" | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
 ID=$(curl -s "$MAIN/api/admin/packages?organization=demo&name=strUtils&status=all&pageSize=1" -H "Authorization: Bearer $TOKEN" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['items'][0]['id'] if d['total'] else 0)")
 say "目标版本 id=$ID（demo::strUtils@1.0.0）"
 sleep 1

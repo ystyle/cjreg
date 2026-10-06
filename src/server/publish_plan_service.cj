@@ -1179,7 +1179,11 @@ public class PublishExecutor {
                         // 等待节奏可注入：单测用秒级阶梯，生产用 IndexWaitLadder
                         indexWaitLadder!: Array<Int64> = IndexWaitLadder,
                         indexWaitSteadySec!: Int64 = IndexWaitSteadySec,
-                        shouldCancel!: () -> Bool = { => false }): ExecuteReport {
+                        shouldCancel!: () -> Bool = { => false },
+                        // 「该项是否已被手动跳过」：由调用方按 pkgId 查（存储里的 item 状态）。
+                        // 之所以注入而不是在 execute 里查存储：执行器不持有管理存储，
+                        // 且计划详情页在执行**过程中**标记跳过时，这一路径能即时生效。
+                        shouldSkip!: (Int64) -> Bool = { _ => false }): ExecuteReport {
         let report = ExecuteReport()
         report.total = items.size
         let MaxRetries: Int64 = 3
@@ -1245,6 +1249,15 @@ public class PublishExecutor {
                 // 中止后剩余项统一记成「未推送（计划已中止）」，避免看起来像各自失败了
                 it.status = PlanItemStatus.Skipped
                 it.error = "计划已中止：${report.abortReason}"
+                report.skipped++
+                onItem(it, true, it.error)
+                idx++
+                continue
+            }
+            if (it.status == PlanItemStatus.Skipped || shouldSkip(it.pkgId)) {
+                // 手动跳过（执行前标记，或执行中由 shouldSkip 即时反映）：不推送、不计失败
+                it.status = PlanItemStatus.Skipped
+                it.error = "手动跳过"
                 report.skipped++
                 onItem(it, true, it.error)
                 idx++

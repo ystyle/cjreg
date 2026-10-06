@@ -282,6 +282,8 @@ public func buildServer(
             app.post("/api/admin/publish-plans/execute", { ctx => adm.executePlan(ctx) })
             // 进度流（SSE）：每次连接推一份状态快照，终态附 done；管理页轮询作为兜底
             app.get("/api/admin/publish-plans/:id/events", { ctx => adm.planEvents(ctx) })
+            // 手动跳过某一项（标记 skipped：执行器不再推送它，不计失败）
+            app.post("/api/admin/publish-plans/:id/items/:itemId/skip", { ctx => adm.skipPlanItem(ctx) })
             app.get("/api/admin/logs/:kind", { ctx => adm.queryLogs(ctx) })
             app.post("/api/admin/logs/clean", { ctx => adm.cleanLogs(ctx) })
         case None => ()

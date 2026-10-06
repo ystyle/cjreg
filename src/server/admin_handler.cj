@@ -1168,6 +1168,50 @@ public class AdminService {
     // body: {packages:[{organization,name,version}], target_url, target_token?}
     // target_token 为空时按 target_url 匹配上游表取该上游的 authToken
     // （否则推送到需要认证的目标仓——如官方中心仓或另一个私有仓——会 401）
+    // 手动跳过某个发布项：标记后执行器不再推送它（不计失败）。用于「这一项不想推」的场景，
+    // 例如目标仓已有等价版本、或该依赖需要人工处理。计划详情页与脚本都可调用。
+    public func skipPlanItem(ctx: TangHttpContext): Unit {
+        if (!requireAdmin(ctx)) {
+            return
+        }
+        var planId: Int64 = -1
+        var itemId: Int64 = -1
+        try {
+            planId = Int64.parse(ctx.param("id"))
+            itemId = Int64.parse(ctx.param("itemId"))
+        } catch (e: Exception) {
+            planId = -1
+            itemId = -1
+        }
+        if (planId < 0 || itemId < 0) {
+            writeJson(ctx, 400u16, "{\"error\":\"invalid plan or item id\"}")
+            return
+        }
+        let (actorId, actorName) = this.actorOf(ctx)
+        match (this.adminData) {
+            case None => writeJson(ctx, 503u16, "{\"error\":\"admin store unavailable\"}")
+            case Some(ad) =>
+                let item = ad.getPlanItem(itemId)
+                match (item) {
+                    case None =>
+                        writeAudit(this.adminData, LogKind.Admin, actorId, actorName, "skip_plan_item", "failed",
+                            "plan=${planId} item=${itemId}", ctx, error: "item not found")
+                        writeJson(ctx, 404u16, "{\"error\":\"plan item not found\"}")
+                    case Some(it) =>
+                        // 归属校验：不能拿 A 计划的 id 去改 B 计划的项
+                        if (it.planId != planId) {
+                            writeJson(ctx, 404u16, "{\"error\":\"plan item not found in this plan\"}")
+                            return
+                        }
+                        ad.updatePlanItem(itemId, "skipped", "手动跳过", nowMsUtc())
+                        let target = "${it.packageOrg}::${it.packageName}@${it.packageVersion}"
+                        writeAudit(this.adminData, LogKind.Admin, actorId, actorName, "skip_plan_item", "ok",
+                            target, ctx, detail: "plan=${planId} item=${itemId}")
+                        writeJson(ctx, 200u16, "{\"status\":\"ok\",\"itemId\":${itemId}}")
+                }
+        }
+    }
+
     // 发布计划进度流（SSE）。鉴权与其它管理端点一致；响应头走 stdx 的 HttpResponseBuilder。
     public func planEvents(ctx: TangHttpContext): Unit {
         if (!requireAdmin(ctx)) {

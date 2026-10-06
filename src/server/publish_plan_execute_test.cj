@@ -621,3 +621,44 @@ func executeReport_tailConfirmRespectsTimeout() {
     @Expect(calls.value, 1)                          // 没有重推
     store.storm.close()
 }
+
+// 手动跳过（执行前标记）：已是 Skipped 的项不推送、不计失败，其余项照常
+@Test
+func executeSkipsManuallySkippedItem() {
+    let (store, blobs) = execFixture()
+    let items = ArrayList<PlanItem>()
+    let it1 = execItem(execDoc(store, blobs, "a", "1.0.0"), "a", "1.0.0", 1)
+    it1.status = PlanItemStatus.Skipped
+    items.add(it1)
+    items.add(execItem(execDoc(store, blobs, "b", "1.0.0"), "b", "1.0.0", 2))
+    let calls = Box<Int64>(0)
+    let ex = PublishExecutor(store, blobs)
+    let r = ex.execute(items, "http://127.0.0.1:1", "tok", poster: stubPoster(codesOf([200, 200]), calls))
+    @Expect(calls.value, 1)                       // 只推了第二项
+    @Expect(r.success, 1)
+    @Expect(r.skipped, 1)
+    @Expect(r.failed, 0)
+    @Expect(items[0].error.contains("手动跳过"), true)
+    @Expect(items[1].status == PlanItemStatus.Completed, true)
+    store.storm.close()
+}
+
+// 执行中标记：shouldSkip 回调让该 pkggId 当场被跳过（用于计划详情页执行途中点「跳过」）
+@Test
+func executeShouldSkipHookTakesEffect() {
+    let (store, blobs) = execFixture()
+    let items = ArrayList<PlanItem>()
+    items.add(execItem(execDoc(store, blobs, "a", "1.0.0"), "a", "1.0.0", 1))
+    items.add(execItem(execDoc(store, blobs, "b", "1.0.0"), "b", "1.0.0", 2))
+    let skippedPkg = items[0].pkgId
+    let calls = Box<Int64>(0)
+    let ex = PublishExecutor(store, blobs)
+    let r = ex.execute(items, "http://127.0.0.1:1", "tok",
+        poster: stubPoster(codesOf([200, 200]), calls),
+        shouldSkip: { pkgId => pkgId == skippedPkg })
+    @Expect(calls.value, 1)                       // 第一项被回调拦下
+    @Expect(r.success, 1)
+    @Expect(r.skipped, 1)
+    @Expect(items[0].status == PlanItemStatus.Skipped, true)
+    store.storm.close()
+}

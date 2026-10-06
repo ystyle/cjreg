@@ -1,0 +1,7 @@
+# 发布前：后台包管理搜 mathUtils —— 目标仓还没有这个包
+sleep 1
+fill 'input[placeholder="搜索包名 / 组织 / 描述"]' "mathUtils"
+sleep 3
+scroll down 100
+sleep 2
+scroll up 100

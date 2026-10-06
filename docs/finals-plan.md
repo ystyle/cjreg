@@ -119,7 +119,14 @@ git push origin v0.1.0-submission     # 决赛写差异说明时以此 tag 为�
 - 验收：`ghcr.io` 镜像 `docker run` 即用；两种架构均可运行；镜像体积与初赛对比有量化下降。
 - 演示：`docker compose up -d --build` → 浏览器访问 → `docker compose stop`（优雅关闭日志）。
 
-### 迭代 4：正式性能基准报告
+### 迭代 4：正式性能基准报告 —— ✅ 已完成（2026-10-06）
+
+**落地**：`scripts/bench.sh`（桩上游 `scripts/bench-stub-upstream.py` + k6 并发档，一键复现）+ 报告 **`docs/benchmark.md`**。
+关键结果：索引回源 → 本地命中 **16.16 ms → 2.74 ms（5.9×）**，桩计数证明重查轮零回源；
+发布 2/32/200 MiB = 0.027/0.115/0.618 s 且 VmHWM 恒定 291 MiB；并发 1/4/16/64 VU = 88/294/414/356 req/s（拐点）。
+**报告同时记录了两个功能性风险**：200 MiB **下载** `Out of memory`（下载路径仍整包驻留内存，发布已流式）、
+大包发布后堆未回落（随后 32 MiB 下载也会失败）—— 见 `docs/benchmark.md` §7。
+
 
 - 目标：`scripts/bench.sh` 产出可复现数据：索引**缓存命中 vs 回源**延迟、并发吞吐（wrk/自研压测）、发布/下载吞吐、静态二进制与镜像体积、内存占用（含 badger arena）。
 - 验收：报告含测试环境、数据规模、指标口径、原始输出与结论；与初赛基线逐项对比。

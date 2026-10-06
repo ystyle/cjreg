@@ -215,14 +215,24 @@ cmd_timeline() {
   say "已生成 $out"
 }
 
-# 画中画合成：主画面（浏览器）抽一帧**定格**，终端回放做右下角小窗。
-# 为什么要定格：主素材原本带轻微滚动（单轨播放时显得生动），一旦叠了小窗，
-# 背景滚动会和终端动作抢注意力 —— 主画面静、小窗动，观众才知道该看哪里。
-# 关掉定格：CJREG_PIP_FREEZE=0（退回主画面播放）。
-cmd_pip() {  # <主镜头> <小窗镜头> <输出名> [小窗标题]
-  local main="$1" pip="$2" out_shot="$3" title="${4:-终端}"
-  local mf="$REC/$main.mp4" pf="$REC/$pip.mp4" out="$REC/$out_shot.mp4"
-  [ -f "$mf" ] || die "缺主镜头素材：$mf"
+# 画中画合成：主画面（浏览器）定格，终端回放做右下角小窗。
+#
+# 主画面支持**两段**：<before> → <after>，切换点在 CJREG_PIP_SWITCH（默认 0.6 = 小窗 60% 处）。
+# 为什么要两段：发布类镜头如果一上来主画面就有这个包，观众看到的是"先有结果后有操作"；
+# 正确时序是「主画面：还没有这个包 → 小窗跑完发布 → 主画面：包出现了」。
+# before 与 after 传同一个镜头名即为单段（普通同屏镜头）。
+# 取某素材 60% 处的一帧（避开开头可能还在加载的画面）
+pip_still() {  # <源> <输出png>
+  local d; d=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$1")
+  local mid; mid=$(awk "BEGIN{printf \"%.2f\", $d*0.6}")
+  ffmpeg_run -y -v error -ss "$mid" -i "$1" -frames:v 1 "$2"
+}
+
+cmd_pip() {  # <主画面before> <主画面after> <小窗镜头> <输出名> [小窗标题]
+  local mb="$1" ma="$2" pip="$3" out_shot="$4" title="${5:-终端}"
+  local mbf="$REC/$mb.mp4" maf="$REC/$ma.mp4" pf="$REC/$pip.mp4" out="$REC/$out_shot.mp4"
+  [ -f "$mbf" ] || die "缺主画面素材：$mbf"
+  [ -f "$maf" ] || die "缺主画面素材：$maf"
   [ -f "$pf" ] || die "缺小窗素材：$pf"
   local font=/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc
   local title_esc="${title//:/\\:}"   # ffmpeg filter 里 : 是分隔符，标题必须转义
@@ -235,21 +245,28 @@ drawbox=x=60:y=24:w=9:h=9:color=0xa6e3a1:t=fill,\
 drawbox=x=16:y=40:w=736:h=ih-24:color=0x585b70:t=2,\
 drawtext=fontfile=$font:text='$title_esc':x=82:y=21:fontsize=16:fontcolor=0xcdd6f4[t];\
 [0:v][t]overlay=W-w-40:H-h-40[out]"
-  if [ "${CJREG_PIP_FREEZE:-1}" = "1" ]; then
-    local still="$REC/.pip-still-$out_shot.png"
-    # 抽帧点必须落在**主画面**自己的时长内（取 60% 处，避开可能的加载态）
-    local mdur; mdur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$mf")
-    local mid; mid=$(awk "BEGIN{printf \"%.2f\", $mdur*0.6}")
-    ffmpeg_run -y -v error -ss "$mid" -i "$mf" -frames:v 1 "$still" || die "抽主画面定帧失败"
-    say "画中画（主画面定格）：$main ＋ $pip → $out_shot"
-    ffmpeg_run -y -v error -loop 1 -i "$still" -i "$pf" -filter_complex "$win" -map "[out]" \
-      -t "$dur" -c:v libx264 -crf 18 -pix_fmt yuv420p -movflags +faststart "$out" || die "画中画合成失败"
-    rm -f "$still"
+  local sb="$REC/.pip-b-$out_shot.png" sa="$REC/.pip-a-$out_shot.png"
+  pip_still "$mbf" "$sb" || die "抽 before 定帧失败"
+  pip_still "$maf" "$sa" || die "抽 after 定帧失败"
+  local t1; t1=$(awk "BEGIN{printf \"%.3f\", $dur*${CJREG_PIP_SWITCH:-0.6}}")
+  local t2; t2=$(awk "BEGIN{printf \"%.3f\", $dur-$t1}")
+  if [ "$mb" = "$ma" ]; then
+    say "画中画（单段主画面）：$mb ＋ $pip → $out_shot"
+    ffmpeg_run -y -v error -loop 1 -i "$sb" -i "$pf" -filter_complex "$win" -map "[out]" \
+      -t "$dur" -r 30 -c:v libx264 -crf 18 -pix_fmt yuv420p -movflags +faststart "$out" || die "画中画合成失败"
   else
-    say "画中画（主画面播放）：$main ＋ $pip → $out_shot"
-    ffmpeg_run -y -v error -i "$mf" -i "$pf" -filter_complex "$win" -map "[out]" \
-      -c:v libx264 -crf 18 -pix_fmt yuv420p -movflags +faststart "$out" || die "画中画合成失败"
+    say "画中画（主画面两段 $mb → $ma，切换点 ${t1}s）：＋ $pip → $out_shot"
+    ffmpeg_run -y -v error -loop 1 -i "$sb" -i "$pf" -filter_complex "$win" -map "[out]" \
+      -t "$t1" -r 30 -c:v libx264 -crf 18 -pix_fmt yuv420p "$REC/.pip-seg1.mp4" || die "段1 合成失败"
+    ffmpeg_run -y -v error -loop 1 -i "$sa" -ss "$t1" -i "$pf" -filter_complex "$win" -map "[out]" \
+      -t "$t2" -r 30 -c:v libx264 -crf 18 -pix_fmt yuv420p "$REC/.pip-seg2.mp4" || die "段2 合成失败"
+    local xf=0.4 xo; xo=$(awk "BEGIN{printf \"%.3f\", $t1-$xf}")
+    ffmpeg_run -y -v error -i "$REC/.pip-seg1.mp4" -i "$REC/.pip-seg2.mp4" \
+      -filter_complex "[0:v][1:v]xfade=transition=fade:duration=$xf:offset=$xo[v]" -map "[v]" \
+      -r 30 -c:v libx264 -crf 18 -pix_fmt yuv420p -movflags +faststart "$out" || die "两段拼接失败"
+    rm -f "$REC/.pip-seg1.mp4" "$REC/.pip-seg2.mp4"
   fi
+  rm -f "$sb" "$sa"
   [ -s "$out" ] || die "画中画产物为空：$out"
   say "完成：$out"
 }
@@ -367,7 +384,7 @@ case "${1:-help}" in
   web|web-admin|web-user) shot_web "$1" "${2:?usage: $1 <shot> <path> [secs] [user] [pass]}" "${3:?path required}" "${4:-8}" "${5:-}" "${6:-}" ;;
   convert)  cmd_convert ;;
   timeline) cmd_timeline ;;
-  pip)      cmd_pip "${2:?usage: pip <main-shot> <pip-shot> <out-shot> [title]}" "${3:?}" "${4:?}" "${5:-终端}" ;;
+  pip)      cmd_pip "${2:?usage: pip <before-shot> <after-shot> <pip-shot> <out-shot> [title]}" "${3:?}" "${4:?}" "${5:?}" "${6:-终端}" ;;
   preview)  cmd_preview ;;
   final)    cmd_final "${2:-final}" ;;
   list)     cmd_list ;;

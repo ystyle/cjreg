@@ -208,28 +208,7 @@ cmd_timeline() {
         web-*) track="Web 界面" ;;
         pip-*) track="同屏（画中画）" ;;
       esac
-      case "$shot" in
-        02-deploy)  label="部署（容器健康 / 数据卷 / 重启策略）" ;;
-        03-portal)  label="门户首页与内置帮助" ;;
-        03-publish) label="发布 demo::mathUtils@1.0.0" ;;
-        03-pkgs)    label="管理后台：仪表盘 / 包管理" ;;
-        04-upstreams) label="后台上游管理（official 与 demo-upstream）" ;;
-        04-multirepo) label="解析诊断 + 发布计划推送" ;;
-        04-target)  label="演示空站（推送后）" ;;
-        05-org)     label="组织与团队管理" ;;
-        05-permission) label="越权发布被 403 拒绝" ;;
-        06-me)      label="用户门户 /me（发布 Token / 我的包）" ;;
-        07-logs)    label="管理后台审计日志" ;;
-        07-audit-api) label="公开只读 API + 审计" ;;
-        08-delete)  label="三级删除（软删 404 / 恢复 200）" ;;
-        03-resolve) label="多仓解析（cd 源码目录 → cjpm update，私有仓 + 官方仓分工）" ;;
-        04-plan-list) label="发布计划列表（状态 / 目标上游 / 进度）" ;;
-        04-plan-create) label="创建发布计划（选包 → 自动补依赖 → 版本对照）" ;;
-        04-plan-run) label="计划详情：开始执行 / 推送进度" ;;
-        pip-03-publish) label="发布同屏：终端 cjpm publish ＋ 后台包管理（画中画）" ;;
-        pip-05-permission) label="越权同屏：组织管理 ＋ 终端 403（画中画）" ;;
-        *)          label="$shot" ;;
-      esac
+      local label; label=$(shot_label "$shot")
       echo "| $shot | $track | \`$(realpath --relative-to="$ROOT" "$f")\` | $dur | $label | 见 §3 对应镜头 |"
     done
   } > "$out"
@@ -295,7 +274,8 @@ cmd_preview() {  # 按演示顺序拼接成片（各轨分辨率不同，统一 
 
 # 镜头中文名（字幕条与时间轴共用一份）
 shot_label() {
-  case "$1" in
+  local k="${1#web-}"; k="${k#term-}"    # 素材名带轨前缀（web-/term-），pip- 属于镜头名本身
+  case "$k" in
     02-deploy)         echo "部署：容器 / 数据卷 / 重启策略" ;;
     03-portal)         echo "门户首页" ;;
     03-packages)       echo "包列表：浏览与搜索仓颉包" ;;
@@ -313,7 +293,7 @@ shot_label() {
     07-logs)           echo "审计日志" ;;
     07-audit-api)      echo "公开只读 API" ;;
     08-delete)         echo "三级删除：软删除 → 状态可见 → 恢复" ;;
-    *)                 echo "$1" ;;
+    *)                 echo "$k" ;;
   esac
 }
 

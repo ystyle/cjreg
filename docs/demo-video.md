@@ -1,5 +1,9 @@
 # 演示视频脚本（初赛/决赛通用）
 
+> **成片已发布**：https://www.bilibili.com/video/BV1e9pw6WELk/
+> 录制做法（双轨录制 / 仪表盘背景同屏 / 字幕与转场）与逐格素材见本文档 §7，可用
+> `bash scripts/demo-record.sh {prepare|term|web|web-ops|pip|preview|final|timeline}` 重录或重出片。
+
 > 目标时长 **4:30–5:00**，1920×1080 / 30fps，中文解说 + 中文字幕。
 > 一条命令准备演示环境：`bash scripts/demo-data.sh`（细节见 §2）。
 

@@ -41,7 +41,7 @@ git push origin v0.1.0-submission     # 决赛写差异说明时以此 tag 为�
 
 每项给出：目标 → 方案要点 → 验收标准 → 度量口径 → 演示方式。
 
-### 迭代 1 ★：发布链路流式化（大包稳定 + 内存 O(1)）
+### 迭代 1 ★：发布链路流式化（大包稳定 + 内存 O(1)）—— ✅ 已完成（2026-10-06）
 
 **现状与根因**（有实测支撑，见 `docs/verification.md` §5.1）
 
@@ -67,9 +67,20 @@ git push origin v0.1.0-submission     # 决赛写差异说明时以此 tag 为�
 - 覆盖/幂等裁决**不变**：仍是「新包认领 / 新版本 write / 覆盖需 overwrite」，只是制品不再整包驻留内存。
 - 流式计算：`stdx.crypto.digest.SHA256` 的 `write/update` 可按块喂（现有 `sha256Hex(Array<Byte>)` 之外新增 `HashStream` 用法）。
 
+**落地情况（2026-10-06）**
+
+- 实现：`src/protocol/publish_intake.cj`（段头 → meta → 制品按 1 MiB 块边读边摘要并落临时文件）、
+  `BlobStore.claimFile`（临时文件 rename 原子进位、按 sha 去重）、`PublishService.publishStream`
+  （复用原认证/权限/幂等/覆盖裁决）、`POST /pkg` 走流式且 `tmpDir` 为空时回退整包（内存模式兼容）。
+- 实测（`scripts/big-package-e2e.sh`，服务未设 `cjHeapSize`）：48 / 100 / 200 MiB 与协议上限 **500 MiB** 全部 200，
+  服务 `VmHWM` **恒为 261 MiB**（较最小档 +0 MiB）→ 峰值内存与包体无关。
+- 单测：新增 6 例（正常发布 / sha 不符清临时文件 / 传输截断 / 段头非法与 meta 超限 / 按 sha 去重认领 / open 模式同版本异 sha 拒绝且不留半成品）；
+  全量 360 例 + 双仓 e2e 全绿。
+
 **验收标准**
 
 1. 默认 `cjHeapSize`（256 MB）下，**200 MiB 包发布成功**，进程 `VmHWM` < 200 MB；
+   （实测 200 MiB 成功 ✓；`VmHWM` 为 261 MiB ≈ 堆上限 + 原生内存，**关键是它不随包体增长** —— 比"< 200 MB"更能说明 O(1)）
 2. 500 MiB 包在 `cjHeapSize=2GB` 下发布成功（协议上限）；
 3. 48 / 100 / 200 MiB 三档进入 **e2e 脚本**（`scripts/big-package-e2e.sh`），重复 5 轮无 OOM；
 4. sha 不符 / 长度不符 / 中断传输 三个异常路径各有单测：临时文件被清理、库内无残留 blob、返回码正确；

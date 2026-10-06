@@ -29,8 +29,13 @@ CJREG_SEED_DEMO=1 ./target/release/bin/ystyle::cjreg serve -d .smoke/auth-data -
 
 ## 生产部署（docker，私有仓）
 
-团队日常用的**私有中心仓**就是从本仓部署的（docker compose 项目 `cjreg`）：宿主 **8066** → 容器 8060，
-数据卷 `cjreg/data` → `/data`，`restart: unless-stopped`，对外 `http://192.168.3.6:8066`。
+团队日常用的**私有中心仓**部署在**生产目录 `~/docker/cjreg`**（docker compose 项目 `cjreg`）：宿主 **8066** → 容器 8060，
+数据卷 `~/docker/cjreg/data` → `/data`，`restart: unless-stopped`，对外 `http://192.168.3.6:8066`。
+
+- 生产目录只放 `docker-compose.yml` + `data/`；镜像 `build` context 指向**源码仓** `~/Projects/Cangjie/cjreg`（产物打包模式）。
+- 源仓内的 `docker-compose.yml` 默认端口 8060、容器名 `cjreg-dev`，供本机开发/新机器自建，**不会抢占生产容器名 `cjreg`**。
+- 迁移记录：2026-10-06 由 `cjreg/data` 迁入 `~/docker/cjreg/data`（前后逐文件 sha256 校验一致）；
+  旧目录归档为 `~/docker/backups/cjreg-data-20261006`（48M），仅作回滚快照，不要再当生产数据使用。
 
 > **凭据、客户端配置（`~/.cjpm/` 三文件切换）、发版闸门**统一记在工作区 `../AGENTS.md` 的「私有仓（cjreg）」章节
 > ——刻意不写在本文件里：本文件受 git 跟踪，口令有被提交/推送的风险。
@@ -39,18 +44,24 @@ CJREG_SEED_DEMO=1 ./target/release/bin/ystyle::cjreg serve -d .smoke/auth-data -
 
 ```shell
 eval "$(cjvs env zsh)" && eval "$(cjvs stdx-env zsh)"
-cjpm build -j 16
-CJREG_PORT=8066 docker compose build && CJREG_PORT=8066 docker compose up -d
+cd ~/Projects/Cangjie/cjreg && cjpm build -j 16
+cd ~/docker/cjreg && docker compose build && docker compose up -d
 ```
 
-- ⚠️ **必须显式传 `CJREG_PORT=8066`**：`docker-compose.yml` 是 `"${CJREG_PORT:-8060}:8060"`，不传会改成 8060。
+- 生产 compose 的端口默认值就是 8066（`"${CJREG_PORT:-8066}:8060"`），**不必再显式传 `CJREG_PORT`**。
 - 镜像只打包**宿主编译产物**（`Dockerfile` 里 `COPY ${CJREG_BIN} /app/cjreg`），所以必须先 `cjpm build`。
 - ⚠️ **宿主机 glibc 升级后要先拉基础镜像**：基础镜像是 `archlinux:latest`（本地那份可能很旧），二进制动态依赖
   `libm.so.6`，宿主 glibc 一升级就会报 `/app/cjreg: /usr/lib/libm.so.6: version 'GLIBC_2.44' not found`
   → 容器**反复重启**、healthcheck 永远不 healthy。处置：`docker pull archlinux:latest` 后重新
   `docker compose build && up -d`（2026-09-22 实测：宿主 glibc 2.44、本地基础镜像还是 2.43，拉了新的才起来）。
-- 部署后硬校验：`docker exec cjreg sha256sum /app/cjreg` 应等于 `sha256sum target/release/bin/ystyle::cjreg`。
-- 重置管理员口令需先停容器独占数据目录：`docker compose stop` → `./target/release/bin/ystyle::cjreg admin reset-password -d data --username admin --password '<新口令>'` → `CJREG_PORT=8066 docker compose start`。
+- 部署后硬校验：`docker exec cjreg sha256sum /app/cjreg` 应等于 `sha256sum ~/Projects/Cangjie/cjreg/target/release/bin/ystyle::cjreg`。
+- 重置管理员口令需先停容器独占数据目录：
+
+  ```shell
+  cd ~/docker/cjreg && docker compose stop
+  ~/Projects/Cangjie/cjreg/target/release/bin/ystyle::cjreg admin reset-password -d ~/docker/cjreg/data --username admin --password '<新口令>'
+  cd ~/docker/cjreg && docker compose start
+  ```
 
 **发布权限模式**：生产实例用 `permission_mode = "team"`（`effectivePermission` 里平台管理员直通 overwrite=3），
 所以**同一版本可以反复发**——这是预演发布必需的；`open` 模式对同版本不同 sha 会返 409 且不覆盖。
@@ -69,15 +80,15 @@ CJREG_PORT=8066 docker compose build && CJREG_PORT=8066 docker compose up -d
    提取失败**绝不阻断发布**——只打日志按空 README 入库（这是硬约束）。
 2. **下载/回源**（`server.cj` 的 `/pkg/:name/:version` → `enrichDocByVersion`）：制品流经本地时顺手补齐
    该版本的 README 与展示字段；已补齐的文档不再重复解压。
-3. **存量回捞**（CLI）：`./target/release/bin/ystyle::cjreg admin sync-metadata -d data [--all]`
+3. **存量回捞**（CLI）：`./target/release/bin/ystyle::cjreg admin sync-metadata -d ~/docker/cjreg/data [--all]`
    - 默认只管**每个包的最新版本**（列表页展示用），`--all` 处理所有版本；
    - 制品优先取本地 blob，没有就回源下载（落 blob，供发布计划复用）；
    - 与 `reset-password` 一样**必须先停容器**（Badger 独占数据目录）：
 
      ```shell
-     docker compose stop
-     ./target/release/bin/ystyle::cjreg admin sync-metadata -d data
-     CJREG_PORT=8066 docker compose start
+     cd ~/docker/cjreg && docker compose stop
+     ~/Projects/Cangjie/cjreg/target/release/bin/ystyle::cjreg admin sync-metadata -d ~/docker/cjreg/data
+     cd ~/docker/cjreg && docker compose start
      ```
 
    - 输出末尾给出余额（README/描述/协议仍缺几个）。`category`/`tag` 等**制作者在 cjpm.toml 里没写就是没有**，

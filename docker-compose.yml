@@ -1,4 +1,7 @@
-# cjreg — Docker Compose 部署（默认部署方式）
+# cjreg — Docker Compose 部署（本机开发 / 新机器自建）
+#
+# ⚠️ 本机团队私有仓的生产实例**不在本文件**：它在生产目录 ~/docker/cjreg（容器名 cjreg、宿主 8066）。
+#    本文件默认端口 8060、容器名 cjreg-dev，避免与生产容器抢名字；更新生产实例见 AGENTS.md「生产部署」。
 #
 # 用法：
 #   eval "$(cjvs env zsh)" && eval "$(cjvs stdx-env zsh)"
@@ -19,7 +22,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: cjreg:latest
-    container_name: cjreg
+    container_name: cjreg-dev
     restart: unless-stopped
 
     ports:

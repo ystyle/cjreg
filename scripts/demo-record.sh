@@ -127,6 +127,42 @@ shot_web_login() {  # <shot> <login-path> <target-path> <user> <pass> [secs]
   say "完成：$out"
 }
 
+# 界面操作镜头：打开页面 → 开录 → 逐条执行 .demo/ops/<shot>.ops 里的 agent-browser 命令。
+# ops 文件是纯命令行（# 注释、sleep N、其余原样交给 agent-browser），便于逐条改与复现。
+shot_web_ops() {  # <shot> <path> [secs]
+  local shot="$1" path="$2" secs="${3:-12}"
+  local ops="$ROOT/.demo/ops/web-$shot.ops" frames="$REC/frames-$shot" out="$REC/web-$shot.mp4"
+  local port="${CJREG_REC_CDP_PORT:-9222}" url
+  case "$path" in http://*|https://*) url="$path" ;; *) url="$MAIN/admin$path" ;; esac
+  [ -f "$ops" ] || die "缺少操作脚本：$ops"
+  ensure_chrome
+  say "web 轨（界面操作）$shot → $url"
+  local tok; tok=$(login_token admin "${CJREG_LIVE_ADMIN_PASS:-__REDACTED__}")
+  agent-browser --cdp "$port" open "$MAIN/admin/login" >/dev/null 2>&1
+  agent-browser --cdp "$port" eval "localStorage.setItem('cjxt_token','$tok')" >/dev/null 2>&1
+  agent-browser --cdp "$port" open "$url" >/dev/null 2>&1
+  sleep 2
+  "$TOOLS/venv/bin/python" "$ROOT/scripts/cdp-record.py" rec "$frames" \
+    --port "$port" --interval "${CJREG_REC_INTERVAL:-100}" \
+    > "$ROOT/.qa-shots/rec-$shot.log" 2>&1 &
+  local rec_pid=$!
+  sleep 1
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%%#*}"
+    [ -z "${line//[[:space:]]/}" ] && continue
+    case "$line" in
+      sleep\ *) sleep "${line#sleep }" ;;
+      *) eval "agent-browser --cdp $port $line" >/dev/null 2>&1 || true ;;
+    esac
+  done < "$ops"
+  sleep 1
+  kill -TERM "$rec_pid" 2>/dev/null; sleep 1; wait "$rec_pid" 2>/dev/null
+  "$TOOLS/venv/bin/python" "$ROOT/scripts/cdp-record.py" mp4 "$frames" "$out" || die "合成失败：$frames"
+  [ "${CJREG_REC_KEEP_FRAMES:-0}" = "1" ] || rm -rf "$frames"
+  say "完成：$out"
+}
+
 cmd_prepare() {
   say "演示环境：清空演示上游站 + 幂等造数"
   bash "$ROOT/scripts/demo-live.sh" reset-upstream
@@ -161,7 +197,7 @@ cmd_timeline() {
     echo "| 镜头 | 轨 | 素材 | 时长(s) | 画面内容 | 配音提示（demo-video.md §3） |"
     echo "|---|---|---|---|---|---|"
     local label shot order
-    order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs term-03-publish web-03-pkgs web-04-upstreams term-04-multirepo web-04-target web-05-org term-05-permission web-06-me web-07-logs term-07-audit-api term-08-delete}"
+    order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs pip-03-publish web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs term-07-audit-api term-08-delete}"
     for shot in $order; do
       local f="$REC/$shot.mp4"
       [ -f "$f" ] || continue
@@ -182,6 +218,11 @@ cmd_timeline() {
         07-logs)    label="管理后台审计日志" ;;
         07-audit-api) label="公开只读 API + 审计" ;;
         08-delete)  label="三级删除（软删 404 / 恢复 200）" ;;
+        04-plan-list) label="发布计划列表（状态 / 目标上游 / 进度）" ;;
+        04-plan-create) label="创建发布计划（选包 → 自动补依赖 → 版本对照）" ;;
+        04-plan-run) label="计划详情：开始执行 / 推送进度" ;;
+        pip-03-publish) label="发布同屏：终端 cjpm publish ＋ 后台包管理（画中画）" ;;
+        pip-05-permission) label="越权同屏：组织管理 ＋ 终端 403（画中画）" ;;
         *)          label="$shot" ;;
       esac
       echo "| $shot | $track | \`$(realpath --relative-to="$ROOT" "$f")\` | $dur | $label | 见 §3 对应镜头 |"
@@ -190,8 +231,32 @@ cmd_timeline() {
   say "已生成 $out"
 }
 
+# 画中画合成：浏览器画面为主，终端回放做右下角小窗（带标题栏）。
+# 用于「终端操作 + 对应界面」的配对镜头，让观众同屏看到"命令生效了"。
+cmd_pip() {  # <主镜头> <小窗镜头> <输出名> [小窗标题]
+  local main="$1" pip="$2" out_shot="$3" title="${4:-终端}"
+  local mf="$REC/$main.mp4" pf="$REC/$pip.mp4" out="$REC/$out_shot.mp4"
+  [ -f "$mf" ] || die "缺主镜头素材：$mf"
+  [ -f "$pf" ] || die "缺小窗素材：$pf"
+  local font=/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc
+  local title_esc="${title//:/\\:}"   # ffmpeg filter 里 : 是分隔符，标题必须转义
+  say "画中画：$main（主） + $pip（右下小窗）→ $out_shot"
+  ffmpeg_run -y -v error -i "$mf" -i "$pf" -filter_complex \
+"[1:v]scale=720:-2,pad=752:ih+72:16:40:color=0x181825,\
+drawbox=x=16:y=16:w=720:h=28:color=0x313244:t=fill,\
+drawbox=x=30:y=24:w=9:h=9:color=0xf38ba8:t=fill,\
+drawbox=x=45:y=24:w=9:h=9:color=0xf9e2af:t=fill,\
+drawbox=x=60:y=24:w=9:h=9:color=0xa6e3a1:t=fill,\
+drawbox=x=16:y=40:w=736:h=ih-24:color=0x585b70:t=2,\
+drawtext=fontfile=$font:text='$title_esc':x=82:y=21:fontsize=16:fontcolor=0xcdd6f4[t];\
+[0:v][t]overlay=W-w-40:H-h-40:shortest=1[out]" -map "[out]" \
+    -c:v libx264 -crf 18 -pix_fmt yuv420p -movflags +faststart "$out" || die "画中画合成失败"
+  [ -s "$out" ] || die "画中画产物为空：$out"
+  say "完成：$out"
+}
+
 cmd_preview() {  # 按演示顺序拼接成片（各轨分辨率不同，统一 pad 到 1080p）
-  local order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs term-03-publish web-03-pkgs web-04-upstreams term-04-multirepo web-04-target web-05-org term-05-permission web-06-me web-07-logs term-07-audit-api term-08-delete}"
+  local order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs pip-03-publish web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs term-07-audit-api term-08-delete}"
   local out="$REC/preview-all.mp4" args=() fc="" n=0
   for shot in $order; do
     [ -f "$REC/$shot.mp4" ] || { warn "缺素材：$shot.mp4（跳过）"; continue; }
@@ -213,10 +278,12 @@ cmd_list() { ls -la "$REC" 2>/dev/null | tail -n +2; }
 case "${1:-help}" in
   prepare)  cmd_prepare ;;
   term)     shot_term "${2:?usage: term <shot>}" ;;
+  web-ops)  shot_web_ops "${2:?usage: web-ops <shot> <admin-path> [secs]}" "${3:?}" "${4:-12}" ;;
   web-login) shot_web_login "${2:?usage: web-login <shot> <login-path> <target-path> <user> <pass>}" "${3:?}" "${4:?}" "${5:?}" "${6:?}" ;;
   web|web-admin|web-user) shot_web "$1" "${2:?usage: $1 <shot> <path> [secs] [user] [pass]}" "${3:?path required}" "${4:-8}" "${5:-}" "${6:-}" ;;
   convert)  cmd_convert ;;
   timeline) cmd_timeline ;;
+  pip)      cmd_pip "${2:?usage: pip <main-shot> <pip-shot> <out-shot> [title]}" "${3:?}" "${4:?}" "${5:-终端}" ;;
   preview)  cmd_preview ;;
   list)     cmd_list ;;
   *)        sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//' ;;

@@ -197,7 +197,7 @@ cmd_timeline() {
     echo "| 镜头 | 轨 | 素材 | 时长(s) | 画面内容 | 配音提示（demo-video.md §3） |"
     echo "|---|---|---|---|---|---|"
     local label shot order
-    order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs pip-03-publish web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs term-07-audit-api web-08-delete}"
+    order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs term-03-resolve pip-03-publish web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs term-07-audit-api web-08-delete}"
     for shot in $order; do
       local f="$REC/$shot.mp4"
       [ -f "$f" ] || continue
@@ -222,6 +222,7 @@ cmd_timeline() {
         07-logs)    label="管理后台审计日志" ;;
         07-audit-api) label="公开只读 API + 审计" ;;
         08-delete)  label="三级删除（软删 404 / 恢复 200）" ;;
+        03-resolve) label="多仓解析（cd 源码目录 → cjpm update，私有仓 + 官方仓分工）" ;;
         04-plan-list) label="发布计划列表（状态 / 目标上游 / 进度）" ;;
         04-plan-create) label="创建发布计划（选包 → 自动补依赖 → 版本对照）" ;;
         04-plan-run) label="计划详情：开始执行 / 推送进度" ;;
@@ -275,7 +276,7 @@ drawtext=fontfile=$font:text='$title_esc':x=82:y=21:fontsize=16:fontcolor=0xcdd6
 }
 
 cmd_preview() {  # 按演示顺序拼接成片（各轨分辨率不同，统一 pad 到 1080p）
-  local order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs pip-03-publish web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs term-07-audit-api web-08-delete}"
+  local order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs term-03-resolve pip-03-publish web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs term-07-audit-api web-08-delete}"
   local out="$REC/preview-all.mp4" args=() fc="" n=0
   for shot in $order; do
     [ -f "$REC/$shot.mp4" ] || { warn "缺素材：$shot.mp4（跳过）"; continue; }
@@ -292,6 +293,73 @@ cmd_preview() {  # 按演示顺序拼接成片（各轨分辨率不同，统一 
   say "完成：$out（$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$out" | cut -d. -f1)s）"
 }
 
+# 镜头中文名（字幕条与时间轴共用一份）
+shot_label() {
+  case "$1" in
+    02-deploy)         echo "部署：容器 / 数据卷 / 重启策略" ;;
+    03-portal)         echo "门户首页" ;;
+    03-packages)       echo "包列表：浏览与搜索仓颉包" ;;
+    03-docs)           echo "内置帮助文档" ;;
+    03-resolve)        echo "多仓解析：cd 源码目录 → cjpm update（私有仓 + 官方仓分工）" ;;
+    pip-03-publish)    echo "发布：终端 cjpm publish ＋ 后台包管理（同屏）" ;;
+    04-upstreams)      echo "上游管理：官方仓 / 演示空站" ;;
+    04-plan-list)      echo "发布计划列表：状态 / 目标上游 / 进度" ;;
+    04-plan-create)    echo "创建发布计划：选包 → 自动补依赖 → 版本对照" ;;
+    04-plan-run)       echo "计划详情：开始执行 / 推送进度" ;;
+    04-target)         echo "演示空站：推送后的结果" ;;
+    05-org)            echo "组织与团队管理" ;;
+    pip-05-permission) echo "权限：终端越权发布被拒 ＋ 组织管理（同屏）" ;;
+    06-me)             echo "用户门户：发布 Token / 我的包 / 我的团队" ;;
+    07-logs)           echo "审计日志" ;;
+    07-audit-api)      echo "公开只读 API" ;;
+    08-delete)         echo "三级删除：软删除 → 状态可见 → 恢复" ;;
+    *)                 echo "$1" ;;
+  esac
+}
+
+# 正式成片：片头卡 + 每格字幕条 + 淡入淡出 + 静音音轨（配音后替换即可）
+cmd_final() {  # [输出名]
+  local out="$REC/${1:-final}.mp4" tmp="$REC/.final"
+  local font=/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc
+  local order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs term-03-resolve pip-03-publish web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs term-07-audit-api web-08-delete}"
+  rm -rf "$tmp"; mkdir -p "$tmp"
+  say "片头卡"
+  ffmpeg_run -y -v error -f lavfi -i "color=c=0x11111b:s=1920x1080:d=3.5" -vf \
+"drawtext=fontfile=$font:text='cjreg':x=(w-text_w)/2:y=(h-text_h)/2-90:fontsize=120:fontcolor=0xcdd6f4,\
+drawtext=fontfile=$font:text='仓颉私有中心仓与多仓工具':x=(w-text_w)/2:y=(h-text_h)/2+40:fontsize=44:fontcolor=0x9399b2,\
+drawtext=fontfile=$font:text='发布 · 多仓解析 · 权限 · 发布计划 · 审计 · 三级删除':x=(w-text_w)/2:y=(h-text_h)/2+120:fontsize=28:fontcolor=0x6c7086,\
+fade=in:0:20,fade=out:st=3.0:d=0.5" -r 30 -c:v libx264 -crf 18 -pix_fmt yuv420p "$tmp/00-intro.mp4"
+  local i=1 shot label dur
+  for shot in $order; do
+    [ -f "$REC/$shot.mp4" ] || { warn "缺素材：$shot"; continue; }
+    label=$(shot_label "$shot")
+    label=${label//:/\\:}
+    dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$REC/$shot.mp4")
+    local fo; fo=$(awk "BEGIN{d=$dur-0.5; if(d<0)d=0; printf \"%.2f\", d}")
+    ffmpeg_run -y -v error -i "$REC/$shot.mp4" -vf \
+"scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,\
+fade=in:0:12,fade=out:st=$fo:d=0.5,\
+drawbox=x=0:y=992:w=1920:h=88:color=0x000000@0.62:t=fill,\
+drawtext=fontfile=$font:text='$label':x=64:y=1016:fontsize=30:fontcolor=0xffffff" \
+      -r 30 -c:v libx264 -crf 18 -pix_fmt yuv420p "$tmp/$(printf '%02d' "$i")-$shot.mp4" || die "处理 $shot 失败"
+    i=$((i+1))
+  done
+  say "片尾卡"
+  ffmpeg_run -y -v error -f lavfi -i "color=c=0x11111b:s=1920x1080:d=3" -vf \
+"drawtext=fontfile=$font:text='谢谢观看':x=(w-text_w)/2:y=(h-text_h)/2-30:fontsize=72:fontcolor=0xcdd6f4,\
+drawtext=fontfile=$font:text='cjreg · 仓颉私有仓':x=(w-text_w)/2:y=(h-text_h)/2+70:fontsize=32:fontcolor=0x9399b2,\
+fade=in:0:20,fade=out:st=2.5:d=0.5" -r 30 -c:v libx264 -crf 18 -pix_fmt yuv420p "$tmp/99-outro.mp4"
+  rm -f "$tmp/list.txt"
+  for f in "$tmp"/*.mp4; do echo "file '$f'" >> "$tmp/list.txt"; done
+  say "拼接并挂静音音轨（配音后替换即可）"
+  ffmpeg_run -y -v error -f concat -safe 0 -i "$tmp/list.txt" \
+    -f lavfi -i anullsrc=r=48000:cl=stereo -shortest \
+    -c:v copy -c:a aac -b:a 128k -movflags +faststart "$out" || die "成片合成失败"
+  rm -rf "$tmp"
+  local total; total=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$out" | cut -d. -f1)
+  say "完成：$out（${total}s，$(ls "$REC"/*.mp4 | wc -l) 个素材文件）"
+}
+
 cmd_list() { ls -la "$REC" 2>/dev/null | tail -n +2; }
 
 case "${1:-help}" in
@@ -304,6 +372,7 @@ case "${1:-help}" in
   timeline) cmd_timeline ;;
   pip)      cmd_pip "${2:?usage: pip <main-shot> <pip-shot> <out-shot> [title]}" "${3:?}" "${4:?}" "${5:-终端}" ;;
   preview)  cmd_preview ;;
+  final)    cmd_final "${2:-final}" ;;
   list)     cmd_list ;;
   *)        sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac

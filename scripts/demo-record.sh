@@ -160,13 +160,14 @@ cmd_timeline() {
     echo
     echo "| 镜头 | 轨 | 素材 | 时长(s) | 画面内容 | 配音提示（demo-video.md §3） |"
     echo "|---|---|---|---|---|---|"
-    local label
-    for f in "$REC"/*.mp4; do
+    local label shot order
+    order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs term-03-publish web-03-pkgs web-04-upstreams term-04-multirepo web-04-target web-05-org term-05-permission web-06-me web-07-logs term-07-audit-api term-08-delete}"
+    for shot in $order; do
+      local f="$REC/$shot.mp4"
       [ -f "$f" ] || continue
-      local base; base=$(basename "$f" .mp4)
+      local base="$shot"
       local dur; dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$f" 2>/dev/null | cut -d. -f1)
       local track="终端"; case "$base" in web-*) track="Web 界面";; esac
-      local shot; shot=$(printf '%s' "$base" | sed 's/^[a-z]*-//')
       case "$shot" in
         02-deploy)  label="部署（容器健康 / 数据卷 / 重启策略）" ;;
         03-portal)  label="门户首页与内置帮助" ;;
@@ -189,6 +190,24 @@ cmd_timeline() {
   say "已生成 $out"
 }
 
+cmd_preview() {  # 按演示顺序拼接成片（各轨分辨率不同，统一 pad 到 1080p）
+  local order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs term-03-publish web-03-pkgs web-04-upstreams term-04-multirepo web-04-target web-05-org term-05-permission web-06-me web-07-logs term-07-audit-api term-08-delete}"
+  local out="$REC/preview-all.mp4" args=() fc="" n=0
+  for shot in $order; do
+    [ -f "$REC/$shot.mp4" ] || { warn "缺素材：$shot.mp4（跳过）"; continue; }
+    args+=(-i "$REC/$shot.mp4")
+    fc="$fc[$n:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1[v$n];"
+    n=$((n+1))
+  done
+  [ "$n" -gt 0 ] || die "没有可拼接的素材"
+  local labels=""; for i in $(seq 0 $((n-1))); do labels="$labels[v$i]"; done
+  fc="${fc}${labels}concat=n=$n:v=1:a=0[out]"
+  say "拼接 $n 格 → $out"
+  ffmpeg_run -y -v error "${args[@]}" -filter_complex "$fc" -map "[out]" \
+    -c:v libx264 -crf 18 -pix_fmt yuv420p -movflags +faststart "$out"
+  say "完成：$out（$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$out" | cut -d. -f1)s）"
+}
+
 cmd_list() { ls -la "$REC" 2>/dev/null | tail -n +2; }
 
 case "${1:-help}" in
@@ -198,6 +217,7 @@ case "${1:-help}" in
   web|web-admin|web-user) shot_web "$1" "${2:?usage: $1 <shot> <path> [secs] [user] [pass]}" "${3:?path required}" "${4:-8}" "${5:-}" "${6:-}" ;;
   convert)  cmd_convert ;;
   timeline) cmd_timeline ;;
+  preview)  cmd_preview ;;
   list)     cmd_list ;;
   *)        sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac

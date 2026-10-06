@@ -36,6 +36,10 @@ CJREG_SEED_DEMO=1 ./target/release/bin/ystyle::cjreg serve -d .smoke/auth-data -
 - 源仓内的 `docker-compose.yml` 默认端口 8060、容器名 `cjreg-dev`，供本机开发/新机器自建，**不会抢占生产容器名 `cjreg`**。
 - 迁移记录：2026-10-06 由 `cjreg/data` 迁入 `~/docker/cjreg/data`（前后逐文件 sha256 校验一致）；
   旧目录归档为 `~/docker/backups/cjreg-data-20261006`（48M），仅作回滚快照，不要再当生产数据使用。
+- ⚠️ **不要把 `bstorm` 依赖降回 1.4.9**：生产实例用 `bstorm 1.4.10`（→ badgercj `1.6.20`）。
+  关闭钩子落盘修复 `bb4fd92`（宿主钩子抛异常不再吃掉 `close()` 落盘）只随 badgercj **1.6.20** 发布，
+  `bstorm 1.4.9 → badgercj 1.6.19` 不含该修复——2026-10-06 迁移重启时 7 个历史验收探针上游"复活"即此故；
+  降回去会重新引入"停机丢最近写入"。
 
 > **凭据、客户端配置（`~/.cjpm/` 三文件切换）、发版闸门**统一记在工作区 `../AGENTS.md` 的「私有仓（cjreg）」章节
 > ——刻意不写在本文件里：本文件受 git 跟踪，口令有被提交/推送的风险。

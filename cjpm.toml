@@ -21,7 +21,7 @@
   "semver" = "0.0.3"
   "pbkdf2" = "1.0.0"
   "tang" = "1.0.5"
-  "bstorm" = "1.4.9"
+  "bstorm" = "1.4.10"
   "graph" = "1.0.1"
   "gjson" = "1.2.2"
   # 制品（.cjp = gzip + tar）内的 README / cjpm.toml 提取：tar 用自研 tar-cj（ystyle::tar）

@@ -261,3 +261,9 @@ bash scripts/demo-record.sh timeline                 # 生成 docs/demo-record-t
   重录发布计划这组镜头前，先 `reset-upstream` + `prepare`，再按 创建计划 → 执行推送 → 空站结果 的顺序录。
 - 录制用的 Chrome 需常驻：`google-chrome-stable --headless=new --remote-debugging-port=9222 …`
   （在本工作区里用后台任务方式起才稳，脚本内的自动拉起会被进程组清理带走）。
+- **后台类镜头（`web-admin` / `web-ops`）必须带管理员口令**，否则拿不到登录态、会录成登录页：
+  口令走 `CJREG_LIVE_ADMIN_PASS`（或 `~/.cjreg-live.env`，chmod 600）——**本仓是公开仓，口令不许进仓**：
+
+  ```shell
+  CJREG_LIVE_ADMIN_PASS='<生产管理员口令>' bash scripts/demo-record.sh web-admin 03-pkgs /packages 9
+  ```

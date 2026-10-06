@@ -9,6 +9,7 @@
 | web-03-portal | Web 界面 | `.demo/recordings/web-03-portal.mp4` | 5 | web-03-portal | 见 §3 对应镜头 |
 | web-03-packages | Web 界面 | `.demo/recordings/web-03-packages.mp4` | 5 | web-03-packages | 见 §3 对应镜头 |
 | web-03-docs | Web 界面 | `.demo/recordings/web-03-docs.mp4` | 4 | web-03-docs | 见 §3 对应镜头 |
+| term-03-resolve | 终端 | `.demo/recordings/term-03-resolve.mp4` | 10 | term-03-resolve | 见 §3 对应镜头 |
 | pip-03-publish | 同屏（画中画） | `.demo/recordings/pip-03-publish.mp4` | 6 | 发布同屏：终端 cjpm publish ＋ 后台包管理（画中画） | 见 §3 对应镜头 |
 | web-04-upstreams | Web 界面 | `.demo/recordings/web-04-upstreams.mp4` | 5 | web-04-upstreams | 见 §3 对应镜头 |
 | web-04-plan-list | Web 界面 | `.demo/recordings/web-04-plan-list.mp4` | 5 | web-04-plan-list | 见 §3 对应镜头 |

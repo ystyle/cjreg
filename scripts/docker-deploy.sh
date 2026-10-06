@@ -6,6 +6,9 @@
 #   CJREG_PORT=8060 ADMIN_USER=admin ADMIN_PASS='<强口令>' bash scripts/docker-deploy.sh
 #
 # 说明：镜像只打包宿主构建产物（见 Dockerfile 顶部说明），因此本脚本必须与仓颉工具链同机运行。
+#
+# ⚠️ 本机团队私有仓的生产实例不归本脚本管：它在生产目录 ~/docker/cjreg（宿主 8066、容器名 cjreg）。
+#    本脚本按仓内 compose 起的是 cjreg-dev（默认 8060），用于开发验证或新机器自建。
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)

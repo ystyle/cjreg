@@ -1,15 +1,48 @@
 # Docker 部署（默认）
 
-推荐用 Docker Compose 部署 cjreg：一条命令起服务，卷即数据，升级只需换镜像。
+推荐用容器部署 cjreg：卷即数据，升级只需换镜像。
 
 ## 1. 前置
 
-- Docker 24+ 与 Docker Compose v2
-- **仓颉工具链**（`cjc` / `cjpm` 1.1.3）—— 镜像采用「宿主编译、镜像打包」策略，
-  因为 cjreg 通过 path 依赖引用 `../cjxt`，容器内自构建需要额外准备兄弟仓库与工具链镜像
-  （与同系列仓颉项目忆时塔/集思阁保持一致）
+- **方式一（现成镜像）**：只需要 Docker 24+ —— 镜像已发布在 `ghcr.io/ystyle/cjreg`
+- **方式二（源码构建镜像）**：另需**仓颉工具链**（`cjc` / `cjpm` 1.1.3），
+  因为镜像采用「宿主编译、镜像打包」策略（cjreg 通过 path 依赖引用 `../cjxt`，
+  容器内自构建需要额外准备兄弟仓库与工具链镜像）
 
-## 2. 一键部署
+## 2. 直接用现成镜像（推荐）
+
+```shell
+mkdir -p ~/cjreg/data
+# 初始化（只需一次）：创建首个管理员 + 默认官方上游 + 生成 cjreg.toml
+docker run --rm -v ~/cjreg/data:/data ghcr.io/ystyle/cjreg:latest \
+  /app/cjreg init -d /data --username admin --password '<强口令>'
+# 启动
+docker run -d --name cjreg -p 8060:8060 -v ~/cjreg/data:/data --restart unless-stopped \
+  ghcr.io/ystyle/cjreg:latest
+# 门户 http://localhost:8060/    管理后台 http://localhost:8060/admin
+```
+
+等价 Compose（推荐用于长期运行；`stop_grace_period` 给关闭落盘留时间）：
+
+```yaml
+services:
+  cjreg:
+    image: ghcr.io/ystyle/cjreg:latest
+    container_name: cjreg
+    ports: ["8060:8060"]
+    volumes: ["./data:/data"]
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      cjHeapSize: 2GB
+    stop_grace_period: 30s
+```
+
+- 镜像公开（`linux/amd64`），内置 Web 静态资源；容器以 **uid 1000** 运行，数据目录属主需可写。
+- 数据全在 `/data`：`cjreg.db` + `blobs/` + `cjreg.toml`；备份 = 拷贝目录，迁移 = 换机器。
+- 发布大包（>30MB）按机器内存调 `cjHeapSize`。
+
+## 3. 从源码构建镜像（一键）
 
 ```shell
 git clone https://atomgit.com/ystyle/cjreg && cd cjreg
@@ -20,7 +53,7 @@ bash scripts/docker-deploy.sh
 脚本做的事：编译 → `docker build` → 首次 `init`（创建管理员 + 默认上游 + 生成 `cjreg.toml`）→
 `docker compose up -d` → 健康检查并打印访问地址。
 
-## 3. 分步部署
+## 4. 分步部署
 
 ```shell
 # 1) 宿主编译（产出 target/release/bin/ystyle::cjreg）

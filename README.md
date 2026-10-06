@@ -38,7 +38,24 @@ cjpm test -j 16 --no-progress
 
 ## 快速开始（私有仓）
 
-**方式一：Docker Compose（推荐）**
+**方式一：直接用现成镜像（最快，无需仓颉工具链）**
+
+```bash
+mkdir -p ~/cjreg/data
+# 初始化：创建首个管理员 + 默认官方上游 + 生成 cjreg.toml（只需一次）
+docker run --rm -v ~/cjreg/data:/data ghcr.io/ystyle/cjreg:latest \
+  /app/cjreg init -d /data --username admin --password 'YourPass'
+# 启动
+docker run -d --name cjreg -p 8060:8060 -v ~/cjreg/data:/data --restart unless-stopped \
+  ghcr.io/ystyle/cjreg:latest
+# 门户 http://localhost:8060/    管理后台 http://localhost:8060/admin
+```
+
+> 镜像 `ghcr.io/ystyle/cjreg`（公开，linux/amd64）已内置 Web 静态资源；数据全部在挂载的 `/data`
+> （`cjreg.db` + `blobs/` + `cjreg.toml`），容器以 uid 1000 运行、数据目录属主需可写。
+> 发布大包（>30MB）按机器内存加 `-e cjHeapSize=4GB`。
+
+**方式二：Docker Compose（源码构建）**
 
 ```bash
 git clone https://atomgit.com/ystyle/cjreg && cd cjreg
@@ -47,7 +64,7 @@ bash scripts/docker-deploy.sh        # 编译 → 构建镜像 → init → 启�
 # 门户 http://localhost:8060/    管理后台 http://localhost:8060/admin
 ```
 
-**方式二：手动（裸机 / systemd）**
+**方式三：手动（裸机 / systemd）**
 
 ```bash
 # 1. 构建

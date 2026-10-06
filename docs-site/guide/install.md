@@ -8,7 +8,8 @@
 |---|---|
 | 静态二进制 | `--static` 编译，无运行时依赖，单文件即可运行（推荐） |
 | 裸机 + systemd | 用 `ExecStart=` 起 `serve`，配合 `Restart=always` |
-| 容器 | `Dockerfile` / `docker-compose.yml` 规划中（见「决赛迭代计划」） |
+| 容器（现成镜像） | `docker run ghcr.io/ystyle/cjreg:latest`，无需仓颉工具链（见「Docker 部署」） |
+| 容器（源码构建） | 仓库内 `Dockerfile` / `docker-compose.yml`：宿主编译 → 镜像打包 |
 
 ## 命令
 

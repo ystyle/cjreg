@@ -203,7 +203,11 @@ cmd_timeline() {
       [ -f "$f" ] || continue
       local base="$shot"
       local dur; dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$f" 2>/dev/null | cut -d. -f1)
-      local track="终端"; case "$base" in web-*) track="Web 界面";; esac
+      local track="终端"
+      case "$base" in
+        web-*) track="Web 界面" ;;
+        pip-*) track="同屏（画中画）" ;;
+      esac
       case "$shot" in
         02-deploy)  label="部署（容器健康 / 数据卷 / 重启策略）" ;;
         03-portal)  label="门户首页与内置帮助" ;;

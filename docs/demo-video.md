@@ -1,8 +1,7 @@
 # 演示视频脚本（初赛/决赛通用）
 
 > **成片已发布**：https://www.bilibili.com/video/BV1e9pw6WELk/
-> 录制做法（双轨录制 / 仪表盘背景同屏 / 字幕与转场）与逐格素材见本文档 §7，可用
-> `bash scripts/demo-record.sh {prepare|term|web|web-ops|pip|preview|final|timeline}` 重录或重出片。
+> 录制与重出片的做法见本文档 §7；脚本入口 `bash scripts/demo-record.sh`（无参数打印用法）。
 
 > 目标时长 **4:30–5:00**，1920×1080 / 30fps，中文解说 + 中文字幕。
 > 一条命令准备演示环境：`bash scripts/demo-data.sh`（细节见 §2）。
@@ -232,3 +231,33 @@ CJREG_DEMO_PORT=18080 CJREG_DEMO_RESET=1 bash scripts/demo-data.sh   # 本地双
 # 或直接用发布镜像
 docker pull ghcr.io/ystyle/cjreg:v0.1.0
 ```
+
+## 7. 录制与出片（本仓做法）
+
+成片分两条轨道录制，全部脚本化、可逐格重录：
+
+| 轨 | 工具 | 要点 |
+|---|---|---|
+| Web 界面 | `scripts/cdp-record.py`（自建） | 连常驻 Chrome 的 CDP，定时 `Page.captureScreenshot(format=png)` 抓**无损**帧（≈10fps），`Emulation.setDeviceMetricsOverride` 指定 1920×1080。**不用** `agent-browser record`：它走 CDP screencast 的 JPEG 通道，页面里 1px 的浅色边框（输入框/表格线/卡片描边）会被压缩抹掉 |
+| 终端 | `asciinema` + `agg` | 录 `.cast` 后渲染 GIF 再转 mp4；工具装在工作区 `.tools/`（独立 venv + 静态二进制），不需要系统安装 |
+| 同屏（画中画） | `demo-record.sh pip` | **仪表盘背景 + 终端小窗**（`CJREG_PIP_SCALE` 调小窗大小）；背景定格、终端才动，操作与界面结果天然分成相邻两格 |
+
+常用命令（直接跑 `bash scripts/demo-record.sh` 会打印完整用法）：
+
+```shell
+bash scripts/demo-record.sh prepare                  # 就绪：清空演示上游站 + 造数 + 同步空站 Token 到上游
+bash scripts/demo-record.sh term 02-deploy           # 终端镜头（scripts/demo-shots/term-*.sh）
+bash scripts/demo-record.sh web-admin 03-pkgs /packages 9      # 后台页（带管理员登录态）
+bash scripts/demo-record.sh web-ops 04-plan-create /publish-plans/create 20   # 按 scripts/demo-ops/*.ops 逐条操作界面
+bash scripts/demo-record.sh pip web-dashboard web-dashboard term-04-resolve pip-04-resolve "cjpm update — 多仓解析"
+bash scripts/demo-record.sh preview                  # 按内置顺序拼接成 preview-all.mp4
+bash scripts/demo-record.sh final                    # 片头卡 + 每格字幕条 + 交叉淡化 + 静音音轨（配音直接替换）
+bash scripts/demo-record.sh timeline                 # 生成 docs/demo-record-timeline.md（配音时间轴）
+```
+
+- 素材与产物在 `.demo/recordings/`（**不进 git**）；镜头脚本 `scripts/demo-shots/*.sh`、
+  界面操作脚本 `scripts/demo-ops/*.ops`、脚手架 `scripts/demo-record.sh`、录制器 `scripts/cdp-record.py` 都在仓里。
+- **重录顺序有依赖**：演示空站一旦被推送过，目标仓对照就会判成「无需发布」——
+  重录发布计划这组镜头前，先 `reset-upstream` + `prepare`，再按 创建计划 → 执行推送 → 空站结果 的顺序录。
+- 录制用的 Chrome 需常驻：`google-chrome-stable --headless=new --remote-debugging-port=9222 …`
+  （在本工作区里用后台任务方式起才稳，脚本内的自动拉起会被进程组清理带走）。

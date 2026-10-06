@@ -240,13 +240,19 @@ cmd_pip() {  # <主画面before> <主画面after> <小窗镜头> <输出名> [�
   # 小窗尺寸可调：背景是仪表盘（氛围），终端才是看点，所以放大到 1180 宽（约 61% 屏宽）
   local tw="${CJREG_PIP_SCALE:-1180}"
   local pw=$((tw + 32)) th=46
-  local win="[1:v]scale=$tw:-2,pad=$pw:ih+$((th + 30)):16:$((th + 18)):color=0x181825,\
-drawbox=x=16:y=$((th - 12)):w=$tw:h=$th:color=0x313244:t=fill,\
-drawbox=x=36:y=$((th + 5)):w=15:h=15:color=0xf38ba8:t=fill,\
-drawbox=x=60:y=$((th + 5)):w=15:h=15:color=0xf9e2af:t=fill,\
-drawbox=x=84:y=$((th + 5)):w=15:h=15:color=0xa6e3a1:t=fill,\
-drawbox=x=16:y=$((th + 18)):w=$((tw + 16)):h=ih-30:color=0x585b70:t=2,\
-drawtext=fontfile=$font:text='$title_esc':x=112:y=$((th - 2)):fontsize=26:fontcolor=0xcdd6f4[t];\
+  # 布局（相对 pad 左上角，pad 顶部留 16px 外边距）：
+  #   标题栏 y 16..16+th+2 ；终端内容从 y = th+18 开始 ；边框与内容对齐
+  #   —— 上一版把标题栏画到 th-12..th+34，正好压在内容边框上（文字与线贴一起）
+  local bar_y=16 bar_h=$((th + 2)) cont_y=$((th + 18))
+  local dot_y=$((bar_y + (bar_h - 15) / 2))
+  local txt_y=$((bar_y + (bar_h - 26) / 2 + 1))
+  local win="[1:v]scale=$tw:-2,pad=$pw:ih+$((th + 30)):16:$cont_y:color=0x181825,\
+drawbox=x=16:y=$bar_y:w=$tw:h=$bar_h:color=0x313244:t=fill,\
+drawbox=x=36:y=$dot_y:w=15:h=15:color=0xf38ba8:t=fill,\
+drawbox=x=60:y=$dot_y:w=15:h=15:color=0xf9e2af:t=fill,\
+drawbox=x=84:y=$dot_y:w=15:h=15:color=0xa6e3a1:t=fill,\
+drawbox=x=16:y=$cont_y:w=$((tw + 16)):h=ih-30:color=0x585b70:t=2,\
+drawtext=fontfile=$font:text='$title_esc':x=112:y=$txt_y:fontsize=26:fontcolor=0xcdd6f4[t];\
 [0:v][t]overlay=W-w-40:H-h-40[out]"
   local sb="$REC/.pip-b-$out_shot.png" sa="$REC/.pip-a-$out_shot.png"
   pip_still "$mbf" "$sb" || die "抽 before 定帧失败"

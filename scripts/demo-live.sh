@@ -222,24 +222,30 @@ PY
   say "3/5 注册演示上游（幂等；priority=50 低于 official 的 0，不影响真实回源）"
   [ -n "$UP_FROM_MAIN" ] || die "无法确定主站容器内可达的宿主地址：请设 CJREG_LIVE_HOST_IP 或 CJREG_LIVE_UPSTREAM_FROM_MAIN"
   echo "    上游地址用主站容器视角：$UP_FROM_MAIN（宿主/浏览器视角是 $UP）"
-  read -r UP_ID UP_URL <<<"$(curl -s -m 8 "$MAIN/api/admin/upstreams" -H "$H_MAIN" | python3 -c "
+  read -r UP_ID UP_URL UP_ASTARGET <<<"$(curl -s -m 8 "$MAIN/api/admin/upstreams" -H "$H_MAIN" | python3 -c "
 import sys,json
 for u in json.load(sys.stdin):
     if u['name']=='$UP_NAME':
-        print(u['id'], u['url']); break
+        print(u['id'], u['url'], u.get('asTarget', True)); break
 ")"
-  if [ -n "${UP_ID:-}" ] && [ "${UP_URL:-}" = "$UP_FROM_MAIN" ]; then
-    echo "    上游 $UP_NAME 已存在且地址正确（id=$UP_ID），跳过注册"
-  else
-    if [ -n "${UP_ID:-}" ]; then
-      echo "    上游 $UP_NAME 地址需修正（$UP_URL → $UP_FROM_MAIN），删除后重建"
-      curl -s -o /dev/null -X DELETE "$MAIN/api/admin/upstreams/$UP_ID" -H "$H_MAIN"
-      UP_ID=""
-    fi
+  if [ -n "${UP_ID:-}" ] && [ "${UP_URL:-}" != "$UP_FROM_MAIN" ]; then
+    echo "    上游 $UP_NAME 地址需修正（$UP_URL → $UP_FROM_MAIN），删除后重建"
+    curl -s -o /dev/null -X DELETE "$MAIN/api/admin/upstreams/$UP_ID" -H "$H_MAIN"
+    UP_ID=""
+  fi
+  if [ -z "${UP_ID:-}" ]; then
+    # 演示上游要能被发布计划选中：显式给 as_target=true（新建上游默认是 false）
     UP_ID=$(curl -s -m 8 -X POST "$MAIN/api/admin/upstreams" -H "$H_MAIN" -H 'Content-Type: application/json' \
-      -d "{\"name\":\"$UP_NAME\",\"url\":\"$UP_FROM_MAIN\",\"priority\":\"50\"}" \
+      -d "{\"name\":\"$UP_NAME\",\"url\":\"$UP_FROM_MAIN\",\"priority\":\"50\",\"as_target\":true}" \
       | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
-    [ -n "$UP_ID" ] && echo "    已注册 $UP_NAME → $UP_FROM_MAIN（id=$UP_ID）" || warn "上游注册失败（可能重名），请在管理后台确认"
+    [ -n "$UP_ID" ] && echo "    已注册 $UP_NAME → $UP_FROM_MAIN（id=$UP_ID，asTarget=true）" || warn "上游注册失败（可能重名），请在管理后台确认"
+  elif [ "${UP_ASTARGET:-True}" != "True" ]; then
+    # 它得能被发布计划选中，否则演示时下拉里没有目标仓
+    curl -s -o /dev/null -X PUT "$MAIN/api/admin/upstreams/$UP_ID" -H "$H_MAIN" -H 'Content-Type: application/json' \
+      -d '{"asTarget":true}'
+    echo "    上游 $UP_NAME 已存在（id=$UP_ID），已打开「可作目标仓」"
+  else
+    echo "    上游 $UP_NAME 已存在且地址/开关正确（id=$UP_ID），跳过"
   fi
   [ -n "$UP_ID" ] && curl -s -o /dev/null -X POST "$MAIN/api/admin/upstreams/$UP_ID/test?name=mathUtils&organization=demo" -H "$H_MAIN" \
     && echo "    已跑一次连通性测试（上游管理页可见结果，同时留一条审计）"
@@ -280,13 +286,13 @@ EOF
 cmd_reset_upstream() {
   [ -d "$UP_DIR" ] || die "演示上游站目录不存在：$UP_DIR"
   guard_url "$UP"
-  say "1/4 停止演示上游站"
+  say "1/5 停止演示上游站"
   (cd "$UP_DIR" && docker compose down) 2>&1 | tail -2
-  say "2/4 清空数据目录（容器内 root，顺带把属主交给 uid 1000）"
+  say "2/5 清空数据目录（容器内 root，顺带把属主交给 uid 1000）"
   # 数据目录可能被 docker 以 root 创建过：用镜像内的 root 清理，避免宿主权限问题
   docker run --rm --user root -v "$UP_DIR/data:/data" cjreg:latest sh -c 'rm -rf /data/*; chown -R 1000:1000 /data' \
     || die "清空失败（检查 docker 与镜像 cjreg:latest 是否存在）"
-  say "3/4 重新初始化（$UP_USER / $UP_PASS）"
+  say "3/5 重新初始化（$UP_USER / $UP_PASS）"
   (cd "$UP_DIR" && docker compose run --rm cjreg /app/cjreg init -d /data --username "$UP_USER" --password "$UP_PASS") 2>&1 | tail -2
   python3 - "$UP_DIR/data/cjreg.toml" "$UP" <<'PY'
 import io, re, sys
@@ -296,9 +302,30 @@ s = re.sub(r'public_url = "[^"]*"', 'public_url = "%s"' % base, s)
 s = re.sub(r'permission_mode = "[^"]*"', 'permission_mode = "team"', s)
 io.open(p, 'w', encoding='utf-8').write(s)
 PY
-  say "4/4 启动"
+  say "4/5 启动"
   (cd "$UP_DIR" && docker compose up -d) 2>&1 | tail -2
   wait_health "$UP" 30 || die "演示上游站健康检查失败（cd $UP_DIR && docker compose logs）"
+  say "5/5 关闭它自身对官方仓的回源（真空站：被探测时不代理、不落库）"
+  UP_SESS=$(login "$UP" "$UP_USER" "$UP_PASS")
+  if [ -n "$UP_SESS" ]; then
+    OFF_ID=$(curl -s -m 8 "$UP/api/admin/upstreams" -H "Authorization: Bearer $UP_SESS" | python3 -c "
+import sys,json
+for u in json.load(sys.stdin):
+    if u['name']=='official':
+        print(u['id']); break
+")
+    if [ -n "$OFF_ID" ]; then
+      # init 建出来的 official 默认参与回源；空站要的是「本地为空就是空」——
+      # 否则别人来探测它的索引，它会替对方回源官方仓、把索引落进自己库里
+      curl -s -o /dev/null -X PUT "$UP/api/admin/upstreams/$OFF_ID" -H "Authorization: Bearer $UP_SESS" \
+        -H 'Content-Type: application/json' -d '{"proxyEnabled":false}'
+      echo "    official(proxyEnabled=false)：不走回源，探测它只会拿到 404"
+    else
+      warn "没找到 official 上游，跳过（该站可能不是 cjreg 默认初始化）"
+    fi
+  else
+    warn "登录演示上游站失败，跳过回源开关设置（可在它的「上游管理」里手工关）"
+  fi
   echo "    演示上游站已重建为空站：$UP（$UP_USER / $UP_PASS）"
 }
 

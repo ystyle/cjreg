@@ -70,6 +70,22 @@ cd ~/docker/cjreg && docker compose build && docker compose up -d
 **发布权限模式**：生产实例用 `permission_mode = "team"`（`effectivePermission` 里平台管理员直通 overwrite=3），
 所以**同一版本可以反复发**——这是预演发布必需的；`open` 模式对同版本不同 sha 会返 409 且不覆盖。
 
+## 上游的三个开关（读路径 / 写路径）
+
+`enabled` 是总闸；`proxyEnabled` 管**读路径**（是否参与回源 / 镜像同步；回源链走
+`proxySorted()` = enabled && proxyEnabled，解析诊断与重拉同步）；`asTarget` 管**写路径**
+（是否出现在发布计划「目标上游」下拉里，`planTargets()` = enabled && asTarget）。
+
+- **默认值分两层，别混**：字段默认 `true/true` —— bstorm 反序列化旧文档缺键即落字段默认值，
+  存量上游升级后行为逐字不变（单测 `testLegacyUpstreamDocKeepsBothSwitchesTrue` 守着）；
+  **新建上游**默认 `proxyEnabled=true / asTarget=false`（推送不可逆，目标仓要显式授权），
+  `init` 建出来的 `official` 同理 —— 官方仓默认参与回源，但默认不出现在目标下拉里。
+- 改上游用 `PUT /api/admin/upstreams/:id`（局部更新 enabled/proxyEnabled/asTarget/priority/
+  cacheTtl/authToken；url 不可改），列表与 `POST` 都带这两个字段；上游管理页有「能力」列 + 表单两个开关。
+- **为什么演示空站要关掉它自己的 official 回源**：目标仓开着回源时，它的索引端点会替查询方
+  回源官方仓并把索引落进自己库 → 生产做「目标仓对照」就会把它当成"目标仓已有"，把包判成
+  「无需发布」（`demo-live.sh reset-upstream` 会在重建后把空站的 `official.proxyEnabled` 关掉）。
+
 ## 演示环境（录屏 / 线下演示）
 
 两条路径，脚本分工明确（分镜与解说词见 `docs/demo-video.md` §2）：

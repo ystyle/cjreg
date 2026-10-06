@@ -8,6 +8,11 @@ import ystyle::cjreg.config.*
 import std.collection.*
 
 // 上游文档
+//
+// ⚠️ proxyEnabled / asTarget 的**字段默认值必须是 true**：bstorm 的 fromJson 先按字段
+// 默认值构造对象、再按 JSON 键赋值，旧文档里没有这两个键 → 读出来就是这里的默认值。
+// 若把它们写成 false，升级后存量上游会立刻停止回源 / 从发布计划下拉里消失。
+// 「新加的上游默认不允许作为目标仓」由 UpstreamService.add 的默认参数负责，不在这里。
 @Model
 public class UpstreamDoc {
     @Id public var id: Int64 = 0
@@ -19,6 +24,8 @@ public class UpstreamDoc {
     public var isOfficial: Bool = false
     public var priority: Int64 = 0
     public var lastSyncAt: Int64 = 0
+    public var proxyEnabled: Bool = true
+    public var asTarget: Bool = true
 }
 
 // bstorm 实现的 UpstreamStore（持久化）
@@ -57,6 +64,8 @@ public class BstormUpstreamStore <: UpstreamStore {
         doc.isOfficial = up.isOfficial
         doc.priority = up.priority
         doc.lastSyncAt = up.lastSyncAt
+        doc.proxyEnabled = up.proxyEnabled
+        doc.asTarget = up.asTarget
         this.storm.save(doc)
     }
 
@@ -101,6 +110,7 @@ public class BstormUpstreamStore <: UpstreamStore {
     }
 
     private func toUpstream(d: UpstreamDoc): Upstream {
-        Upstream(d.id, d.name, d.url, d.enabled, d.cacheTtl, d.authToken, d.isOfficial, d.priority, d.lastSyncAt)
+        Upstream(d.id, d.name, d.url, d.enabled, d.cacheTtl, d.authToken, d.isOfficial, d.priority, d.lastSyncAt,
+            proxyEnabled: d.proxyEnabled, asTarget: d.asTarget)
     }
 }

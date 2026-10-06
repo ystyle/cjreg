@@ -14,7 +14,7 @@ import std.collection.*
 @Test
 func testCacheIndexEntriesStampsCollectedAt() {
     let (proxy, store, _, ups) = makeProxyService()
-    let up = ups.enabledSorted()[0]
+    let up = ups.proxySorted()[0]
     let ndjson = makeIndexNDJSON("demo", "acme", "1.0.0", "abc123")
     proxy.cacheIndexEntries("acme", "demo", ndjson, up)
     let docs = store.listVersions("acme", "demo")
@@ -28,7 +28,7 @@ func testCacheIndexEntriesStampsCollectedAt() {
 @Test
 func testCacheIndexEntriesSkipsExisting() {
     let (proxy, store, _, ups) = makeProxyService()
-    let up = ups.enabledSorted()[0]
+    let up = ups.proxySorted()[0]
     let existing = PackageDoc()
     existing.organization = "acme"
     existing.name = "demo"

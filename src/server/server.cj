@@ -246,6 +246,7 @@ public func buildServer(
             app.put("/api/admin/packages/:id/restore", { ctx => adm.restorePackage(ctx) })
             app.get("/api/admin/upstreams", { ctx => adm.listUpstreams(ctx) })
             app.post("/api/admin/upstreams", { ctx => adm.addUpstream(ctx) })
+            app.put("/api/admin/upstreams/:id", { ctx => adm.updateUpstream(ctx) })
             app.delete("/api/admin/upstreams/:id", { ctx => adm.deleteUpstream(ctx) })
             app.post("/api/admin/upstreams/:id/test", { ctx => adm.testUpstream(ctx) })
             app.get("/api/admin/resolve", { ctx => adm.resolvePackage(ctx) })

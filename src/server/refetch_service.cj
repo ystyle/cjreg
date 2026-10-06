@@ -100,7 +100,7 @@ public func refetchVersion(proxy: ProxyService, doc: PackageDoc, force: Bool): R
         case None => ()
     }
     if (candidates.size == 0) {
-        for (u in proxy.upstreamSvc.enabledSorted()) {
+        for (u in proxy.upstreamSvc.proxySorted()) {
             candidates.add(u)
         }
     }

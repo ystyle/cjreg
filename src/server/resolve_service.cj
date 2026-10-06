@@ -73,7 +73,7 @@ public class ResolveService {
         }
 
         // 按优先级遍历上游
-        let ups = this.upstreamSvc.enabledSorted()
+        let ups = this.upstreamSvc.proxySorted()
         for (up in ups) {
             let ndjson = fetchIndex(org, name)
             if (ndjson.isNone()) {

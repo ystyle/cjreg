@@ -200,6 +200,10 @@ class UpstreamsPage <: Component {
     var formPriority = Signal<Int64>(0)
     var formCacheTtl = Signal<Int64>(86400)
     var formToken = Signal<String>("")
+    // 上游的两个正交开关。创建时的默认值：回源开、允许推送关 ——
+    // 推送不可逆（推错到官方中心仓无法撤销），新上游要显式授权才能当目标仓。
+    var formProxyEnabled = Signal<Bool>(true)
+    var formAsTarget = Signal<Bool>(false)
     var nameError = Signal<String>("")
     var urlError = Signal<String>("")
     var upForm = Form([])
@@ -247,6 +251,8 @@ class UpstreamsPage <: Component {
         this.formPriority.set(0)
         this.formCacheTtl.set(86400)
         this.formToken.set("")
+        this.formProxyEnabled.set(true)
+        this.formAsTarget.set(false)
         this.nameError.set("")
         this.urlError.set("")
         this.dialogVisible.set(true)
@@ -267,6 +273,8 @@ class UpstreamsPage <: Component {
                 this.formPriority.set(u.priority)
                 this.formCacheTtl.set(u.cacheTtl)
                 this.formToken.set(u.authToken)
+                this.formProxyEnabled.set(u.proxyEnabled)
+                this.formAsTarget.set(u.asTarget)
                 this.nameError.set("")
                 this.urlError.set("")
                 this.dialogVisible.set(true)
@@ -296,7 +304,8 @@ class UpstreamsPage <: Component {
         let url = this.formUrl.get()
         let upSvc = UpstreamService(st.upStore)
         if (this.dialogMode.get() == "create") {
-            match (upSvc.add(name, url, this.formPriority.get(), this.formToken.get(), this.formCacheTtl.get())) {
+            match (upSvc.add(name, url, this.formPriority.get(), this.formToken.get(), this.formCacheTtl.get(),
+                proxyEnabled: this.formProxyEnabled.get(), asTarget: this.formAsTarget.get())) {
                 case Some(u) =>
                     this.msg.set("已添加 ${u.name}")
                     st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "add upstream ${u.name}", "ok", nowMs())
@@ -304,7 +313,8 @@ class UpstreamsPage <: Component {
                     this.msg.set("添加失败（名称已存在？）")
             }
         } else {
-            if (upSvc.update(this.editingId, Option<Bool>.None, Some(this.formPriority.get()), Some(this.formCacheTtl.get()), Some(this.formToken.get()))) {
+            if (upSvc.update(this.editingId, Option<Bool>.None, Some(this.formPriority.get()), Some(this.formCacheTtl.get()), Some(this.formToken.get()),
+                proxyEnabled: Some(this.formProxyEnabled.get()), asTarget: Some(this.formAsTarget.get()))) {
                 this.msg.set("已更新上游 ${name}")
                 st.adminData.addLog(LogKind.Admin, sessionUid(ctx), sessionUsername(ctx), "update upstream ${name}", "ok", nowMs())
             } else {
@@ -413,6 +423,15 @@ class UpstreamsPage <: Component {
                     Tag([text("禁用")]).kind(ComponentKind.Info)
                 }
             }))
+            // 两个正交开关的呈现：回源 = 读路径（镜像同步）；可推送 = 写路径（发布计划目标）
+            .add(TableColumn<Upstream>().label("能力").width(150).render({ u, i =>
+                div([
+                    Tag([text(if (u.proxyEnabled) { "回源" } else { "不回源" })])
+                        .kind(if (u.proxyEnabled) { ComponentKind.Success } else { ComponentKind.Info }),
+                    Tag([text(if (u.asTarget) { "可推送" } else { "禁推送" })])
+                        .kind(if (u.asTarget) { ComponentKind.Warning } else { ComponentKind.Info }),
+                ], attrs: Some(HashMap<String, String>([("style", "display:flex;gap:6px;align-items:center;flex-wrap:nowrap;")])))
+            }))
             .add(TableColumn<Upstream>().label("优先级").accessor({ u => u.priority.toString() }).width(80))
             .add(TableColumn<Upstream>().label("缓存").accessor({ u => "${u.cacheTtl}s" }).width(90))
             .add(TableColumn<Upstream>().label("最后同步").accessor({ u => if (u.lastSyncAt > 0) { u.lastSyncAt.toString() } else { "-" } }).minWidth(110))
@@ -464,6 +483,12 @@ class UpstreamsPage <: Component {
                 .bindValue({ => this.formCacheTtl.get().toString() }),
             FormItem([Input().bind(this.formToken).placeholder("私有仓访问令牌").password()]).label("认证 Token（可选）")
                 .bindValue({ => this.formToken.get() }),
+            FormItem([Switch().bind(this.formProxyEnabled).activeText("回源").inactiveText("不回源")])
+                .label("参与回源（镜像同步）")
+                .bindValue({ => this.formProxyEnabled.get().toString() }),
+            FormItem([Switch().bind(this.formAsTarget).activeText("允许").inactiveText("不允许")])
+                .label("可作为发布计划目标仓")
+                .bindValue({ => this.formAsTarget.get().toString() }),
         ]).labelTop()
         this.upForm = form
         let dlg = Dialog([form])

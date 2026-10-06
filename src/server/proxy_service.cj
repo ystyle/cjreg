@@ -127,7 +127,7 @@ public class ProxyService {
             }
         }
         // 2. 回源上游（priority 顺序）
-        let ups = this.upstreamSvc.enabledSorted()
+        let ups = this.upstreamSvc.proxySorted()
         for (up in ups) {
             let url = buildIndexURL(up.url, name, org)
             if (url.isEmpty()) {
@@ -170,7 +170,7 @@ public class ProxyService {
             }
         }
         // 回源
-        let ups = this.upstreamSvc.enabledSorted()
+        let ups = this.upstreamSvc.proxySorted()
         for (up in ups) {
             let url = buildPackageURL(up.url, name, version, org)
             let body = this.fetchBytes(url, up.authToken)

@@ -867,7 +867,8 @@ public class AdminService {
             }
             sb.append("{\"id\":${u.id},\"name\":\"${u.name}\",\"url\":\"${u.url}\"," +
                 "\"enabled\":${u.enabled},\"isOfficial\":${u.isOfficial}," +
-                "\"priority\":${u.priority},\"cacheTtl\":${u.cacheTtl}}")
+                "\"priority\":${u.priority},\"cacheTtl\":${u.cacheTtl}," +
+                "\"proxyEnabled\":${u.proxyEnabled},\"asTarget\":${u.asTarget}}")
         }
         sb.append("]")
         writeJson(ctx, 200u16, sb.toString())
@@ -881,6 +882,10 @@ public class AdminService {
         var name = ""
         var url = ""
         var priorityStr = ""
+        // 两个正交开关的缺省：参与回源、**不**允许作为发布计划目标
+        // （推送不可逆，目标仓要显式授权；与 UpstreamService.add 的默认值一致）
+        var proxyEnabled = true
+        var asTarget = false
         let bb = ByteBuffer()
         bb.write(body.toArray())
         let r = JsonReader(bb)
@@ -895,6 +900,8 @@ public class AdminService {
                                 case "name" => name = r.readValue<String>()
                                 case "url" => url = r.readValue<String>()
                                 case "priority" => priorityStr = r.readValue<String>()
+                                case "proxy_enabled" => proxyEnabled = r.readValue<Bool>()
+                                case "as_target" => asTarget = r.readValue<Bool>()
                                 case _ => r.skip()
                             }
                         }
@@ -914,15 +921,78 @@ public class AdminService {
             return
         }
         let (upActorId, upActorName) = this.actorOf(ctx)
-        match (this.upstreamSvc.add(name, url, priority, "", 0)) {
+        match (this.upstreamSvc.add(name, url, priority, "", 0, proxyEnabled: proxyEnabled, asTarget: asTarget)) {
             case Some(u) =>
                 writeAudit(this.adminData, LogKind.Admin, upActorId, upActorName, "add_upstream", "ok", name, ctx,
-                    detail: "url=${url} priority=${priority}")
-                writeJson(ctx, 200u16, "{\"id\":${u.id},\"name\":\"${u.name}\",\"isOfficial\":${u.isOfficial}}")
+                    detail: "url=${url} priority=${priority} proxyEnabled=${proxyEnabled} asTarget=${asTarget}")
+                writeJson(ctx, 200u16, "{\"id\":${u.id},\"name\":\"${u.name}\",\"isOfficial\":${u.isOfficial}," +
+                    "\"proxyEnabled\":${u.proxyEnabled},\"asTarget\":${u.asTarget}}")
             case None =>
                 writeAudit(this.adminData, LogKind.Admin, upActorId, upActorName, "add_upstream", "failed", name, ctx,
                     error: "upstream name exists or invalid")
                 writeJson(ctx, 409u16, "{\"error\":\"upstream name exists or invalid\"}")
+        }
+    }
+
+    // PUT /api/admin/upstreams/:id —— 局部更新：body 里出现哪个字段就改哪个
+    // 支持 enabled / proxyEnabled / asTarget / priority / cacheTtl / authToken
+    // （启用开关与两个正交能力开关都走这里，脚本/CI 可自动配置）
+    public func updateUpstream(ctx: TangHttpContext): Unit {
+        if (!requireAdmin(ctx)) {
+            return
+        }
+        let id = match (Int64.tryParse(ctx.param("id").trimAscii())) {
+            case Some(n) => n
+            case None =>
+                writeJson(ctx, 400u16, "{\"error\":\"invalid upstream id (expect numeric id)\"}")
+                return
+        }
+        let body = String.fromUtf8(ctx.bodyRaw())
+        var enabled: ?Bool = None
+        var proxyEnabled: ?Bool = None
+        var asTarget: ?Bool = None
+        var priority: ?Int64 = None
+        var cacheTtl: ?Int64 = None
+        var authToken: ?String = None
+        let bb = ByteBuffer()
+        bb.write(body.toArray())
+        let r = JsonReader(bb)
+        try {
+            while (let Some(v) <- r.peek()) {
+                match (v) {
+                    case BeginObject =>
+                        r.startObject()
+                        while (r.peek() != EndObject) {
+                            let n = r.readName()
+                            match (n) {
+                                case "enabled" => enabled = Some(r.readValue<Bool>())
+                                case "proxyEnabled" => proxyEnabled = Some(r.readValue<Bool>())
+                                case "asTarget" => asTarget = Some(r.readValue<Bool>())
+                                case "priority" => priority = Some(r.readValue<Int64>())
+                                case "cacheTtl" => cacheTtl = Some(r.readValue<Int64>())
+                                case "authToken" => authToken = Some(r.readValue<String>())
+                                case _ => r.skip()
+                            }
+                        }
+                        r.endObject()
+                        break
+                    case _ => r.skip()
+                }
+            }
+        } catch (e: Exception) {
+            eprintln("[cjreg] 更新上游请求体解析失败: " + e.toString())
+            writeJson(ctx, 400u16, "{\"error\":\"invalid json body\"}")
+            return
+        }
+        let (actorId, actorName) = this.actorOf(ctx)
+        if (this.upstreamSvc.update(id, enabled, priority, cacheTtl, authToken, proxyEnabled: proxyEnabled, asTarget: asTarget)) {
+            writeAudit(this.adminData, LogKind.Admin, actorId, actorName, "update_upstream", "ok", "#${id}", ctx,
+                detail: "enabled=${enabled.isSome()} proxyEnabled=${proxyEnabled.isSome()} asTarget=${asTarget.isSome()}")
+            writeJson(ctx, 200u16, "{\"status\":\"ok\"}")
+        } else {
+            writeAudit(this.adminData, LogKind.Admin, actorId, actorName, "update_upstream", "failed", "#${id}", ctx,
+                error: "not found")
+            writeJson(ctx, 404u16, "{\"error\":\"upstream not found\"}")
         }
     }
 

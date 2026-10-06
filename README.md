@@ -188,6 +188,29 @@ app ──→ encryptUtils ──→ mathUtils, strUtils
      └─→ dataUtils   ──→ mathUtils, netUtils
 ```
 
+## 相关工具
+
+围绕仓颉多仓体系，同作者维护了两个配套命令行工具（均为公开仓库，与本仓口径一致）：
+
+- **[`cjdep`](https://atomgit.com/ystyle/cjdep)** —— 依赖与「口径」工具。查某个包在本机生效 registry 上的
+  最新版本、逐仓可解析情况，以及**哪些包需要发布**；发版与预演前的第一道核查：
+
+  ```shell
+  cjdep plan -r https://pkg.cangjie-lang.cn/registry   # 指定 registry，避免被本地缓存误导
+  ```
+
+- **[`cjpm-ws`](https://atomgit.com/ystyle/cjpm-ws)** —— cjpm workspace（多包产品）工具。统一成员版本号并按依赖
+  拓扑序发布，`check` 可作 CI 闸门：
+
+  ```shell
+  cjpm ws check <workspace-dir>     # 版本/依赖一致性检查（不齐退出码 1）
+  cjpm ws bump <ver> -w             # 物化版本号（默认 dry-run）
+  cjpm ws publish                   # 拓扑序批量发布（拒绝官方仓需显式确认）
+  ```
+
+> 与 cjreg 的对应关系：`/api/admin/resolve` 的逐仓命中链路对应 `cjdep` 的解析顺序；
+> 发布计划的目标仓推送与 `cjpm-ws publish` 的拓扑序一致 —— 两者可以互为验证。
+
 ## 技术选型
 
 - 存储：**bstorm**（badger-cj + gjson 的 JSON 文档库）+ 制品 blob 落盘（`dataDir/blobs`）

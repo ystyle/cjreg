@@ -104,11 +104,15 @@ git push origin v0.1.0-submission     # 决赛写差异说明时以此 tag 为�
 健康检查）、`scripts/docker-deploy.sh` 一键脚本；本地已实测「init → up → 健康 → `docker compose stop` 优雅关闭 → 重启数据留存」。
 
 **决赛增强**：
-- **自包含构建**：`Dockerfile.build` 多阶段（仓颉工具链镜像 + cjxt 源码/中心仓版本），使评审无需本地工具链即可构建；
+- **自包含构建**：已落地 `Dockerfile.build`（多阶段：容器内用 cjv 装官方 SDK → 编译 → 运行阶段同基础镜像）。
+  评审无需本地工具链：`docker build -f Dockerfile.build -t cjreg:selfbuild .`。
+  glibc 一致性由「两阶段同一基础镜像」保证（详见 `docs-site/deploy/docker.md` §5）；
 - **多架构镜像**：`linux/amd64` + `linux/arm64`（buildx + QEMU，或原生 arm runner）；
-- **镜像瘦身**：底座换 `debian:slim`（`liburing2`）/ distroless，记录体积对比（当前 ~500 MB）；
+- **镜像瘦身**（待做）：基线已记录 —— `ghcr.io/ystyle/cjreg:latest` = **507 MB**（archlinux + SDK 运行时）。
+  注意：换底座必须**构建阶段与运行阶段一起换**（glibc 一致性，见 `docs-site/deploy/docker.md` §5），
+  且换完要实测 `docker run` 能起（仓颉产物对 glibc 有下限要求）；
 - **发布流水线**：Release 触发 → 二进制 tar.gz + 推 `ghcr.io/<owner>/cjreg:<tag>`；CI 增加 Docker 冒烟（已就绪）；
-- **部署文档**：反向代理（Nginx/Caddy）+ HTTPS 示例、K8s 清单（可选）；
+- **部署文档**：反向代理（Nginx/Caddy）+ HTTPS 示例已写入 `docs-site/deploy/docker.md` §6；K8s 清单（可选）待做；
 - **文档站自动部署已提前完成**：`docs-deploy.yml` → GitHub Pages + 华为云 CDN 刷新
   （发布地址 <https://ystyle.top/cjreg/>），决赛可做多语言/版本化文档。
 

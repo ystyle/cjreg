@@ -1662,8 +1662,8 @@ func waitIndexesReady(probe: (String, String) -> IndexProbe,
     var pending = targets.size
     var waited: Int64 = 0
     var round: Int64 = 0
-    let t0 = nowMsUtc()  // 用**实际经过时间**计时：等待节奏里 step 可能为 0（紧凑/测试节奏），
-    // 靠 `waited += step` 累加会让总超时永远不触发（忙等不退出）—— 这是实测踩到的缺陷。
+    let t0 = nowMsUtc()  // 用**实际经过时间**计时：等待节奏里 step 可以为 0（紧凑/测试节奏），
+    // 此时 `waited += step` 不增长，总超时（pollTimeoutSec）永远不会触发。
     while (pending > 0) {
         if (shouldCancel()) {
             return (ready, WAIT_CANCELLED)

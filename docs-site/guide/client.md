@@ -2,6 +2,8 @@
 
 cjreg 与官方中心仓协议互通，**cjpm 客户端零改动**——只需把 registry 指向本服务。
 
+![客户端按仓库配置解析到的包](/images/packages-public.webp)
+
 ## 1. 仓库配置 `cangjie-repo.toml`
 
 放在项目根目录（与 `cjpm.toml` 同级）：

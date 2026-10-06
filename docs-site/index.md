@@ -31,6 +31,8 @@ features:
     details: 嵌入式 bstorm（badger-cj）替代外部数据库，数据目录即数据；备份=拷贝目录，迁移=换机器；静态编译、优雅关闭。
 ---
 
+![公开门户：包列表与搜索](/images/portal-home.webp)
+
 ## 60 秒上手
 
 ```shell

@@ -1,5 +1,8 @@
 # 权限模型
 
+![权限：终端越权发布被拒（403）](/images/permission.webp)
+![三级删除：软删除 / 恢复 / 硬删除](/images/delete-versions.webp)
+
 ## 两种模式
 
 由 `cjreg.toml` 的 `permission_mode` 控制：

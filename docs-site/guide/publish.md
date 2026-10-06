@@ -1,5 +1,8 @@
 # 发布包
 
+![发布：终端 cjpm publish 与后台同屏（仪表盘为背景）](/images/publish-terminal.webp)
+![发布结果：包管理里已出现该版本](/images/packages-published.webp)
+
 ## 发布协议
 
 `POST /pkg/:name[?organization=]`，请求体为官方二进制拼接格式：

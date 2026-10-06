@@ -2,6 +2,9 @@
 
 **cjreg** 是仓颉私有中心仓与多仓体系：一个静态二进制同时提供「官方协议互通的服务端 + 管理后台 + 公开门户 + 个人门户」。
 
+![管理后台：仪表盘（仓库运行概览）](/images/dashboard.webp)
+![公开门户：浏览与搜索仓颉包](/images/packages-public.webp)
+
 ## 1. 安装
 
 **推荐 Docker Compose 一键部署**（详见 [Docker 部署](/deploy/docker)）：

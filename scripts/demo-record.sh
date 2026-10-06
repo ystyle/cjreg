@@ -197,7 +197,7 @@ cmd_timeline() {
     echo "| 镜头 | 轨 | 素材 | 时长(s) | 画面内容 | 配音提示（demo-video.md §3） |"
     echo "|---|---|---|---|---|---|"
     local label shot order
-    order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs pip-03-publish pip-04-resolve web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs pip-07-audit-api web-08-delete}"
+    order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs pip-03-publish web-03-pkgs-after pip-04-resolve web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs pip-07-audit-api web-08-delete}"
     for shot in $order; do
       local f="$REC/$shot.mp4"
       [ -f "$f" ] || continue
@@ -237,13 +237,16 @@ cmd_pip() {  # <主画面before> <主画面after> <小窗镜头> <输出名> [�
   local font=/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc
   local title_esc="${title//:/\\:}"   # ffmpeg filter 里 : 是分隔符，标题必须转义
   local dur; dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$pf")
-  local win="[1:v]scale=720:-2,pad=752:ih+72:16:40:color=0x181825,\
-drawbox=x=16:y=16:w=720:h=28:color=0x313244:t=fill,\
-drawbox=x=30:y=24:w=9:h=9:color=0xf38ba8:t=fill,\
-drawbox=x=45:y=24:w=9:h=9:color=0xf9e2af:t=fill,\
-drawbox=x=60:y=24:w=9:h=9:color=0xa6e3a1:t=fill,\
-drawbox=x=16:y=40:w=736:h=ih-24:color=0x585b70:t=2,\
-drawtext=fontfile=$font:text='$title_esc':x=82:y=21:fontsize=16:fontcolor=0xcdd6f4[t];\
+  # 小窗尺寸可调：背景是仪表盘（氛围），终端才是看点，所以放大到 1180 宽（约 61% 屏宽）
+  local tw="${CJREG_PIP_SCALE:-1180}"
+  local pw=$((tw + 32)) th=46
+  local win="[1:v]scale=$tw:-2,pad=$pw:ih+$((th + 30)):16:$((th + 18)):color=0x181825,\
+drawbox=x=16:y=$((th - 12)):w=$tw:h=$th:color=0x313244:t=fill,\
+drawbox=x=36:y=$((th + 5)):w=15:h=15:color=0xf38ba8:t=fill,\
+drawbox=x=60:y=$((th + 5)):w=15:h=15:color=0xf9e2af:t=fill,\
+drawbox=x=84:y=$((th + 5)):w=15:h=15:color=0xa6e3a1:t=fill,\
+drawbox=x=16:y=$((th + 18)):w=$((tw + 16)):h=ih-30:color=0x585b70:t=2,\
+drawtext=fontfile=$font:text='$title_esc':x=112:y=$((th - 2)):fontsize=26:fontcolor=0xcdd6f4[t];\
 [0:v][t]overlay=W-w-40:H-h-40[out]"
   local sb="$REC/.pip-b-$out_shot.png" sa="$REC/.pip-a-$out_shot.png"
   pip_still "$mbf" "$sb" || die "抽 before 定帧失败"
@@ -272,7 +275,7 @@ drawtext=fontfile=$font:text='$title_esc':x=82:y=21:fontsize=16:fontcolor=0xcdd6
 }
 
 cmd_preview() {  # 按演示顺序拼接成片（各轨分辨率不同，统一 pad 到 1080p）
-  local order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs pip-03-publish pip-04-resolve web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs pip-07-audit-api web-08-delete}"
+  local order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs pip-03-publish web-03-pkgs-after pip-04-resolve web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs pip-07-audit-api web-08-delete}"
   local out="$REC/preview-all.mp4" args=() fc="" n=0
   for shot in $order; do
     [ -f "$REC/$shot.mp4" ] || { warn "缺素材：$shot.mp4（跳过）"; continue; }
@@ -297,8 +300,9 @@ shot_label() {
     03-portal)         echo "门户首页" ;;
     03-packages)       echo "包列表：浏览与搜索仓颉包" ;;
     03-docs)           echo "内置帮助文档" ;;
+    03-pkgs-after)     echo "发布结果：包管理里搜到 demo::mathUtils 1.0.0（正常）" ;;
     04-resolve)        echo "多仓解析：cd 源码目录 → cjpm update（私有仓 + 官方仓分工）" ;;
-    pip-03-publish)    echo "发布：终端 cjpm publish ＋ 后台包管理（同屏）" ;;
+    pip-03-publish)    echo "发布（同屏）：仪表盘 ＋ 终端 cjpm publish" ;;
     pip-04-resolve)    echo "多仓解析（同屏）：仪表盘 ＋ cjpm update 终端" ;;
     pip-07-audit-api)  echo "公开只读 API（同屏）：仪表盘 ＋ 终端 curl" ;;
     04-upstreams)      echo "上游管理：官方仓 / 演示空站" ;;
@@ -307,7 +311,7 @@ shot_label() {
     04-plan-run)       echo "计划详情：开始执行 / 推送进度" ;;
     04-target)         echo "演示空站：推送后的结果" ;;
     05-org)            echo "组织与团队管理" ;;
-    pip-05-permission) echo "权限：终端越权发布被拒 ＋ 组织管理（同屏）" ;;
+    pip-05-permission) echo "权限（同屏）：仪表盘 ＋ 终端越权发布被拒（403）" ;;
     06-me)             echo "用户门户：发布 Token / 我的包 / 我的团队" ;;
     07-logs)           echo "审计日志" ;;
     07-audit-api)      echo "公开只读 API" ;;
@@ -325,7 +329,7 @@ cmd_final() {  # [输出名]
   local font=/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc
   local trans="${CJREG_FINAL_XFADE:-0.5}"
   local hold="${CJREG_FINAL_HOLD:-1.6}"
-  local order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs pip-03-publish pip-04-resolve web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs pip-07-audit-api web-08-delete}"
+  local order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs pip-03-publish web-03-pkgs-after pip-04-resolve web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs pip-07-audit-api web-08-delete}"
   rm -rf "$tmp"; mkdir -p "$tmp"
   say "片头卡"
   ffmpeg_run -y -v error -f lavfi -i "color=c=0x11111b:s=1920x1080:d=3.5" -vf \

@@ -59,77 +59,72 @@ shot_term() {  # shot_term <shot>  —— 例：term 02-deploy
   say "完成：$REC/term-$shot.mp4"
 }
 
-shot_web() {  # shot_web <kind: web|web-admin|web-user> <shot> <path> [secs] [user] [pass]
+shot_web() {  # <kind: web|web-admin|web-user> <shot> <path> [secs] [user] [pass]
   local kind="$1" shot="$2" path="$3" secs="${4:-8}" user="${5:-}" pass="${6:-}"
-  local out="$REC/web-$shot.webm" url
+  local frames="$REC/frames-$shot" out="$REC/web-$shot.mp4" url port="${CJREG_REC_CDP_PORT:-9222}"
   case "$kind" in
     web-admin) url="$MAIN/admin$path"; user="${user:-admin}"; pass="${pass:-__REDACTED__}" ;;
-    web-user)  url="$MAIN$path" ;;   # 门户页在根路径（/me），只有登录页在 /user/login
+    web-user)  url="$MAIN$path" ;;
     *)         url="$MAIN$path" ;;
   esac
-  # 允许直接给完整 URL（例如演示上游站在另一个端口）
   case "$path" in http://*|https://*) url="$path" ;; esac
-  # 视口是会话级设置：不设会退回 1280x578
-  agent-browser set viewport "${CJREG_REC_W:-1920}" "${CJREG_REC_H:-1080}" >/dev/null 2>&1 || true
-  say "web 轨 $shot → $url（${secs}s）"
-  rm -f "$out"
-  # 顺序很关键（实测踩过两次）：
-  #   ① record start 带 url 会新开 context → 注入的登录态不生效 → 录成登录页；
-  #   ② 注入必须在页面**加载之前**（cjxt 是加载时读 localStorage 建 WS），
-  #      所以先开录、再注入、再导航——录制里正好是「登录页 → 后台页」的真实过程。
-  agent-browser open "$url" >/dev/null 2>&1
-  sleep 1
-  agent-browser record start "$out" >/dev/null 2>&1 || die "agent-browser record 启动失败"
-  sleep 1
+  ensure_chrome
+  say "web 轨（CDP PNG 无损）$shot → $url"
   if [ -n "$user" ]; then
     local tok; tok=$(login_token "$user" "$pass")
     [ -n "$tok" ] || warn "登录失败（$user），页面可能停在登录页"
-    agent-browser eval "localStorage.setItem('cjxt_token','$tok')" >/dev/null 2>&1
-    agent-browser open "$url" >/dev/null 2>&1
-    sleep 4
+    agent-browser --cdp "$port" open "$MAIN/admin/login" >/dev/null 2>&1
+    agent-browser --cdp "$port" eval "localStorage.setItem('cjxt_token','$tok')" >/dev/null 2>&1
   fi
+  agent-browser --cdp "$port" open "$url" >/dev/null 2>&1
   sleep 2
-  # 轻微滚动让画面有动感（不改变页面语义）
-  agent-browser scroll down 500 >/dev/null 2>&1 || true
+  "$TOOLS/venv/bin/python" "$ROOT/scripts/cdp-record.py" rec "$frames" \
+    --port "$port" --interval "${CJREG_REC_INTERVAL:-100}" \
+    > "$ROOT/.qa-shots/rec-$shot.log" 2>&1 &
+  local rec_pid=$!
+  sleep 1
+  agent-browser --cdp "$port" scroll down 500 >/dev/null 2>&1 || true
   sleep 2
-  agent-browser scroll up 500 >/dev/null 2>&1 || true
-  sleep $(( secs > 4 ? secs - 4 : 1 ))
-  agent-browser record stop >/dev/null 2>&1
-  [ -s "$out" ] || die "录制产物为空：$out"
-  say "转 mp4（10fps → 30fps 容器，便于后期配音对齐）"
-  ffmpeg_run -y -v error -i "$out" -c:v libx264 -pix_fmt yuv420p -r 30 "$REC/web-$shot.mp4"
-  say "完成：$REC/web-$shot.mp4"
+  agent-browser --cdp "$port" scroll up 500 >/dev/null 2>&1 || true
+  sleep $(( secs > 6 ? secs - 6 : 1 ))
+  kill -TERM "$rec_pid" 2>/dev/null; sleep 1; wait "$rec_pid" 2>/dev/null
+  "$TOOLS/venv/bin/python" "$ROOT/scripts/cdp-record.py" mp4 "$frames" "$out" || die "合成失败：$frames"
+  [ "${CJREG_REC_KEEP_FRAMES:-0}" = "1" ] || rm -rf "$frames"
+  say "完成：$out"
 }
 
 shot_web_login() {  # <shot> <login-path> <target-path> <user> <pass> [secs]
   # 录"真实登录"过程：填表 → 提交 → 进入目标页。比注入 token 更贴近演示，
   # 也不依赖某个端点的 token 语义（普通用户走 /api/admin/login 拿不到会话）。
   local shot="$1" lpath="$2" tpath="$3" user="$4" pass="$5"
-  local out="$REC/web-$shot.webm" lurl="$MAIN$lpath" turl="$MAIN$tpath"
+  local out="$REC/web-$shot.mp4" lurl="$MAIN$lpath" turl="$MAIN$tpath"
+  local frames="$REC/frames-$shot" port="${CJREG_REC_CDP_PORT:-9222}"
   agent-browser set viewport "${CJREG_REC_W:-1920}" "${CJREG_REC_H:-1080}" >/dev/null 2>&1 || true
   say "web 轨（真实登录）$shot → $lurl ⇒ $turl"
   rm -f "$out"
-  agent-browser open "$lurl" >/dev/null 2>&1; sleep 2
-  agent-browser record start "$out" >/dev/null 2>&1 || die "agent-browser record 启动失败"
+  ensure_chrome
+  agent-browser --cdp "$port" open "$lurl" >/dev/null 2>&1; sleep 2
+  "$TOOLS/venv/bin/python" "$ROOT/scripts/cdp-record.py" rec "$frames" --port "$port" --interval "${CJREG_REC_INTERVAL:-100}" > "$ROOT/.qa-shots/rec-$shot.log" 2>&1 &
+  local rec_pid=$!
   sleep 1
   # 选择器实测：Element Plus 的 label 没有 for 关联（find label 定位不到），
   # 而页面上的「管理员登录入口」按钮文本也含「登录」——用 find role button 会点错。
   # 可靠组合：type 选择器填表 + 回车提交 + 主按钮 CSS。
-  agent-browser fill 'input[type=text]' "$user" >/dev/null 2>&1 || warn "用户名填写失败"
-  agent-browser fill 'input[type=password]' "$pass" >/dev/null 2>&1 || warn "密码填写失败"
+  agent-browser --cdp "$port" fill 'input[type=text]' "$user" >/dev/null 2>&1 || warn "用户名填写失败"
+  agent-browser --cdp "$port" fill 'input[type=password]' "$pass" >/dev/null 2>&1 || warn "密码填写失败"
   sleep 1
-  agent-browser press Enter >/dev/null 2>&1 || true
+  agent-browser --cdp "$port" press Enter >/dev/null 2>&1 || true
   sleep 2
-  agent-browser click 'button.el-button--primary' >/dev/null 2>&1 || true
+  agent-browser --cdp "$port" click 'button.el-button--primary' >/dev/null 2>&1 || true
   sleep 3
-  agent-browser open "$turl" >/dev/null 2>&1
+  agent-browser --cdp "$port" open "$turl" >/dev/null 2>&1
   sleep 3
-  agent-browser scroll down 400 >/dev/null 2>&1 || true
+  agent-browser --cdp "$port" scroll down 400 >/dev/null 2>&1 || true
   sleep 2
-  agent-browser record stop >/dev/null 2>&1
-  [ -s "$out" ] || die "录制产物为空：$out"
-  env -u LD_LIBRARY_PATH ffmpeg -y -v error -i "$out" -c:v libx264 -pix_fmt yuv420p -r 30 "$REC/web-$shot.mp4"
-  say "完成：$REC/web-$shot.mp4"
+  kill -TERM "$rec_pid" 2>/dev/null; sleep 1; wait "$rec_pid" 2>/dev/null
+  "$TOOLS/venv/bin/python" "$ROOT/scripts/cdp-record.py" mp4 "$frames" "$out" || die "合成失败：$frames"
+  [ "${CJREG_REC_KEEP_FRAMES:-0}" = "1" ] || rm -rf "$frames"
+  say "完成：$out"
 }
 
 cmd_prepare() {

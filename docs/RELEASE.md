@@ -1,7 +1,11 @@
 # 发版流程（tag 驱动）
 
-cjreg 的发版以 **tag 为唯一事实来源**：主仓库在 AtomGit，`git push origin vX.Y.Z` 会把同一个 tag
-同步到 GitHub 镜像，GitHub Actions 的 `Release` 工作流据此构建产物、自动生成 GitHub Release 并推送容器镜像。
+cjreg 的发版以 **tag 为唯一事实来源**：主仓库在 AtomGit，`git push origin vX.Y.Z` 之后，GitHub 镜像侧的
+同名 tag 触发 `Release` 工作流，构建产物、自动生成 GitHub Release 并推送容器镜像。
+
+> ⚠️ **tag 不一定会自动同步到 GitHub**（2026-10-06 实测：分支会同步，tag 停在 `v0.1.0`，
+> 于是 `Release` 根本没被触发、镜像一直不更新）。打完 tag 后**务必确认 GitHub 侧已有该 tag**，
+> 没有就跑下面的兜底脚本 —— 而不是只看 AtomGit 推成功了。
 这样不会出现「只在 GitHub 发 Release、AtomGit 侧没有对应 tag」的两边不一致。
 
 ## 1. 前置检查（打 tag 之前）

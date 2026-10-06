@@ -11,6 +11,7 @@ import stdx.crypto.digest.SHA256
 import stdx.encoding.hex.toHexString
 import stdx.encoding.json.stream.*
 import std.io.*
+import std.fs.*
 import std.collection.*
 import std.convert.*
 import std.time.*
@@ -81,6 +82,41 @@ public func sha256Hex(data: Array<Byte>): String {
     let sha = SHA256()
     sha.write(data)
     toHexString(sha.finish())
+}
+
+// 删除发布的临时文件（任何提前返回都要清掉，避免残留半成品）
+func dropTempFile(tmpPath: String): Unit {
+    try {
+        removeIfExists(tmpPath, recursive: false)
+    } catch (_: Exception) {
+        ()  // 文件可能已 rename 进位或本就不存在
+    }
+}
+
+// 流式发布的 README 提取：制品只在临时文件里，超过阈值就不再读回来（避免又把大包读进内存）——
+// 提取失败绝不阻断发布（与 publish 的口径一致：退化为无 README）。
+public let STREAM_README_MAX_BYTES: Int64 = 8 * 1024 * 1024
+
+// 小制品仍提取 README（保持详情页体验）；超过阈值就不读回来 —— 大包的稳定优先，
+// 而"提取失败不阻断发布"本就是既有口径（详情页退化为无 README）。
+// 必须在 claimFile **之前**调用：进位后临时文件已被 rename 或被去重删除。
+func readmeOfTempFile(metaData: Array<Byte>, metaInfo: MetaInfo, tmpPath: String): String {
+    try {
+        if (!exists(tmpPath)) {
+            return ""
+        }
+        let info = FileInfo(tmpPath)
+        if (info.size <= 0 || info.size > STREAM_README_MAX_BYTES) {
+            return ""
+        }
+        let f = File(tmpPath, Read)
+        let bytes = readToEnd(f)
+        f.close()
+        return readmeOf(PublishData(metaData, bytes), metaInfo)
+    } catch (e: Exception) {
+        println("[cjreg] README 提取（流式路径）失败: ${e.toString()}")
+        return ""
+    }
 }
 
 // 发布服务（校验 + 入库 + 制品字节存 blob 供发布计划执行）
@@ -212,6 +248,114 @@ public class PublishService {
         let now = nowMsUtc()
         fillPackageDoc(doc, metaInfo, String.fromUtf8(pd.metaData), actualSha, pd.tarball.size,
             readmeOf(pd, metaInfo), publisherIdOf(publisher), now, now)
+        this.store.save(doc)
+        return PublishResult(PublishOutcome.Ok, doc.id, "published")
+    }
+
+    // ── 流式发布 ───────────────────────────────────────────────────────────────
+    // 制品已由 `intakePublishBody` 边读边算 sha256 并落成**临时文件**（不驻留内存）；
+    // 这里只做 meta 解析、URL 校验、sha 比对、权限/幂等/覆盖裁决与入库。
+    // 与 `publish(body)` 的唯一语义差别是制品来源；裁决口径逐字保持一致。
+    public func publishStream(urlOrg: String, urlName: String, metaData: Array<Byte>, actualSha: String,
+                              tarballSize: Int64, tmpPath: String, token: String): PublishResult {
+        if (urlName.isEmpty()) {
+            dropTempFile(tmpPath)
+            return PublishResult(PublishOutcome.BadRequest, 0, "package name required")
+        }
+        // 0. 发布认证（与 publish 一致）
+        var publisher: ?User = None
+        match (this.auth) {
+            case Some(authSvc) =>
+                if (token.isEmpty()) {
+                    dropTempFile(tmpPath)
+                    return PublishResult(PublishOutcome.Unauthorized, 0, "missing publish token")
+                }
+                match (authSvc.validatePublishToken(token)) {
+                    case Some(u) => publisher = Some(u)
+                    case None =>
+                        dropTempFile(tmpPath)
+                        return PublishResult(PublishOutcome.Unauthorized, 0, "invalid publish token")
+                }
+            case None => ()
+        }
+        // 2. meta
+        let meta = parseMetaJson(metaData)
+        if (meta.isNone()) {
+            dropTempFile(tmpPath)
+            return PublishResult(PublishOutcome.InvalidFormat, 0, "invalid meta-data.json")
+        }
+        let metaInfo = meta.getOrThrow()
+        // 3. meta 与 URL 一致
+        if (metaInfo.name != urlName || metaInfo.org != urlOrg) {
+            dropTempFile(tmpPath)
+            return PublishResult(PublishOutcome.MetaMismatch, 0,
+                "metadata mismatch: url(${urlOrg}::${urlName}) vs meta(${metaInfo.org}::${metaInfo.name})")
+        }
+        // 4. sha256 比对（实算值来自流式摘要）
+        if (!metaInfo.sha256sum.isEmpty() && actualSha != metaInfo.sha256sum) {
+            dropTempFile(tmpPath)
+            return PublishResult(PublishOutcome.ShaMismatch, 0,
+                "sha256 mismatch: meta=${metaInfo.sha256sum} actual=${actualSha}")
+        }
+        // 5/6. 同版本判定 + 权限裁决 + 幂等/覆盖（口径同 publish）
+        let versions = this.store.listVersions(metaInfo.org, metaInfo.name)
+        var existing: ?PackageDoc = None
+        for (d in versions) {
+            if (d.version == metaInfo.version && d.deletedAt == 0) {
+                existing = Some(d)
+                break
+            }
+        }
+        let sameSha = match (existing) {
+            case Some(d) => d.sha256 == actualSha
+            case None => false
+        }
+        let needOverwrite = existing.isSome() && !sameSha
+        var overwriteAllowed = false
+        if (this.permissionMode == "team") {
+            match (this.adminData) {
+                case Some(ad) =>
+                    let needCheck = versions.size > 0 || isNamespaceGoverned(ad, metaInfo.org, metaInfo.name)
+                    match (publisher) {
+                        case Some(u) =>
+                            if (needCheck && !checkPublishPermission(this.store, ad, u, metaInfo.org, metaInfo.name, needOverwrite)) {
+                                dropTempFile(tmpPath)
+                                return PublishResult(PublishOutcome.Forbidden, 0, "no permission to publish")
+                            }
+                            overwriteAllowed = needOverwrite
+                        case None => overwriteAllowed = needOverwrite
+                    }
+                case None => overwriteAllowed = needOverwrite
+            }
+        }
+        match (existing) {
+            case Some(d) =>
+                if (sameSha) {
+                    dropTempFile(tmpPath)  // 幂等：内容已在库（临时文件丢弃）
+                    return PublishResult(PublishOutcome.Ok, d.id, "already exists (same sha)")
+                }
+                if (!overwriteAllowed) {
+                    dropTempFile(tmpPath)
+                    return PublishResult(PublishOutcome.Conflict, d.id,
+                        "version exists with different sha, need overwrite")
+                }
+                let readme = readmeOfTempFile(metaData, metaInfo, tmpPath)  // 必须在 claim 之前
+                this.blobStore.claimFile(actualSha, tmpPath)  // 原子进位（已存在则丢弃临时文件）
+                let now = nowMsUtc()
+                let created = if (d.createdAt > 0) { d.createdAt } else { now }
+                let owner = if (d.publisherId != 0) { d.publisherId } else { publisherIdOf(publisher) }
+                fillPackageDoc(d, metaInfo, String.fromUtf8(metaData), actualSha, tarballSize,
+                    readme, owner, now, created)
+                this.store.save(d)
+                return PublishResult(PublishOutcome.Ok, d.id, "overwritten")
+            case None => ()
+        }
+        let readme = readmeOfTempFile(metaData, metaInfo, tmpPath)  // 必须在 claim 之前
+        this.blobStore.claimFile(actualSha, tmpPath)
+        let doc = PackageDoc()
+        let now = nowMsUtc()
+        fillPackageDoc(doc, metaInfo, String.fromUtf8(metaData), actualSha, tarballSize,
+            readme, publisherIdOf(publisher), now, now)
         this.store.save(doc)
         return PublishResult(PublishOutcome.Ok, doc.id, "published")
     }

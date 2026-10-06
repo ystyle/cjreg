@@ -159,6 +159,7 @@ func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
 
     // 同一 Tang 实例：协议路由 + cjxt 管理/公开页面（单进程共享 store）
     let app = buildServer(pkgStore, Some(admin), Some(upSvc), blobStore, config: cfg,
+        tmpDir: dataDir + "/blobs",
         adminData: Some(adminData))
     // 重启恢复：执行线程随进程退出 → 把「执行中」的计划转为 paused（可续跑），
     // 进度按**条目状态**重算而不是清零：单条状态是即时落盘的，重启后正是靠它决定

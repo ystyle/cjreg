@@ -53,6 +53,10 @@ public interface BlobStore {
     // 注意：不能叫 exists——DiskBlobStore 内部要用 std.fs.exists(path)，
     // 同名成员会让方法体里的 exists(...) 解析成自身递归（实测触发 Out of memory）
     func has(sha256: String): Bool
+    // 原子认领一个已写好的临时文件为制品：目标已存在（内容寻址去重）则丢弃临时文件，
+    // 否则 rename 进位 —— 先落临时文件再 rename，读者不会看到半成品。
+    // 供**流式发布**使用：制品不再整包驻留内存。
+    func claimFile(sha256: String, tmpPath: String): Unit
 }
 
 public class MemoryBlobStore <: BlobStore {
@@ -64,6 +68,19 @@ public class MemoryBlobStore <: BlobStore {
 
     public func put(sha256: String, data: Array<Byte>): Unit {
         this.blobs.add(sha256, data)
+    }
+
+    public func claimFile(sha256: String, tmpPath: String): Unit {
+        // 内存实现只能把临时文件读回来（生产流式路径走 DiskBlobStore，不经过这里）
+        try {
+            let f = File(tmpPath, Read)
+            let bytes = readToEnd(f)
+            f.close()
+            this.blobs.add(sha256, bytes)
+            removeIfExists(tmpPath, recursive: false)
+        } catch (e: Exception) {
+            println("[blob] claimFile failed ${sha256}: ${e.message}")
+        }
     }
 
     public func get(sha256: String): ?Array<Byte> {
@@ -497,6 +514,19 @@ public class DiskBlobStore <: BlobStore {
             f.close()
         } catch (e: Exception) {
             println("[blob] put failed ${sha256}: ${e.message}")
+        }
+    }
+
+    public func claimFile(sha256: String, tmpPath: String): Unit {
+        let target = dir + "/" + sha256
+        try {
+            if (exists(target)) {
+                removeIfExists(tmpPath, recursive: false)  // 内容寻址天然幂等：同一制品已在盘上
+                return
+            }
+            rename(tmpPath, to: target)  // 原子进位
+        } catch (e: Exception) {
+            println("[blob] claimFile failed ${sha256}: ${e.message}")
         }
     }
 

@@ -11,6 +11,7 @@ import ystyle::cjreg.config.*
 import std.collection.*
 import stdx.encoding.json.stream.*
 import std.io.*
+import std.fs.*
 import std.env.*
 
 // 组装 HTTP 服务：官方协议三端点 + 健康检查 + 管理 API
@@ -20,7 +21,10 @@ public func buildServer(
     upstreamSvc: ?UpstreamService,
     blobStore: BlobStore,
     config!: ?CjregConfig = None,
-    adminData!: ?AdminDataStore = None
+    adminData!: ?AdminDataStore = None,
+    // 发布体流式接收的临时文件目录（必须与 blob 同目录：rename 才能原子进位、不跨文件系统）。
+    // 留空则回退「整包读入内存」的旧路径（内存 blob 模式与测试便捷重载用）。
+    tmpDir!: String = ""
 ): Tang {
     let app = Tang().setHost("0.0.0.0")
     // 发布认证：管理服务存在时使用其 AuthService（规格 Authorization: publishToken）
@@ -83,7 +87,8 @@ public func buildServer(
     app.post("/pkg/:name", { ctx =>
         let name = ctx.param("name")
         let org = ctx.query("organization") ?? ""
-        let body = ctx.bodyRaw()
+        // 制品接收：默认流式（边读边算 sha256 并落临时文件，内存占用与包体无关）；
+        // 未配置 tmpDir（内存模式）时回退整包读取。
         // 规格：Authorization: ${publishToken}（发布用户 token；兼容 "Bearer <token>" 写法）
         let token = extractAuthToken(ctx)
         // 审计身份：令牌有效则记真实用户，否则记为匿名（不回写令牌明文）
@@ -95,7 +100,30 @@ public func buildServer(
             case Some(u) => (u.id, u.username)
             case None => (0, "")
         }
-        let result = publishSvc.publish(org, name, body, token)
+        let (result, bodySize) = if (!tmpDir.isEmpty()) {
+            let tmpPath = tmpDir + "/.tmp-" + nowMsUtc().toString() + "-" + org + "-" + name
+            let intake: ?IntakeResult = try {
+                intakePublishBody(ctx.request.body, tmpPath)
+            } catch (e: Exception) {
+                println("[cjreg] 发布体流式接收异常: " + e.toString())
+                None
+            }
+            match (intake) {
+                case Some(r) =>
+                    (publishSvc.publishStream(org, name, r.metaData, r.sha256, r.size, tmpPath, token), r.size)
+                case None =>
+                    // 格式非法 / 超限 / 传输中断：清掉半成品临时文件（pubishStream 未被调用）
+                    try {
+                        removeIfExists(tmpPath, recursive: false)
+                    } catch (_: Exception) {
+                        ()
+                    }
+                    (PublishResult(PublishOutcome.InvalidFormat, 0, "invalid publish data format"), 0)
+            }
+        } else {
+            let body = ctx.bodyRaw()
+            (publishSvc.publish(org, name, body, token), body.size)
+        }
         // 审计版本：成功时从落库文档取（失败时 meta 不可信，目标只到包名）
         var version = ""
         if (result.outcome == PublishOutcome.Ok) {
@@ -108,7 +136,7 @@ public func buildServer(
         match (result.outcome) {
             case PublishOutcome.Ok =>
                 writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "ok", target, ctx,
-                    detail: "size=${body.size}")
+                    detail: "size=${bodySize}")
                 ctx.status(200u16).writeStringWithCode(200u16, "{\"status\":\"ok\",\"id\":${result.pkgId}}")
             case PublishOutcome.InvalidFormat =>
                 writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,

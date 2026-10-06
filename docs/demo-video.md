@@ -46,8 +46,13 @@ bash scripts/demo-live.sh reset-upstream  # 每轮录制前把演示上游站清
 | 用户门户 | `http://127.0.0.1:8066/user/login` — `alice` / `AlicePass1`、`bob` / `BobPass1` |
 | 演示上游站（空站，可重建） | `http://127.0.0.1:8067` — `admin` / `DemoPass1` |
 | 演示包源码 | `.demo/live-pkgs/{mathUtils,strUtils,encryptUtils}`（组织已改成 `demo`） |
-| 上游 | 主站已注册 `demo-upstream` → `http://127.0.0.1:8067`（priority 50，低于 official 的 0，不影响真实回源） |
+| 上游 | 主站已注册 `demo-upstream` → `http://192.168.3.6:8067`（**主站容器视角**；priority 50，低于 official 的 0，不影响真实回源） |
 
+> **两个视角别混**：浏览器与终端 curl 用 `http://127.0.0.1:8067`；
+> **发布计划推送与上游回源发生在主站容器内部**，容器里的 `127.0.0.1` 是它自己的 loopback，
+> 必须用宿主 LAN 地址 `http://192.168.3.6:8067`（端口映射对 LAN 开放）。
+> `demo-live.sh` 会自动探测宿主地址，注册上游与打印推送目标时都用容器视角。
+>
 > `demo-live.sh` 只做幂等造数，**没有任何清空主站的路径**；重建只作用于演示专用空站。
 
 **路径 B｜本地双仓全功能演示（开发自测 / 评审复现）** —— 一键起 A/B 两个本机仓（可 RESET）：
@@ -115,11 +120,13 @@ B 仓 `http://127.0.0.1:18081`；包源码在 `.demo/pkgs/`；停止 `bash scrip
      ```
   3. 终端执行发布计划推送（也可在 UI 的「发布计划」页做；目标地址与 Token 见 `demo-live.sh prepare` 的输出）：
      ```bash
+     # ⚠️ target_url 用宿主 LAN 地址：推送由主站容器发起，容器里的 127.0.0.1 不通
      curl -s -X POST http://127.0.0.1:8066/api/admin/publish-plans/execute \
        -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
        -d '{"packages":[{"organization":"demo","name":"encryptUtils","version":"1.0.0"}],
-            "target_url":"http://127.0.0.1:8067","target_token":"<演示上游站发布 Token>"}'
+            "target_url":"http://192.168.3.6:8067","target_token":"<演示上游站发布 Token>"}'
      ```
+     预期（实测）：`success=3 skipped=0 failed=0` —— encryptUtils 连同 mathUtils、strUtils 两个依赖一次推完。
   4. 打开演示上游站 `http://127.0.0.1:8067/api/packages?size=50`，展示包已到位（含依赖）。
 - **解说**：
   > 「多仓是本项目的重点：上游按优先级依次回源，索引与制品都会缓存到本地；

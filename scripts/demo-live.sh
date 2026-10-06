@@ -21,6 +21,8 @@
 #   CJREG_LIVE_UPSTREAM=http://127.0.0.1:8067    演示上游站
 #   CJREG_LIVE_UPSTREAM_DIR=~/docker/cjreg-demo  演示上游站的 compose 目录
 #   CJREG_LIVE_UPSTREAM_NAME=demo-upstream       注册到主站的上游名
+#   CJREG_LIVE_HOST_IP=192.168.3.6               宿主 LAN 地址（默认自动探测：生产 public_url → ip route）
+#   CJREG_LIVE_UPSTREAM_FROM_MAIN=...            主站**容器内**访问演示上游站的地址（默认 http://$HOST_IP:<端口>）
 #   CJREG_LIVE_PREPUBLISH=1                      顺带把 3 个演示包预发到主站（默认 0，留现场发）
 set -uo pipefail
 
@@ -34,6 +36,29 @@ UP="${CJREG_LIVE_UPSTREAM:-http://127.0.0.1:8067}"
 if ! command -v cjpm >/dev/null 2>&1 && command -v cjvs >/dev/null 2>&1; then
   eval "$(cjvs env zsh)" >/dev/null 2>&1
   eval "$(cjvs stdx-env zsh)" >/dev/null 2>&1
+fi
+
+# 演示上游站有**两个视角**的地址，混用必然失败：
+#   宿主视角（脚本、浏览器、curl）：$UP，如 http://127.0.0.1:8067
+#   主站容器视角（发布计划推送、上游回源）：容器里的 127.0.0.1 是它自己的 loopback，
+#     必须用宿主 LAN 地址，如 http://192.168.3.6:8067（端口映射对 LAN 开放）
+detect_host_ip() {
+  [ -n "${CJREG_LIVE_HOST_IP:-}" ] && { printf '%s' "$CJREG_LIVE_HOST_IP"; return; }
+  local f="$HOME/docker/cjreg/data/cjreg.toml" h
+  if [ -f "$f" ]; then
+    h=$(sed -n 's/^public_url *= *"http:\/\/\([^":/]*\).*/\1/p' "$f" | head -1)
+    case "$h" in ""|127.*|localhost) : ;; *) printf '%s' "$h"; return ;; esac
+  fi
+  h=$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -1)
+  [ -n "$h" ] && { printf '%s' "$h"; return; }
+  printf ''
+}
+
+HOST_IP=$(detect_host_ip)
+UP_PORT=$(printf '%s' "$UP" | sed -n 's|.*:\([0-9][0-9]*\)$|\1|p')
+UP_FROM_MAIN="${CJREG_LIVE_UPSTREAM_FROM_MAIN:-}"
+if [ -z "$UP_FROM_MAIN" ] && [ -n "$HOST_IP" ] && [ -n "$UP_PORT" ]; then
+  UP_FROM_MAIN="http://$HOST_IP:$UP_PORT"
 fi
 
 UP_DIR="${CJREG_LIVE_UPSTREAM_DIR:-$HOME/docker/cjreg-demo}"
@@ -195,19 +220,26 @@ PY
   done
 
   say "3/5 注册演示上游（幂等；priority=50 低于 official 的 0，不影响真实回源）"
-  UP_ID=$(curl -s -m 8 "$MAIN/api/admin/upstreams" -H "$H_MAIN" | python3 -c "
+  [ -n "$UP_FROM_MAIN" ] || die "无法确定主站容器内可达的宿主地址：请设 CJREG_LIVE_HOST_IP 或 CJREG_LIVE_UPSTREAM_FROM_MAIN"
+  echo "    上游地址用主站容器视角：$UP_FROM_MAIN（宿主/浏览器视角是 $UP）"
+  read -r UP_ID UP_URL <<<"$(curl -s -m 8 "$MAIN/api/admin/upstreams" -H "$H_MAIN" | python3 -c "
 import sys,json
 for u in json.load(sys.stdin):
     if u['name']=='$UP_NAME':
-        print(u['id']); break
-")
-  if [ -n "$UP_ID" ]; then
-    echo "    上游 $UP_NAME 已存在（id=$UP_ID），跳过注册"
+        print(u['id'], u['url']); break
+")"
+  if [ -n "${UP_ID:-}" ] && [ "${UP_URL:-}" = "$UP_FROM_MAIN" ]; then
+    echo "    上游 $UP_NAME 已存在且地址正确（id=$UP_ID），跳过注册"
   else
+    if [ -n "${UP_ID:-}" ]; then
+      echo "    上游 $UP_NAME 地址需修正（$UP_URL → $UP_FROM_MAIN），删除后重建"
+      curl -s -o /dev/null -X DELETE "$MAIN/api/admin/upstreams/$UP_ID" -H "$H_MAIN"
+      UP_ID=""
+    fi
     UP_ID=$(curl -s -m 8 -X POST "$MAIN/api/admin/upstreams" -H "$H_MAIN" -H 'Content-Type: application/json' \
-      -d "{\"name\":\"$UP_NAME\",\"url\":\"$UP\",\"priority\":\"50\"}" \
+      -d "{\"name\":\"$UP_NAME\",\"url\":\"$UP_FROM_MAIN\",\"priority\":\"50\"}" \
       | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
-    [ -n "$UP_ID" ] && echo "    已注册 $UP_NAME → $UP（id=$UP_ID）" || warn "上游注册失败（可能重名），请在管理后台确认"
+    [ -n "$UP_ID" ] && echo "    已注册 $UP_NAME → $UP_FROM_MAIN（id=$UP_ID）" || warn "上游注册失败（可能重名），请在管理后台确认"
   fi
   [ -n "$UP_ID" ] && curl -s -o /dev/null -X POST "$MAIN/api/admin/upstreams/$UP_ID/test?name=mathUtils&organization=demo" -H "$H_MAIN" \
     && echo "    已跑一次连通性测试（上游管理页可见结果，同时留一条审计）"
@@ -233,10 +265,12 @@ for u in json.load(sys.stdin):
      管理后台: $MAIN/admin          账号 $MAIN_USER / <CJREG_LIVE_ADMIN_PASS>
      用户门户: $MAIN/user/login     alice / $ALICE_PASS、bob / $BOB_PASS
   演示上游站（空站，可重建）: $UP       账号 $UP_USER / $UP_PASS
-     发布计划推送目标: target_url=$UP
+     宿主/浏览器视角: $UP
+     主站容器视角（发布计划/回源要用这个）: $UP_FROM_MAIN
+     发布计划推送目标: target_url=$UP_FROM_MAIN
                        target_token=${UP_PUB:-（取 Token 失败，去 $UP/admin 个人门户取）}
   演示包目录: $PKG_DIR/{${DEMO_PKGS[*]}}（现场发布：cd 进去 cjpm publish）
-  上游: 主站已注册 $UP_NAME → $UP（priority=50）
+  上游: 主站已注册 $UP_NAME → $UP_FROM_MAIN（priority=50）
 
   演示流程见 docs/demo-video.md（分镜 + 解说词）；录完清理：bash scripts/demo-live.sh clean
 EOF

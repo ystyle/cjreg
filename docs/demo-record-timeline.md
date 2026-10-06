@@ -20,4 +20,4 @@
 | web-06-me | Web 界面 | `.demo/recordings/web-06-me.mp4` | 13 | web-06-me | 见 §3 对应镜头 |
 | web-07-logs | Web 界面 | `.demo/recordings/web-07-logs.mp4` | 5 | web-07-logs | 见 §3 对应镜头 |
 | term-07-audit-api | 终端 | `.demo/recordings/term-07-audit-api.mp4` | 8 | term-07-audit-api | 见 §3 对应镜头 |
-| term-08-delete | 终端 | `.demo/recordings/term-08-delete.mp4` | 14 | term-08-delete | 见 §3 对应镜头 |
+| web-08-delete | Web 界面 | `.demo/recordings/web-08-delete.mp4` | 23 | web-08-delete | 见 §3 对应镜头 |

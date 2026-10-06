@@ -197,7 +197,7 @@ cmd_timeline() {
     echo "| 镜头 | 轨 | 素材 | 时长(s) | 画面内容 | 配音提示（demo-video.md §3） |"
     echo "|---|---|---|---|---|---|"
     local label shot order
-    order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs pip-03-publish web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs term-07-audit-api term-08-delete}"
+    order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs pip-03-publish web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs term-07-audit-api web-08-delete}"
     for shot in $order; do
       local f="$REC/$shot.mp4"
       [ -f "$f" ] || continue
@@ -260,7 +260,7 @@ drawtext=fontfile=$font:text='$title_esc':x=82:y=21:fontsize=16:fontcolor=0xcdd6
 }
 
 cmd_preview() {  # 按演示顺序拼接成片（各轨分辨率不同，统一 pad 到 1080p）
-  local order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs pip-03-publish web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs term-07-audit-api term-08-delete}"
+  local order="${CJREG_REC_ORDER:-term-02-deploy web-03-portal web-03-packages web-03-docs pip-03-publish web-04-upstreams web-04-plan-list web-04-plan-create web-04-plan-run web-04-target web-05-org pip-05-permission web-06-me web-07-logs term-07-audit-api web-08-delete}"
   local out="$REC/preview-all.mp4" args=() fc="" n=0
   for shot in $order; do
     [ -f "$REC/$shot.mp4" ] || { warn "缺素材：$shot.mp4（跳过）"; continue; }

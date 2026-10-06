@@ -1,0 +1,7 @@
+# 发布后的后台包管理：搜到刚发布的 demo::mathUtils 及其版本
+sleep 1
+fill 'input[placeholder="搜索包名 / 组织 / 描述"]' "mathUtils"
+sleep 2
+scroll down 120
+sleep 2
+scroll up 120

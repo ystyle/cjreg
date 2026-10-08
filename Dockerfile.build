@@ -90,9 +90,13 @@ RUN pacman -Sy --noconfirm flatbuffers python-psutil cmake ninja \
 
 # stdx 构建按 SDK 内路径查找 flatc（<toolchain>/third_party/flatbuffers/bin/flatc），
 # 而 cjv 装的 SDK 不自带，这里把系统的 flatc 链过去
-RUN mkdir -p "/root/.cjv/toolchains/sts-${CANGJIE_VERSION}/third_party/flatbuffers/bin" \
-    && ln -sf /usr/bin/flatc "/root/.cjv/toolchains/sts-${CANGJIE_VERSION}/third_party/flatbuffers/bin/flatc" \
-    && ls -l "/root/.cjv/toolchains/sts-${CANGJIE_VERSION}/third_party/flatbuffers/bin/flatc"
+# CangjieFlatbuffers.cmake 会按 SDK 内路径查找 flatc / include / lib，三样都要在
+RUN FB="/root/.cjv/toolchains/sts-${CANGJIE_VERSION}/third_party/flatbuffers" \
+    && mkdir -p "$FB/bin" "$FB/lib" \
+    && ln -sf /usr/bin/flatc "$FB/bin/flatc" \
+    && ln -sfn /usr/include "$FB/include" \
+    && ln -sf /usr/lib/libflatbuffers.a "$FB/lib/libflatbuffers.a" 2>/dev/null || true
+RUN ls -l "/root/.cjv/toolchains/sts-${CANGJIE_VERSION}/third_party/flatbuffers/" | head -6
 
 # ── 运行阶段（与 Dockerfile 同构：同一基础镜像 → glibc 一致）────────────────
 FROM archlinux:latest

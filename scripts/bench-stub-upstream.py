@@ -38,12 +38,22 @@ CONFIG = {
 }
 
 
+_ARTIFACT_CACHE = {}
+
+
 def artifact(org, name, version):
-    """确定性制品：同一 (org,name,version) 永远得到同样字节与同样 sha256。"""
+    """确定性制品：同一 (org,name,version) 永远得到同样字节与同样 sha256。
+    结果缓存：大制品每次重新生成会拖慢压测（也是 Range 分块下的重复开销）。"""
+    key = (org, name, version)
+    hit = _ARTIFACT_CACHE.get(key)
+    if hit is not None:
+        return hit
     seed = ("%s::%s::%s" % (org, name, version)).encode()
     block = hashlib.sha256(seed).digest()
     size = CONFIG["artifact_bytes"]
-    return (block * (size // len(block) + 1))[:size]
+    data = (block * (size // len(block) + 1))[:size]
+    _ARTIFACT_CACHE[key] = data
+    return data
 
 
 def index_ndjson(org, name):
@@ -121,7 +131,34 @@ class Handler(BaseHTTPRequestHandler):
             if version not in CONFIG["packages"].get(name, []):
                 self._send(404, "not found")
                 return
-            self._send(200, artifact(org, name, version), "application/octet-stream")
+            data = artifact(org, name, version)
+            rng = self.headers.get("Range")
+            if rng and rng.startswith("bytes="):
+                spec = rng[len("bytes="):].split(",")[0].split("-")
+                try:
+                    start = int(spec[0]) if spec[0] else 0
+                    end = int(spec[1]) if len(spec) > 1 and spec[1] else len(data) - 1
+                except ValueError:
+                    self._send(400, "bad range")
+                    return
+                start = max(0, start)
+                end = min(end, len(data) - 1)
+                if start > end:
+                    self.send_response(416)
+                    self.send_header("Content-Range", "bytes */%d" % len(data))
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                piece = data[start:end + 1]
+                self.send_response(206)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, len(data)))
+                self.send_header("Content-Length", str(len(piece)))
+                self.end_headers()
+                self.wfile.write(piece)
+                return
+            self._send(200, data, "application/octet-stream")
             return
 
         self._send(404, "not found")

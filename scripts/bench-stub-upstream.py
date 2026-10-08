@@ -30,6 +30,7 @@ from urllib.parse import parse_qs, urlparse
 
 LOCK = threading.Lock()
 COUNTS = {"index": 0, "pkg": 0}
+CHUNKED = os.environ.get("STUB_CHUNKED", "") != ""
 CONFIG = {
     "delay_ms": 0,
     "artifact_bytes": 64 * 1024,
@@ -67,6 +68,18 @@ class Handler(BaseHTTPRequestHandler):
             body = body.encode()
         self.send_response(code)
         self.send_header("Content-Type", ctype)
+        if CHUNKED:
+            # 不报 Content-Length：走 Transfer-Encoding: chunked
+            # （用来验证客户端在这种响应下是否按块读取，而不是先整包收下来）
+            import math
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            step = 64 * 1024
+            for off in range(0, len(body), step):
+                piece = body[off:off + step]
+                self.wfile.write(b"%x\r\n" % len(piece) + piece + b"\r\n")
+            self.wfile.write(b"0\r\n\r\n")
+            return
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

@@ -551,10 +551,13 @@ class HttpBodyStream <: InputStream {
 // 取响应体供调用方分块读取（重定向口径与 httpGetWithStatus 一致，最多 5 跳）。
 // 调用方按需读取；读尽时底层客户端自动关闭。
 //
-// ⚠️ 限制：上游客户端在 `send` 阶段就会把响应体收下来，这里拿到的并不是真正的网络流，
-// 因此**超大制品仍会顶到 GC 堆上限**（实测 64 MiB 以上回源 OOM，8–32 MiB 正常且线性）。
-// 要让回源也做到内存 O(1)，需要客户端侧的流式读取能力，或改按 Range 分块回源。
-// 本函数的价值在于：中小制品的峰值不再与制品大小线性相关，且把连接生命周期收进流里。
+// ⚠️ 限制（依据上游实现）：`resp.body` 虽是 `InputStream`，但 HTTP/1.1 客户端把它包成
+// `HttpNormalBody`，其构造函数就按 `contentLength` 分配数组并把连接读满 —— 之后 `read()`
+// 只是从内存数组拷贝，因此拿不到"边收边给"。
+// 实测：带 Content-Length 与 chunked（无长度）两种响应下，128 MiB 制品回源都触顶 GC 堆；
+// 8 / 16 / 32 MiB 正常且线性。
+// 本函数的价值：中小制品的峰值不再随制品线性增长，且把连接生命周期收进了流里。
+// 要让回源也做到内存 O(1)，需要客户端侧的真流式读取，或改按 Range 分块回源。
 public func httpGetStream(url: String, token: String): ?InputStream {
     var currentUrl = url
     var hops: Int64 = 0

@@ -81,6 +81,9 @@ RUN cjv exec cjpm build -j "$(nproc)"
 #     cjv exec cjpm build -j "$(nproc)"'
 FROM build AS dev
 
+# ARG 按 stage 生效：build 阶段的声明不会带到这里，必须重新声明（否则 ${CANGJIE_VERSION} 为空）
+ARG CANGJIE_VERSION=1.1.3
+
 # cmake/ninja：build.cj 的 checkBuildTools 硬检查二者（缺任一直接抛异常）；gcc 由 base-devel 提供
 RUN pacman -Sy --noconfirm flatbuffers python-psutil cmake ninja \
     && rm -rf /var/cache/pacman/pkg
@@ -88,7 +91,8 @@ RUN pacman -Sy --noconfirm flatbuffers python-psutil cmake ninja \
 # stdx 构建按 SDK 内路径查找 flatc（<toolchain>/third_party/flatbuffers/bin/flatc），
 # 而 cjv 装的 SDK 不自带，这里把系统的 flatc 链过去
 RUN mkdir -p "/root/.cjv/toolchains/sts-${CANGJIE_VERSION}/third_party/flatbuffers/bin" \
-    && ln -sf /usr/bin/flatc "/root/.cjv/toolchains/sts-${CANGJIE_VERSION}/third_party/flatbuffers/bin/flatc"
+    && ln -sf /usr/bin/flatc "/root/.cjv/toolchains/sts-${CANGJIE_VERSION}/third_party/flatbuffers/bin/flatc" \
+    && ls -l "/root/.cjv/toolchains/sts-${CANGJIE_VERSION}/third_party/flatbuffers/bin/flatc"
 
 # ── 运行阶段（与 Dockerfile 同构：同一基础镜像 → glibc 一致）────────────────
 FROM archlinux:latest

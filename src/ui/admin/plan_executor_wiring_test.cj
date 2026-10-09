@@ -9,11 +9,13 @@
 // 这里用「注入的 MemoryBlobStore 里**有**制品」来钉住这条接线：如果哪天又有人自己搭库，
 // 断言会立刻变成「制品缺失」而红。
 
-package ystyle::cjreg.ui
+package ystyle::cjreg.ui.admin
+
+import ystyle::cjreg.ui.*
 
 import ystyle::cjreg.store.*
 import ystyle::cjreg.index.*
-import ystyle::cjreg.server.*
+import ystyle::cjreg.server.{DiskBlobStore, MemoryBlobStore, PlanCategory, PlanItem, sha256Hex}
 import ystyle::cjreg.protocol.*
 import bstorm.*
 import std.collection.*

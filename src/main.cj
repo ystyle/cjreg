@@ -13,6 +13,9 @@ import ystyle::cjreg.auth.model.*
 import ystyle::cjreg.config.*
 import ystyle::cjreg.index.*
 import ystyle::cjreg.ui.*
+// 子包必须被引用一次，否则包初始化不执行 —— @Page 路由不会注册（静默 404）
+import ystyle::cjreg.ui.public.*
+import ystyle::cjreg.ui.admin.*
 import cjxt.*
 import cjxt.components.*
 import std.collection.*

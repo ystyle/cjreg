@@ -5,7 +5,9 @@
 // **先 action 后 bind**（cjxt public/js/cangjie-ui.js:333 action 立即发，:490 的 bind 有
 // 300ms 防抖），action 里读到的关键字还是上一次的，表现为"打字没反应，必须再点一次筛选"。
 // 现在查询是派生：只 set 信号，不触发任何动作，结果就该跟着变。
-package ystyle::cjreg.ui
+package ystyle::cjreg.ui.admin
+
+import ystyle::cjreg.ui.*
 
 import cjxt.*
 import bstorm.*

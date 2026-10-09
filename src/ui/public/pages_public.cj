@@ -1,6 +1,8 @@
 // cjxt 公开页面：首页 / 包列表 / 包详情 / 文档（无需登录）
 // 对齐 cjrepo 公开页面（Vue + Element Plus）：首页 hero+统计+功能+CTA、包列表卡片网格+分类筛选、包详情 tab+侧栏
-package ystyle::cjreg.ui
+package ystyle::cjreg.ui.public
+
+import ystyle::cjreg.ui.*
 
 import cjxt.*
 import cjxt.macros.*

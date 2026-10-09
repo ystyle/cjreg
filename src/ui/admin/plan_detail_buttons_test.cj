@@ -7,7 +7,9 @@
 //
 // 这里用 cjxt serializeSubtree 直接渲染组件树断言 JSON，不起 HTTP、不依赖浏览器
 // （执行得快慢也影响不到断言——真实执行是毫秒级收口，浏览器里根本抓不到"执行中"那一瞬）。
-package ystyle::cjreg.ui
+package ystyle::cjreg.ui.admin
+
+import ystyle::cjreg.ui.*
 
 import cjxt.*
 import bstorm.*

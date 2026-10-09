@@ -3,7 +3,9 @@
 // 背景：cjxt 的 AppConfig 支持 title，但 cjreg 没接 → 浏览器标签一直显示默认的「cjxt App」，
 // 品牌文字（公开端导航 / 后台侧栏 / 登录页）也是硬编码的「cjreg」。
 // 现在统一由 [server] site_name 驱动（默认 cjreg）。
-package ystyle::cjreg.ui
+package ystyle::cjreg.ui.public
+
+import ystyle::cjreg.ui.*
 
 import ystyle::cjreg.config.*
 import cjxt.*

@@ -1,7 +1,9 @@
 // 用户门户页面渲染单元测试（/me 三区块 + 登录页）
 //
 // 用 cjxt serializeSubtree 直接渲染组件树并断言 JSON 内容——不起 HTTP 服务、不依赖浏览器。
-package ystyle::cjreg.ui
+package ystyle::cjreg.ui.public
+
+import ystyle::cjreg.ui.*
 
 import cjxt.*
 import bstorm.*
@@ -15,38 +17,7 @@ import std.reflect.*
 import std.unittest.*
 import std.unittest.testmacro.*
 
-func makePortalState(mode: String, publicUrl!: String = "http://localhost:8060", port!: UInt16 = 8060): CjregState {
-    let cfg = CjregConfig()
-    cfg.publicUrl = publicUrl
-    cfg.port = port
-    cfg.permissionMode = mode
-    PasswordHash.ITERATIONS = 1000  // 测试提速
-    beginTestStores()
-    let storm = testStorm()
-    let pkgStore = PackageStore(storm)
-    let userStore = BstormUserStore(storm)
-    let upStore = BstormUpstreamStore(storm)
-    let authSvc = AuthService(userStore, 3600)
-    let adminData = AdminDataStore(storm)
-    CjregState(pkgStore, userStore, upStore, adminData, authSvc, config: cfg)
-}
 
-// 组装页面挂载所需的 LifecycleContext（states + 会话上下文）
-func mountCtx(state: CjregState, ctxMap: HashMap<String, String>): LifecycleContext {
-    let states = HashMap<String, AppState>()
-    states.add(TypeInfo.of<CjregState>().qualifiedName, state)
-    let sctx: SessionContext = SessionContextState(ctxMap)
-    LifecycleContext("sid-test", HashMap<String, String>(), None, None, states: states, sessionContext: Some(sctx))
-}
-
-func userCtxMap(uid: Int64, username: String, isAdmin: Bool): HashMap<String, String> {
-    let m = HashMap<String, String>()
-    m["uid"] = uid.toString()
-    m["username"] = username
-    m["isAdmin"] = if (isAdmin) { "1" } else { "0" }
-    m["token"] = "sess-test"
-    m
-}
 
 @Test
 public class UserPortalRenderTest {

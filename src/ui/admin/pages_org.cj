@@ -1,5 +1,7 @@
 // cjxt 管理界面：用户 / 组织 / 团队 管理页
-package ystyle::cjreg.ui
+package ystyle::cjreg.ui.admin
+
+import ystyle::cjreg.ui.*
 
 import cjxt.*
 import cjxt.macros.*

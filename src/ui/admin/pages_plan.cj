@@ -1,12 +1,14 @@
 // cjxt 管理界面：发布计划（列表 / 创建向导 / 详情）
-package ystyle::cjreg.ui
+package ystyle::cjreg.ui.admin
+
+import ystyle::cjreg.ui.*
 
 import cjxt.*
 import cjxt.macros.*
 import cjxt.components.*
 import ystyle::cjreg.store.*
 import ystyle::cjreg.config.*
-import ystyle::cjreg.server.*
+import ystyle::cjreg.server.{BlobStore, DiskBlobStore, ExecuteReport, IndexProbe, PlanCategory, PlanItem, PlanItemStatus, PublishExecutor, PublishPlanService, applyAnalysisToPlan, categoryHint, checkVersionsInIndex, countRequired, indexWaitRhythmText, packageLabel, planCategoryName, progressTextOf, targetCompareText, targetOverwritable}
 import ystyle::cjreg.index.*
 import ystyle::cjreg.semver_range.*
 import std.collection.*

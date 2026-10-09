@@ -2,7 +2,9 @@
 //
 // 入口由会话上下文（cjxt SessionContext 接口）在渲染期决定：
 // 未登录 → 「登录」（/user/login）；已登录 → 「我的」（/me）；管理员额外 → 「管理后台」（/admin）。
-package ystyle::cjreg.ui
+package ystyle::cjreg.ui.public
+
+import ystyle::cjreg.ui.*
 
 import cjxt.*
 import std.collection.*

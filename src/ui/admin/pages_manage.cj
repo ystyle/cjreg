@@ -1,12 +1,16 @@
 // cjxt 管理界面页面：仪表盘 / 上游管理 / 包管理
-package ystyle::cjreg.ui
+package ystyle::cjreg.ui.admin
+
+import ystyle::cjreg.ui.public.*
+
+import ystyle::cjreg.ui.*
 
 import cjxt.*
 import cjxt.macros.*
 import cjxt.components.*
 import ystyle::cjreg.store.*
 import ystyle::cjreg.config.*
-import ystyle::cjreg.server.*
+import ystyle::cjreg.server.{BlobStore, LifecycleOutcome, LifecycleResult, MemoryBlobStore, RefetchOutcome, hardDeleteVersion, refetchVersion, restoreVersion, shortSha, softDeleteVersion}
 import ystyle::cjreg.semver_range.*
 import std.collection.*
 import std.convert.*
@@ -116,23 +120,6 @@ class DashboardPage <: Component {
     }
 }
 
-// 统计卡：左侧彩色圆底图标 + Statistic 指标，顶部色条
-func statCard(value: String, label: String, icon: String, color: String): IComponent {
-    div([
-        div([
-            div([
-                Icon(icon).size("20px").color("#ffffff"),
-            ], attrs: Some(HashMap<String, String>([("class", cls("stat-card-icon")), ("style", "background-color: ${color}")]))),
-            div([
-                Statistic()
-                    .title(label)
-                    .value(value)
-                    .valueStyle("font-size: 26px; font-weight: 700; color: #303133"),
-            ], attrs: Some(HashMap<String, String>([("class", cls("stat-card-text"))]))),
-        ], attrs: Some(HashMap<String, String>([("class", cls("stat-card-inner"))]))),
-    ], attrs: Some(HashMap<String, String>([("class", cls("stat-card")),
-        ("style", "border-top: 3px solid ${color}")])))
-}
 
 // 秒级时间戳 → 可读时间（本地时区）
 func formatLogTime(ms: Int64): String {

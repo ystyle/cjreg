@@ -2,7 +2,9 @@
 //
 // 与包管理同一根因同一修法：行数据由 Effect 从「数据版本 + 关键字 + 分页」信号派生，
 // 所以只 set 搜索信号、不触发任何动作，表格就该跟着变。
-package ystyle::cjreg.ui
+package ystyle::cjreg.ui.admin
+
+import ystyle::cjreg.ui.*
 
 import cjxt.*
 import bstorm.*

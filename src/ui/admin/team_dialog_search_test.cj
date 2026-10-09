@@ -6,7 +6,9 @@
 //
 // 顺带守住"数据变更仍能反映"：editingId / store 都不是信号，换团队、关联、移除之后
 // 由 pkgVersion / memberVersion 版本号触发重算（这类改动不能因为改成派生就丢掉）。
-package ystyle::cjreg.ui
+package ystyle::cjreg.ui.admin
+
+import ystyle::cjreg.ui.*
 
 import cjxt.*
 import bstorm.*

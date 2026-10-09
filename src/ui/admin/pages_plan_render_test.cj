@@ -4,12 +4,14 @@
 //   * 明细（共 N 项 / 需发布 M）与「检查索引」按钮判据都按全量算，否则隐藏几条不推送的项，
 //     计数会跟着变小（像项丢了）、在等索引的项还会被藏到按钮失明；
 //   * 列表倒序（新的在前）由 store 的 listPlans 提供，这里守到页面这一层。
-package ystyle::cjreg.ui
+package ystyle::cjreg.ui.admin
+
+import ystyle::cjreg.ui.*
 
 import cjxt.*
 import bstorm.*
 import ystyle::cjreg.store.*
-import ystyle::cjreg.server.*
+import ystyle::cjreg.server.{PlanCategory, PlanItem}
 import ystyle::cjreg.auth.*
 import ystyle::cjreg.auth.util.*
 import ystyle::cjreg.auth.model.*

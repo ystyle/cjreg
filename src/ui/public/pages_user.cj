@@ -5,14 +5,17 @@
 //   - /admin/login 仍只接受管理员（同时是 requireAdmin 的跳转目标）；
 //   - /user/login 接受所有启用用户（含管理员），登录态里 isAdmin 从用户对象取；
 //   - /me 由 requireUser 守卫（登录即可），三区块：发布 Token / 我的包 / 我的团队与权限。
-package ystyle::cjreg.ui
+package ystyle::cjreg.ui.public
+
+import ystyle::cjreg.ui.*
 
 import cjxt.*
 import cjxt.macros.*
 import cjxt.components.*
 import ystyle::cjreg.store.*
 import ystyle::cjreg.auth.model.*
-import ystyle::cjreg.server.*
+// 精确导入，避免与 ui 的同名助手冲突（server.pageWindow 的钳制策略与 ui 的不同）
+import ystyle::cjreg.server.{MyPackageRow, MyTeamRow, myPackageRows, myTeamRows, permissionHint}
 import std.collection.*
 import std.time.*
 import std.convert.*
@@ -484,10 +487,3 @@ func joinList(items: ArrayList<String>): String {
     sb.toString()
 }
 
-// 时间戳 → "MM-dd HH:mm"（与日志页展示口径一致）
-func formatTimeMs(ms: Int64): String {
-    if (ms <= 0) {
-        return "-"
-    }
-    DateTime.fromUnixTimeStamp(Duration.millisecond * ms).inLocal().format("MM-dd HH:mm")
-}

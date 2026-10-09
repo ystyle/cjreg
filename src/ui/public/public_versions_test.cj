@@ -2,7 +2,9 @@
 //
 // 版本历史行现在展示：版本号 + 「最新」+ 收录/发布时间 + 制品大小 + sha256 缩写（悬停完整值）。
 // 纯函数便于断言，避免为了测渲染去搭 LifecycleContext。
-package ystyle::cjreg.ui
+package ystyle::cjreg.ui.public
+
+import ystyle::cjreg.ui.*
 
 import ystyle::cjreg.store.*
 import std.unittest.testmacro.*

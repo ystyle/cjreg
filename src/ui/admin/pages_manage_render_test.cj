@@ -3,7 +3,9 @@
 // 这条正是本次修的缺陷：旧实现把过滤结果缓存进 rows、render 又不读过滤信号，
 // 于是输入关键字后表格永不重算（只有再点「刷新」才生效）。
 // 这里只 set 搜索信号，不触发任何动作，断言表格已经跟着变。
-package ystyle::cjreg.ui
+package ystyle::cjreg.ui.admin
+
+import ystyle::cjreg.ui.*
 
 import cjxt.*
 import cjxt.components.Input

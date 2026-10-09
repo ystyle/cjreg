@@ -139,3 +139,22 @@ public func listBody(hint: String, table: IComponent): IComponent {
         table,
     ])
 }
+
+// 统计卡（公开端与管理端共用）
+// 统计卡：左侧彩色圆底图标 + Statistic 指标，顶部色条
+public func statCard(value: String, label: String, icon: String, color: String): IComponent {
+    div([
+        div([
+            div([
+                Icon(icon).size("20px").color("#ffffff"),
+            ], attrs: Some(HashMap<String, String>([("class", cls("stat-card-icon")), ("style", "background-color: ${color}")]))),
+            div([
+                Statistic()
+                    .title(label)
+                    .value(value)
+                    .valueStyle("font-size: 26px; font-weight: 700; color: #303133"),
+            ], attrs: Some(HashMap<String, String>([("class", cls("stat-card-text"))]))),
+        ], attrs: Some(HashMap<String, String>([("class", cls("stat-card-inner"))]))),
+    ], attrs: Some(HashMap<String, String>([("class", cls("stat-card")),
+        ("style", "border-top: 3px solid ${color}")])))
+}

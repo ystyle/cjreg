@@ -81,13 +81,10 @@ public func publicStatsModel(pkgStore: PackageStore, adminData: AdminDataStore, 
         userCount, storage, CJREG_SERVER_VERSION, startedAt, uptime)
 }
 
-public func publicStatsJson(s: PublicStats): String {
-    let sb = StringBuilder()
-    sb.append("{\"packages\":${s.packages},\"versions\":${s.versions},\"downloads\":${s.downloads},")
-    sb.append("\"organizations\":${s.organizations},\"teams\":${s.teams},\"users\":${s.users},")
-    sb.append("\"storageBytes\":${s.storageBytes},\"serverVersion\":\"${escapeJsonStr(s.serverVersion)}\",")
-    sb.append("\"startedAt\":${s.startedAt},\"uptimeSeconds\":${s.uptimeSeconds}}")
-    sb.toString()
+// C1 响应 DTO（字段顺序见 PublicStatsDto）
+public func publicStatsJson(s: PublicStats): PublicStatsDto {
+    PublicStatsDto(s.packages, s.versions, s.downloads, s.organizations, s.teams, s.users,
+        s.storageBytes, s.serverVersion, s.startedAt, s.uptimeSeconds)
 }
 
 // ===== C2 包列表 =====
@@ -284,31 +281,22 @@ public func pageWindow(total: Int64, page: Int64, size: Int64): (Int64, Int64) {
     (start, end)
 }
 
-public func publicPackageListJson(rows: ArrayList<PublicPackageRow>, total: Int64, page: Int64, size: Int64): String {
+// C2 响应 DTO：只下发本页窗口内的行，total 为过滤后的总条数（分页语义在 pageWindow）
+public func publicPackageListJson(rows: ArrayList<PublicPackageRow>, total: Int64, page: Int64,
+                                  size: Int64): PublicPackageListDto {
     let (start, end) = pageWindow(rows.size, page, size)
-    let sb = StringBuilder()
-    sb.append("{\"total\":${total},\"page\":${page},\"size\":${size},\"items\":[")
+    let items = ArrayList<PublicPackageDto>()
     var i = start
     while (i < end) {
-        if (i > start) {
-            sb.append(",")
-        }
-        sb.append(publicPackageJsonInner(rows[i]))
+        items.add(publicPackageDto(rows[i]))
         i++
     }
-    sb.append("]}")
-    sb.toString()
+    PublicPackageListDto(total, page, size, items)
 }
 
-func publicPackageJsonInner(r: PublicPackageRow): String {
-    let sb = StringBuilder()
-    sb.append("{\"organization\":\"${escapeJsonStr(r.org)}\",\"name\":\"${escapeJsonStr(r.name)}\",")
-    sb.append("\"fullName\":\"${escapeJsonStr(r.fullName())}\",\"versionCount\":${r.versionCount},")
-    sb.append("\"latestVersion\":\"${escapeJsonStr(r.latestVersion)}\",")
-    sb.append("\"description\":\"${escapeJsonStr(r.description)}\",\"downloads\":${r.downloads},")
-    sb.append("\"updatedAt\":${r.updatedAt},")
-    sb.append("\"categories\":${jsonStringArray(r.categories)},\"license\":${jsonStringArray(r.license)}}")
-    sb.toString()
+func publicPackageDto(r: PublicPackageRow): PublicPackageDto {
+    PublicPackageDto(r.org, r.name, r.fullName(), r.versionCount, r.latestVersion, r.description,
+        r.downloads, r.updatedAt, r.categories, r.license)
 }
 
 // ===== C3/C4 版本 =====
@@ -413,41 +401,31 @@ public func publicVersion(pkgStore: PackageStore, org: String, name: String, ver
     }
 }
 
-public func publicVersionJsonRow(v: PublicVersionRow): String {
-    let sb = StringBuilder()
-    sb.append("{\"version\":\"${escapeJsonStr(v.version)}\",\"cjcVersion\":\"${escapeJsonStr(v.cjcVersion)}\",")
-    sb.append("\"description\":\"${escapeJsonStr(v.description)}\",")
-    sb.append("\"artifactType\":\"${escapeJsonStr(v.artifactType)}\",\"executable\":${v.executable},")
-    sb.append("\"authors\":${jsonStringArray(v.authors)},\"repository\":\"${escapeJsonStr(v.repository)}\",")
-    sb.append("\"homepage\":\"${escapeJsonStr(v.homepage)}\",\"documentation\":\"${escapeJsonStr(v.documentation)}\",")
-    sb.append("\"tag\":${jsonStringArray(v.tag)},\"category\":${jsonStringArray(v.category)},")
-    sb.append("\"license\":${jsonStringArray(v.license)},\"sha256\":\"${escapeJsonStr(v.sha256)}\",")
-    sb.append("\"tarballSize\":${v.tarballSize},\"downloads\":${v.downloads},")
-    sb.append("\"publisherName\":\"${escapeJsonStr(v.publisherName)}\",")
-    sb.append("\"createdAt\":${v.createdAt},\"updatedAt\":${v.updatedAt}}")
-    sb.toString()
+// C4 单版本响应 DTO（C3 的 versions 数组元素同形）
+public func publicVersionJsonRow(v: PublicVersionRow): PublicVersionDto {
+    publicVersionDto(v)
+}
+
+func publicVersionDto(v: PublicVersionRow): PublicVersionDto {
+    PublicVersionDto(v.version, v.cjcVersion, v.description, v.artifactType, v.executable, v.authors,
+        v.repository, v.homepage, v.documentation, v.tag, v.category, v.license, v.sha256, v.tarballSize,
+        v.downloads, v.publisherName, v.createdAt, v.updatedAt)
 }
 
 /// C3 包详情：包级聚合 + 全部版本 + 最新版本 README
-public func publicPackageDetailJson(org: String, name: String, rows: ArrayList<PublicVersionRow>, readme: String): String {
+public func publicPackageDetailJson(org: String, name: String, rows: ArrayList<PublicVersionRow>,
+                                    readme: String): PublicPackageDetailDto {
     var downloads: Int64 = 0
     for (r in rows) {
         downloads += r.downloads
     }
     let latest = if (rows.size > 0) { rows[0].version } else { "" }
-    let sb = StringBuilder()
-    sb.append("{\"organization\":\"${escapeJsonStr(org)}\",\"name\":\"${escapeJsonStr(name)}\",")
-    sb.append("\"fullName\":\"${escapeJsonStr(if (org.isEmpty()) { name } else { "${org}::${name}" })}\",")
-    sb.append("\"versionCount\":${rows.size},\"latestVersion\":\"${escapeJsonStr(latest)}\",")
-    sb.append("\"downloads\":${downloads},\"readme\":\"${escapeJsonStr(readme)}\",\"versions\":[")
-    for (i in 0..rows.size) {
-        if (i > 0) {
-            sb.append(",")
-        }
-        sb.append(publicVersionJsonRow(rows[i]))
+    let versions = ArrayList<PublicVersionDto>()
+    for (r in rows) {
+        versions.add(publicVersionDto(r))
     }
-    sb.append("]}")
-    sb.toString()
+    PublicPackageDetailDto(org, name, if (org.isEmpty()) { name } else { "${org}::${name}" },
+        rows.size, latest, downloads, readme, versions)
 }
 
 // ===== C5 组织 =====
@@ -567,38 +545,17 @@ func orgVisible(pkgStore: PackageStore, adminData: AdminDataStore, user: ?User,
     return false
 }
 
-public func publicOrgListJson(rows: ArrayList<PublicOrgRow>): String {
-    let sb = StringBuilder()
-    sb.append("{\"total\":${rows.size},\"items\":[")
-    for (i in 0..rows.size) {
-        if (i > 0) {
-            sb.append(",")
-        }
-        let r = rows[i]
-        sb.append("{\"id\":${r.id},\"name\":\"${escapeJsonStr(r.name)}\",")
-        sb.append("\"displayName\":\"${escapeJsonStr(r.displayName)}\",")
-        sb.append("\"description\":\"${escapeJsonStr(r.description)}\",\"isDefault\":${r.isDefault},")
-        sb.append("\"packageCount\":${r.packageCount},\"versionCount\":${r.versionCount}}")
+// C5 响应 DTO：total 恒等于 items.size（组织列表不分页）
+public func publicOrgListJson(rows: ArrayList<PublicOrgRow>): PublicOrgListDto {
+    let items = ArrayList<PublicOrgDto>()
+    for (r in rows) {
+        items.add(PublicOrgDto(r.id, r.name, r.displayName, r.description, r.isDefault, r.packageCount,
+            r.versionCount))
     }
-    sb.append("]}")
-    sb.toString()
+    PublicOrgListDto(rows.size, items)
 }
 
 // ===== 公共辅助 =====
-
-/// 字符串数组 → JSON 数组
-public func jsonStringArray(items: ArrayList<String>): String {
-    let sb = StringBuilder()
-    sb.append("[")
-    for (i in 0..items.size) {
-        if (i > 0) {
-            sb.append(",")
-        }
-        sb.append("\"${escapeJsonStr(items[i])}\"")
-    }
-    sb.append("]")
-    sb.toString()
-}
 
 /// 逗号分隔参数 → 去空项数组（`category=a,b` → [a, b]）
 public func splitCommaList(raw: String): ArrayList<String> {

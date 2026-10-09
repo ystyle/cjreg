@@ -1,5 +1,5 @@
 # Docker 构建上下文裁剪（镜像只需二进制 + public/）
-# 注意：必须保留宿主构建产物 target/release/bin/ystyle::cjreg
+# 注意：必须保留宿主构建产物 target/release/bin/ystyle::cjreg（Dockerfile 的「宿主编译→镜像打包」路径要用）
 .git
 .github
 .smoke
@@ -14,3 +14,14 @@ target/release/bin/*.log
 *.gcda
 *.gcno
 cov_output
+
+# ── 以下为 Dockerfile.build（容器内自包含构建）额外需要排除的 ──────────────
+# 宿主的锁定文件：里面的依赖来源是本机 registry 配置，容器内应当按 cjpm.toml 重新解析
+cjpm.lock
+# 演示/冒烟/QA 数据：含示例包各自的 cjpm.toml 与数百 MB 录像，传输慢且无助于构建
+.demo
+.qa-shots
+.tools
+__pycache__
+*.pyc
+

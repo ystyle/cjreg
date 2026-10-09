@@ -62,16 +62,10 @@ public func probeSummary(r: UpstreamProbeResult): String {
     "已连通但不可用（${r.status}，${r.latencyMs}ms）${tail}"
 }
 
-public func upstreamProbeJson(r: UpstreamProbeResult): String {
-    let sb = StringBuilder()
-    sb.append("{\"upstreamId\":${r.upstreamId},\"upstreamName\":\"${escapeJsonStr(r.upstreamName)}\",")
-    sb.append("\"baseUrl\":\"${escapeJsonStr(r.baseUrl)}\",\"testedUrl\":\"${escapeJsonStr(r.testedUrl)}\",")
-    sb.append("\"enabled\":${r.enabled},\"reachable\":${r.reachable},\"healthy\":${r.healthy},")
-    sb.append("\"status\":${r.status},\"latencyMs\":${r.latencyMs},\"bodyBytes\":${r.bodyBytes},")
-    sb.append("\"authUsed\":${r.authUsed},\"packages\":${jsonStringArray(r.packages)},")
-    sb.append("\"error\":\"${escapeJsonStr(r.error)}\",")
-    sb.append("\"summary\":\"${escapeJsonStr(probeSummary(r))}\"}")
-    sb.toString()
+// 探测结果 JSON（响应 DTO；summary 是同一份结果的展示文案）
+public func upstreamProbeJson(r: UpstreamProbeResult): UpstreamProbeResp {
+    UpstreamProbeResp(r.upstreamId, r.upstreamName, r.baseUrl, r.testedUrl, r.enabled, r.reachable,
+        r.healthy, r.status, r.latencyMs, r.bodyBytes, r.authUsed, r.packages, r.error, probeSummary(r))
 }
 
 /// 索引正文（NDJSON）里扫出包名样本：取 `"name":"xxx"` 的前几个（诊断用，不解析整体结构）

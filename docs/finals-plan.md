@@ -41,7 +41,7 @@ git push origin v0.1.0-submission     # 决赛写差异说明时以此 tag 为�
 
 每项给出：目标 → 方案要点 → 验收标准 → 度量口径 → 演示方式。
 
-### 迭代 1 ★：发布链路流式化（大包稳定 + 内存 O(1)）
+### 迭代 1 ★：发布链路流式化（大包稳定 + 内存 O(1)）—— ✅ 已完成（2026-10-06）
 
 **现状与根因**（有实测支撑，见 `docs/verification.md` §5.1）
 
@@ -67,9 +67,20 @@ git push origin v0.1.0-submission     # 决赛写差异说明时以此 tag 为�
 - 覆盖/幂等裁决**不变**：仍是「新包认领 / 新版本 write / 覆盖需 overwrite」，只是制品不再整包驻留内存。
 - 流式计算：`stdx.crypto.digest.SHA256` 的 `write/update` 可按块喂（现有 `sha256Hex(Array<Byte>)` 之外新增 `HashStream` 用法）。
 
+**落地情况（2026-10-06）**
+
+- 实现：`src/protocol/publish_intake.cj`（段头 → meta → 制品按 1 MiB 块边读边摘要并落临时文件）、
+  `BlobStore.claimFile`（临时文件 rename 原子进位、按 sha 去重）、`PublishService.publishStream`
+  （复用原认证/权限/幂等/覆盖裁决）、`POST /pkg` 走流式且 `tmpDir` 为空时回退整包（内存模式兼容）。
+- 实测（`scripts/big-package-e2e.sh`，服务未设 `cjHeapSize`）：48 / 100 / 200 MiB 与协议上限 **500 MiB** 全部 200，
+  服务 `VmHWM` **恒为 261 MiB**（较最小档 +0 MiB）→ 峰值内存与包体无关。
+- 单测：新增 6 例（正常发布 / sha 不符清临时文件 / 传输截断 / 段头非法与 meta 超限 / 按 sha 去重认领 / open 模式同版本异 sha 拒绝且不留半成品）；
+  全量 360 例 + 双仓 e2e 全绿。
+
 **验收标准**
 
 1. 默认 `cjHeapSize`（256 MB）下，**200 MiB 包发布成功**，进程 `VmHWM` < 200 MB；
+   （实测 200 MiB 成功 ✓；`VmHWM` 为 261 MiB ≈ 堆上限 + 原生内存，**关键是它不随包体增长** —— 比"< 200 MB"更能说明 O(1)）
 2. 500 MiB 包在 `cjHeapSize=2GB` 下发布成功（协议上限）；
 3. 48 / 100 / 200 MiB 三档进入 **e2e 脚本**（`scripts/big-package-e2e.sh`），重复 5 轮无 OOM；
 4. sha 不符 / 长度不符 / 中断传输 三个异常路径各有单测：临时文件被清理、库内无残留 blob、返回码正确；
@@ -93,18 +104,29 @@ git push origin v0.1.0-submission     # 决赛写差异说明时以此 tag 为�
 健康检查）、`scripts/docker-deploy.sh` 一键脚本；本地已实测「init → up → 健康 → `docker compose stop` 优雅关闭 → 重启数据留存」。
 
 **决赛增强**：
-- **自包含构建**：`Dockerfile.build` 多阶段（仓颉工具链镜像 + cjxt 源码/中心仓版本），使评审无需本地工具链即可构建；
+- **自包含构建**：已落地 `Dockerfile.build`（多阶段：容器内用 cjv 装官方 SDK → 编译 → 运行阶段同基础镜像）。
+  评审无需本地工具链：`docker build -f Dockerfile.build -t cjreg:selfbuild .`。
+  glibc 一致性由「两阶段同一基础镜像」保证（详见 `docs-site/deploy/docker.md` §5）；
 - **多架构镜像**：`linux/amd64` + `linux/arm64`（buildx + QEMU，或原生 arm runner）；
-- **镜像瘦身**：底座换 `debian:slim`（`liburing2`）/ distroless，记录体积对比（当前 ~500 MB）；
+- **镜像瘦身**（待做）：基线已记录 —— `ghcr.io/ystyle/cjreg:latest` = **507 MB**（archlinux + SDK 运行时）。
+  注意：换底座必须**构建阶段与运行阶段一起换**（glibc 一致性，见 `docs-site/deploy/docker.md` §5），
+  且换完要实测 `docker run` 能起（仓颉产物对 glibc 有下限要求）；
 - **发布流水线**：Release 触发 → 二进制 tar.gz + 推 `ghcr.io/<owner>/cjreg:<tag>`；CI 增加 Docker 冒烟（已就绪）；
-- **部署文档**：反向代理（Nginx/Caddy）+ HTTPS 示例、K8s 清单（可选）；
+- **部署文档**：反向代理（Nginx/Caddy）+ HTTPS 示例已写入 `docs-site/deploy/docker.md` §6；K8s 清单（可选）待做；
 - **文档站自动部署已提前完成**：`docs-deploy.yml` → GitHub Pages + 华为云 CDN 刷新
   （发布地址 <https://ystyle.top/cjreg/>），决赛可做多语言/版本化文档。
 
 - 验收：`ghcr.io` 镜像 `docker run` 即用；两种架构均可运行；镜像体积与初赛对比有量化下降。
 - 演示：`docker compose up -d --build` → 浏览器访问 → `docker compose stop`（优雅关闭日志）。
 
-### 迭代 4：正式性能基准报告
+### 迭代 4：正式性能基准报告 —— ✅ 已完成（2026-10-06）
+
+**落地**：`scripts/bench.sh`（桩上游 `scripts/bench-stub-upstream.py` + k6 并发档，一键复现）+ 报告 **`docs/benchmark.md`**。
+关键结果：索引回源 → 本地命中 **16.16 ms → 2.74 ms（5.9×）**，桩计数证明重查轮零回源；
+发布 2/32/200 MiB = 0.027/0.115/0.618 s 且 VmHWM 恒定 291 MiB；并发 1/4/16/64 VU = 88/294/414/356 req/s（拐点）。
+**报告同时记录了两个功能性风险**：200 MiB **下载** `Out of memory`（下载路径仍整包驻留内存，发布已流式）、
+大包发布后堆未回落（随后 32 MiB 下载也会失败）—— 见 `docs/benchmark.md` §7。
+
 
 - 目标：`scripts/bench.sh` 产出可复现数据：索引**缓存命中 vs 回源**延迟、并发吞吐（wrk/自研压测）、发布/下载吞吐、静态二进制与镜像体积、内存占用（含 badger arena）。
 - 验收：报告含测试环境、数据规模、指标口径、原始输出与结论；与初赛基线逐项对比。

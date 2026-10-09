@@ -286,19 +286,19 @@ func testPrivateModeVisibilityFiltering() {
 func testPublicJsonShapes() {
     let (store, adminData) = makePublicFixture()
     let rows = collectPublicPackages(store, adminData, None, false)
-    let listJson = publicPackageListJson(rows, rows.size, 1, 20)
+    let listJson = jsonText(publicPackageListJson(rows, rows.size, 1, 20))
     @Expect(listJson.contains("\"total\":3"), true)
     @Expect(listJson.contains("\"fullName\":\"test::demo\""), true)
     @Expect(listJson.contains("\"versionCount\":2"), true)
     @Expect(listJson.contains("\"categories\":[\"cli\",\"web\"]"), true)
 
     // 分页：本页 1 条、total 仍为 3
-    let pageJson = publicPackageListJson(rows, rows.size, 2, 1)
+    let pageJson = jsonText(publicPackageListJson(rows, rows.size, 2, 1))
     @Expect(pageJson.contains("\"total\":3"), true)
     @Expect(pageJson.contains("\"page\":2"), true)
 
     let versions = publicVersions(store, "test", "demo", { _ => "alice" })
-    let detailJson = publicPackageDetailJson("test", "demo", versions, "# demo\n含 \"引号\" 与 \\\\ 反斜杠")
+    let detailJson = jsonText(publicPackageDetailJson("test", "demo", versions, "# demo\n含 \"引号\" 与 \\\\ 反斜杠"))
     @Expect(detailJson.contains("\"versionCount\":2"), true)
     @Expect(detailJson.contains("\"latestVersion\":\"1.1.0\""), true)
     @Expect(detailJson.contains("\"downloads\":10"), true)
@@ -306,19 +306,15 @@ func testPublicJsonShapes() {
     @Expect(detailJson.contains("\\\\"), true)                  // 反斜杠被转义
     @Expect(detailJson.contains("\"publisherName\":\"alice\""), true)
 
-    let statsJson = publicStatsJson(publicStatsModel(store, adminData, 2, 0, 0))
+    let statsJson = jsonText(publicStatsJson(publicStatsModel(store, adminData, 2, 0, 0)))
     @Expect(statsJson.contains("\"packages\":3"), true)
     @Expect(statsJson.contains("\"serverVersion\":\"${CJREG_SERVER_VERSION}\""), true)
 
     let _ = adminData.createOrg("test", "测试\"组织\"", 1, 0)
-    let orgJson = publicOrgListJson(publicOrgRows(store, adminData, None, false))
+    let orgJson = jsonText(publicOrgListJson(publicOrgRows(store, adminData, None, false)))
     // 已登记的 test + 未登记的 other（有包）→ 2 行
     @Expect(orgJson.contains("\"total\":2"), true)
     @Expect(orgJson.contains("测试\\\"组织\\\""), true)          // 组织显示名转义
     @Expect(orgJson.contains("\"packageCount\":2"), true)
     @Expect(orgJson.contains("\"name\":\"other\",\"displayName\":\"\",\"description\":\"\",\"isDefault\":false"), true)
-
-    // 字符串数组序列化
-    @Expect(jsonStringArray(ArrayList<String>()), "[]")
-    @Expect(jsonStringArray(ArrayList<String>(["a", "b\"c"])), "[\"a\",\"b\\\"c\"]")
 }

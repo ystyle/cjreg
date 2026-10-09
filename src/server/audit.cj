@@ -134,36 +134,3 @@ public func parseAuditKind(raw: String): ?String {
     }
 }
 
-// JSON 字符串转义（日志字段可能含引号/反斜杠/换行：UA、错误消息）
-public func escapeJsonStr(s: String): String {
-    let sb = StringBuilder()
-    for (c in s.toRuneArray()) {
-        match (c) {
-            case r'"' => sb.append("\\\"")
-            case r'\\' => sb.append("\\\\")
-            case r'\n' => sb.append("\\n")
-            case r'\r' => sb.append("\\r")
-            case r'\t' => sb.append("\\t")
-            case _ =>
-                let n = UInt32(c)
-                if (n < 0x20) {
-                    sb.append("\\u${pad4(n)}")
-                } else {
-                    sb.append(c)
-                }
-        }
-    }
-    sb.toString()
-}
-
-func pad4(n: UInt32): String {
-    let hex = n.toString(radix: 16)
-    var pad = 4 - hex.size
-    let sb = StringBuilder()
-    while (pad > 0) {
-        sb.append("0")
-        pad--
-    }
-    sb.append(hex)
-    sb.toString()
-}

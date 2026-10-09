@@ -11,6 +11,7 @@ import ystyle::cjreg.config.*
 import std.collection.*
 import stdx.encoding.json.stream.*
 import std.io.*
+import std.fs.*
 import std.env.*
 
 // 组装 HTTP 服务：官方协议三端点 + 健康检查 + 管理 API
@@ -20,7 +21,10 @@ public func buildServer(
     upstreamSvc: ?UpstreamService,
     blobStore: BlobStore,
     config!: ?CjregConfig = None,
-    adminData!: ?AdminDataStore = None
+    adminData!: ?AdminDataStore = None,
+    // 发布体流式接收的临时文件目录（必须与 blob 同目录：rename 才能原子进位、不跨文件系统）。
+    // 留空则回退「整包读入内存」的旧路径（内存 blob 模式与测试便捷重载用）。
+    tmpDir!: String = ""
 ): Tang {
     let app = Tang().setHost("0.0.0.0")
     // 发布认证：管理服务存在时使用其 AuthService（规格 Authorization: publishToken）
@@ -52,7 +56,7 @@ public func buildServer(
 
     // 健康检查（自有端点，非官方协议）
     app.get("/api/health", { ctx =>
-        ctx.writeString("{\"status\":\"ok\"}")
+        writeDto(ctx, 200u16, OkResp())
     })
 
     // 用户门户只读 API（/api/user/*）：session token 鉴权，普通用户与管理员均可
@@ -83,7 +87,8 @@ public func buildServer(
     app.post("/pkg/:name", { ctx =>
         let name = ctx.param("name")
         let org = ctx.query("organization") ?? ""
-        let body = ctx.bodyRaw()
+        // 制品接收：默认流式（边读边算 sha256 并落临时文件，内存占用与包体无关）；
+        // 未配置 tmpDir（内存模式）时回退整包读取。
         // 规格：Authorization: ${publishToken}（发布用户 token；兼容 "Bearer <token>" 写法）
         let token = extractAuthToken(ctx)
         // 审计身份：令牌有效则记真实用户，否则记为匿名（不回写令牌明文）
@@ -95,7 +100,30 @@ public func buildServer(
             case Some(u) => (u.id, u.username)
             case None => (0, "")
         }
-        let result = publishSvc.publish(org, name, body, token)
+        let (result, bodySize) = if (!tmpDir.isEmpty()) {
+            let tmpPath = tmpDir + "/.tmp-" + nowMsUtc().toString() + "-" + org + "-" + name
+            let intake: ?IntakeResult = try {
+                intakePublishBody(ctx.request.body, tmpPath)
+            } catch (e: Exception) {
+                println("[cjreg] 发布体流式接收异常: " + e.toString())
+                None
+            }
+            match (intake) {
+                case Some(r) =>
+                    (publishSvc.publishStream(org, name, r.metaData, r.sha256, r.size, tmpPath, token), r.size)
+                case None =>
+                    // 格式非法 / 超限 / 传输中断：清掉半成品临时文件（pubishStream 未被调用）
+                    try {
+                        removeIfExists(tmpPath, recursive: false)
+                    } catch (_: Exception) {
+                        ()
+                    }
+                    (PublishResult(PublishOutcome.InvalidFormat, 0, "invalid publish data format"), 0)
+            }
+        } else {
+            let body = ctx.bodyRaw()
+            (publishSvc.publish(org, name, body, token), body.size)
+        }
         // 审计版本：成功时从落库文档取（失败时 meta 不可信，目标只到包名）
         var version = ""
         if (result.outcome == PublishOutcome.Ok) {
@@ -108,36 +136,36 @@ public func buildServer(
         match (result.outcome) {
             case PublishOutcome.Ok =>
                 writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "ok", target, ctx,
-                    detail: "size=${body.size}")
-                ctx.status(200u16).writeStringWithCode(200u16, "{\"status\":\"ok\",\"id\":${result.pkgId}}")
+                    detail: "size=${bodySize}")
+                writeDto(ctx, 200u16, OkIdResp(result.pkgId))
             case PublishOutcome.InvalidFormat =>
                 writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
                     error: "invalid data format")
-                ctx.status(400u16).writeStringWithCode(400u16, "{\"error\":\"invalid data format\"}")
+                writeDto(ctx, 400u16, ErrorResp("invalid data format"))
             case PublishOutcome.MetaMismatch =>
                 writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
                     error: result.message)
-                ctx.status(400u16).writeStringWithCode(400u16, "{\"error\":\"${result.message}\"}")
+                writeDto(ctx, 400u16, ErrorResp(result.message))
             case PublishOutcome.ShaMismatch =>
                 writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
                     error: result.message)
-                ctx.status(400u16).writeStringWithCode(400u16, "{\"error\":\"${result.message}\"}")
+                writeDto(ctx, 400u16, ErrorResp(result.message))
             case PublishOutcome.Conflict =>
                 writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
                     error: result.message)
-                ctx.status(409u16).writeStringWithCode(409u16, "{\"error\":\"conflict\",\"detail\":\"${result.message}\"}")
+                writeDto(ctx, 409u16, ErrorResp("conflict", detail: Some(result.message)))
             case PublishOutcome.BadRequest =>
                 writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
                     error: result.message)
-                ctx.status(400u16).writeStringWithCode(400u16, "{\"error\":\"${result.message}\"}")
+                writeDto(ctx, 400u16, ErrorResp(result.message))
             case PublishOutcome.Unauthorized =>
                 writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
                     error: "unauthorized: ${result.message}")
-                ctx.status(401u16).writeStringWithCode(401u16, "{\"error\":\"${result.message}\"}")
+                writeDto(ctx, 401u16, ErrorResp(result.message))
             case PublishOutcome.Forbidden =>
                 writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
                     error: "forbidden: ${result.message}")
-                ctx.status(403u16).writeStringWithCode(403u16, "{\"error\":\"${result.message}\"}")
+                writeDto(ctx, 403u16, ErrorResp(result.message))
         }
     })
 
@@ -160,20 +188,21 @@ public func buildServer(
         downloadSvc.find(org, name, version)
         match (proxySvc) {
             case Some(proxy) =>
-                let (outcome, blob, sha) = proxy.fetchArtifact(org, name, version)
-                match (blob) {
-                    case Some(bytes) =>
-                        // 制品到手 → 顺手补齐该版本的展示字段/README
-                        // （回源聚合的包只有索引字段，展示信息只存在于制品内部，见 artifact_enrich.cj）
-                        let _ = enrichDocByVersion(store, org, name, version, bytes)
+                // 流式下载：制品直接以流接入响应，不再整包读进内存。
+                // 代价是这里不再做"顺路补齐展示字段/README"——那需要把制品整个读进内存，
+                // 与流式互斥。已补齐的文档不受影响；未补齐的回源包保持现状（补齐失败本就不影响下载，
+                // 需要补的时候走 admin sync-metadata 或再次触发回源聚合）。
+                let (outcome, stream, sha) = proxy.fetchArtifactStream(org, name, version)
+                match (stream) {
+                    case Some(st) =>
                         ctx.attachment("${name}-${version}.cjp")
                             .set("Content-Type", "application/x-gzip")
-                        ctx.write(bytes)
+                        ctx.responseBuilder.body(st)
                     case None =>
-                        ctx.status(404u16).writeStringWithCode(404u16, "{\"error\":\"not found\"}")
+                        writeDto(ctx, 404u16, ErrorResp("not found"))
                 }
             case None =>
-                ctx.status(404u16).writeStringWithCode(404u16, "{\"error\":\"not found\"}")
+                writeDto(ctx, 404u16, ErrorResp("not found"))
         }
     })
 
@@ -188,12 +217,11 @@ public func buildServer(
         let name = ctx.param("name")
         let org = ctx.query("organization") ?? ""
         if (name.size < 3) {
-            ctx.status(400u16).writeStringWithCode(400u16, "{\"error\":\"invalid package name\"}")
+            writeDto(ctx, 400u16, ErrorResp("invalid package name"))
             return
         }
         if (!indexShardMatches(ctx.param("mo"), ctx.param("du"), name)) {
-            ctx.status(400u16).writeStringWithCode(400u16,
-                "{\"error\":\"Bad request: first two and second two not match module name.\"}")
+            writeDto(ctx, 400u16, ErrorResp("Bad request: first two and second two not match module name."))
             return
         }
         // 读鉴权（requireAuth=true）：token + read 权限
@@ -215,12 +243,12 @@ public func buildServer(
             case Some(proxy) =>
                 let (outcome, ndjson) = proxy.fetchIndex(org, name)
                 if (ndjson.isEmpty()) {
-                    ctx.status(404u16).writeStringWithCode(404u16, "{\"error\":\"not found\"}")
+                    writeDto(ctx, 404u16, ErrorResp("not found"))
                 } else {
                     ctx.contentType("application/x-ndjson").writeString(ndjson)
                 }
             case None =>
-                ctx.status(404u16).writeStringWithCode(404u16, "{\"error\":\"not found\"}")
+                writeDto(ctx, 404u16, ErrorResp("not found"))
         }
     })
 
@@ -252,6 +280,10 @@ public func buildServer(
             app.get("/api/admin/resolve", { ctx => adm.resolvePackage(ctx) })
             app.post("/api/admin/publish-plans/analyze", { ctx => adm.analyzePlan(ctx) })
             app.post("/api/admin/publish-plans/execute", { ctx => adm.executePlan(ctx) })
+            // 进度流（SSE）：每次连接推一份状态快照，终态附 done；管理页轮询作为兜底
+            app.get("/api/admin/publish-plans/:id/events", { ctx => adm.planEvents(ctx) })
+            // 手动跳过某一项（标记 skipped：执行器不再推送它，不计失败）
+            app.post("/api/admin/publish-plans/:id/items/:itemId/skip", { ctx => adm.skipPlanItem(ctx) })
             app.get("/api/admin/logs/:kind", { ctx => adm.queryLogs(ctx) })
             app.post("/api/admin/logs/clean", { ctx => adm.cleanLogs(ctx) })
         case None => ()
@@ -279,18 +311,18 @@ func guardReadAccess(ctx: TangHttpContext, authSvc: AuthService, adminData: Admi
                      store: PackageStore, org: String, name: String): Bool {
     let token = extractAuthToken(ctx)
     if (token.isEmpty()) {
-        ctx.status(401u16).writeStringWithCode(401u16, "{\"error\":\"missing token\"}")
+        writeDto(ctx, 401u16, ErrorResp("missing token"))
         return false
     }
     match (authSvc.validateAuthToken(token)) {
         case Some(user) =>
             if (!checkReadPermission(store, adminData, user, org, name)) {
-                ctx.status(403u16).writeStringWithCode(403u16, "{\"error\":\"no permission to read\"}")
+                writeDto(ctx, 403u16, ErrorResp("no permission to read"))
                 return false
             }
             return true
         case None =>
-            ctx.status(401u16).writeStringWithCode(401u16, "{\"error\":\"invalid token\"}")
+            writeDto(ctx, 401u16, ErrorResp("invalid token"))
             return false
     }
 }

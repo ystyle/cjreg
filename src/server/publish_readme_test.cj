@@ -107,6 +107,6 @@ func testPublicDetailJsonCarriesExtractedReadme() {
         }
     }
     @Expect(readme, "# 公开详情 README")
-    let json = publicPackageDetailJson("acme", "demo", rows, readme)
+    let json = jsonText(publicPackageDetailJson("acme", "demo", rows, readme))
     @Expect(json.contains("# 公开详情 README"), true)
 }

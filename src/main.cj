@@ -11,7 +11,11 @@ import ystyle::cjreg.store.*
 import ystyle::cjreg.auth.*
 import ystyle::cjreg.auth.model.*
 import ystyle::cjreg.config.*
+import ystyle::cjreg.index.*
 import ystyle::cjreg.ui.*
+// 子包必须被引用一次，否则包初始化不执行 —— @Page 路由不会注册（静默 404）
+import ystyle::cjreg.ui.public.*
+import ystyle::cjreg.ui.admin.*
 import cjxt.*
 import cjxt.components.*
 import std.collection.*
@@ -149,7 +153,7 @@ func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
     let authSvc = AuthService(userStore, 86400)
     let upSvc = UpstreamService(upStore)
     let blobStore: BlobStore = DiskBlobStore(dataDir + "/blobs")
-    let proxySvc = ProxyService(pkgStore, blobStore, upSvc)
+    let proxySvc = ProxyService(pkgStore, blobStore, upSvc, tmpDir: dataDir + "/blobs")
     // 权限/审计数据单实例：UI（CjregState）与 HTTP handler 必须共用，否则 id 计数器各自递增会撞车
     let adminData = AdminDataStore(userStore.storm)
     let admin = AdminService(authSvc, upSvc, userStore, upStore,
@@ -159,6 +163,7 @@ func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
 
     // 同一 Tang 实例：协议路由 + cjxt 管理/公开页面（单进程共享 store）
     let app = buildServer(pkgStore, Some(admin), Some(upSvc), blobStore, config: cfg,
+        tmpDir: dataDir + "/blobs",
         adminData: Some(adminData))
     // 重启恢复：执行线程随进程退出 → 把「执行中」的计划转为 paused（可续跑），
     // 进度按**条目状态**重算而不是清零：单条状态是即时落盘的，重启后正是靠它决定
@@ -278,7 +283,14 @@ func seedDemoPackages(pkgStore: PackageStore): Unit {
         d.metaVersion = 1
         d.sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         d.tarballSize = 1024
-        d.indexJson = "{\"name\":\"${name}\",\"organization\":\"${org}\",\"version\":\"${version}\",\"sha256sum\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}"
+        // indexJson 是索引协议原文（单条 NDJSON 行）：走协议自己的序列化器，不手工拼
+        let idx = PackageIndex()
+        idx.organization = org
+        idx.name = name
+        idx.version = version
+        idx.cjcVersion = d.cjcVersion
+        idx.sha256sum = d.sha256
+        d.indexJson = generateNDJSON(ArrayList<PackageIndex>([idx]))
         pkgStore.save(d)
         injected++
     }

@@ -53,6 +53,70 @@ bash scripts/docker-deploy.sh
 脚本做的事：编译 → `docker build` → 首次 `init`（创建管理员 + 默认上游 + 生成 `cjreg.toml`）→
 `docker compose up -d` → 健康检查并打印访问地址。
 
+## 5. 自包含构建镜像（评审无需仓颉工具链）
+
+上面两种方式都要求**本机已装仓颉工具链**（镜像是「宿主编译、镜像打包」）。若希望**一条命令从源码到可用镜像**，用 `Dockerfile.build`：
+
+```shell
+docker build -f Dockerfile.build -t cjreg:selfbuild .
+docker run -d --name cjreg -p 8060:8060 -v ~/cjreg/data:/data cjreg:selfbuild
+```
+
+- 工具链在容器内用 **[cjv](https://github.com/Zxilly/cjv)**（Cangjie Version Manager）安装，
+  与 GitHub Actions 里 `Zxilly/setup-cangjie` 同源；刻意不用发行版包管理器或 `cjvs` ——
+  后者的覆盖面取决于发行版，换基础镜像就得跟着改。
+- 工具链版本用 `--build-arg CANGJIE_VERSION=<版本>` 指定（默认 `1.1.3`，对应 `cjpm.toml` 的 `cjc-version`）。
+- ⚠️ **glibc 一致性**：构建阶段与运行阶段使用**同一个基础镜像**（`archlinux:latest`）。
+  仓颉产物动态依赖 glibc，两侧版本不一致会出现 `GLIBC_2.x not found` → 容器反复重启；
+  升级基础镜像时两个阶段一起升（并在宿主机 `docker pull archlinux:latest` 后再构建）。
+- 取舍：自包含构建需要在容器内下载工具链，首次构建较慢；日常迭代仍推荐用「宿主工具链 + `Dockerfile`」的快路径。
+
+## 6. 反向代理与 HTTPS
+
+cjreg 自身只监听 HTTP（默认容器内 8060），生产建议前置反向代理终止 TLS。
+
+Caddy（自动申请证书，最省事）：
+
+```caddyfile
+cjreg.example.com {
+    encode zstd gzip
+    # 大包发布：与 cjreg 的 max_request_bytes 对齐（默认 500 MiB）
+    request_body { max_size 1GB }
+    reverse_proxy 127.0.0.1:8060 {
+        flush_interval -1     # 发布/下载是流式大体量传输，关缓冲
+    }
+}
+```
+
+Nginx：
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name cjreg.example.com;
+    ssl_certificate     /etc/letsencrypt/live/cjreg.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/cjreg.example.com/privkey.pem;
+
+    client_max_body_size 600m;          # 与 max_request_bytes 对齐
+
+    location / {
+        proxy_pass http://127.0.0.1:8060;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_request_buffering off;    # 大制品不要缓冲到磁盘/内存
+        proxy_buffering off;
+    }
+}
+```
+
+要点：
+
+- **`public_url` 必须配成对外地址**（`cjreg.toml` 的 `[server] public_url`）——门户展示、发布计划推送都取它；
+- 反代链路里的 `X-Forwarded-For` 会被写进审计日志（IP 列）；
+- 前面若还有 CDN，`client_max_body_size` / `max_request_bytes` / CDN 上传上限三者要对齐，否则大包会在不同环节被截断。
+
 ## 4. 分步部署
 
 ```shell

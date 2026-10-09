@@ -15,7 +15,7 @@
 | 持久化/重启 | 重启服务复读 | 包/用户/团队/计划 | ✅ 数据与自增 id 正确恢复 |
 | 优雅关闭 | SIGTERM（模拟 docker stop） | 停服 → 落盘 → 退出 | ✅ exit 0、重启数据完整、重复信号幂等 |
 | 浏览器端到端 | agent-browser | 门户/管理端/登录 | ✅ 三区块渲染、导航登录态、登录 loading |
-| 大制品发布 | curl | 2–50 MiB | ⚠️ 48 MiB 以下稳定；≥48 MiB 偶发 OOM（见 §5.1） |
+| 大制品发布 | curl | 48 / 100 / 200 / 500 MiB | ✅ 全部 200；峰值内存 261 MiB **不随包体增长**（流式发布，见 §3.8、§5.1） |
 | 性能（本机） | Python 客户端压测 | 200/10 次 | 索引 p50 **0.47 ms**；下载吞吐 **~941 MB/s**（20 MiB） |
 
 ## 1. 验证环境
@@ -199,6 +199,21 @@ $ bash tests/e2e.sh
 
 > 说明：以上为单机 loopback + 页缓存的冒烟级测量，**不是正式基准**；正式对比报告（缓存命中 vs 回源延迟、并发吞吐、镜像体积）列入后续工作。
 
+**流式发布（迭代 1 落地后；`scripts/big-package-e2e.sh` 可一键复现）**
+
+服务**未设置** `cjHeapSize`（运行时默认 GC 堆上限 256 MB），`max_request_bytes` 由脚本按档位留 25% 余量：
+
+| 制品大小 | HTTP | 服务 VmHWM | 说明 |
+|---|---|---|---|
+| 48 MiB | 200 | 261 MiB | 峰值 ≈ 堆上限 + 原生内存（badger arena 等） |
+| 100 MiB | 200 | 261 MiB | 较 48 MiB 档 **+0 MiB** |
+| 200 MiB | 200 | 261 MiB | 较 48 MiB 档 **+0 MiB** |
+| 500 MiB（协议上限） | 200 | 261 MiB | **+0 MiB**；未调大堆也通过 |
+
+> 改造前这些档位会撞默认 256 MB 堆上限（§5.1）。**峰值内存不随包体增长**是流式生效的直接证据：
+> 制品边读边算 SHA-256 并写入临时文件，内存占用与包体无关。
+> 复现：`bash scripts/big-package-e2e.sh 48 100 200`。
+
 ### 3.9 优雅关闭（SIGINT / SIGTERM）
 
 `serve`/`admin-ui` 启动时注册关闭钩子（`Storm.registerShutdownHook` + `registerSignalShutdown`，转发 badger-cj）：
@@ -261,7 +276,7 @@ $ bash tests/e2e.sh
 
 ## 5. 已知限制与风险
 
-### 5.1 大制品发布的堆内存上限（根因已定位）
+### 5.1 大制品发布的堆内存上限（已修复：迭代 1 流式发布）
 
 - **根因**：仓颉运行时 **GC 堆上限默认 256 MB**（进程级环境变量 `cjHeapSize`）。`POST /pkg` 将整个请求体读入内存后再按段
   切片（meta + 制品）、计算 SHA-256 并落盘，峰值约为包体的 2–3 倍 → 发布 40 MiB 以上的包时 GC 堆可能触顶。
@@ -270,8 +285,11 @@ $ bash tests/e2e.sh
   → 与当时 GC 堆占用相关，**非体积阈值、非 cgroup 限制**：该进程无内存上限、机器可用内存 >20 GiB）。
 - **缓解（已文档化）**：发布大包前设置 `export cjHeapSize=2GB cjGCThreshold=1GB cjGCInterval=100ms`
   —— 见 `README.md`「内存与优雅关闭」与 `cjreg.toml.example` 注释。
-- **根治（后续）**：改为**流式解析**（读段头 → 边读边算 SHA-256 → 直接落盘 blob），峰值内存降为 O(1)，
-  届时 `max_request_bytes`（默认 500 MiB）才真正可用。
+- **根治（已落地，2026-10-06）**：`POST /pkg` 改为**流式接收**（`src/protocol/publish_intake.cj`）——
+  读段头 → meta 段 → 再读制品段头 → 按 1 MiB 块边读边喂 SHA-256 并写入 `blobs/.tmp-*` 临时文件；
+  读满后与 meta 声明的 `sha256sum` 比对，一致才由 `BlobStore.claimFile` **rename 原子进位**（内容寻址天然去重），
+  不一致/截断/超限则删除临时文件。峰值内存与包体无关（O(1)），客户端中断也不会留下半成品 blob。
+  实测见 §3.8：48/100/200 MiB 及协议上限 500 MiB 全部发布成功，峰值稳定在 261 MiB。
 
 ### 5.2 其他
 

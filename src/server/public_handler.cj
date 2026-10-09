@@ -41,7 +41,7 @@ public class PublicApi {
             case None => 0
         }
         let s = publicStatsModel(this.pkgStore, this.adminData, userCount, this.startedAt, auditNowMs())
-        writeJson(ctx, 200u16, publicStatsJson(s))
+        writeDto(ctx, 200u16, publicStatsJson(s))
     }
 
     // ===== GET /api/packages =====
@@ -60,7 +60,7 @@ public class PublicApi {
         let hits = filterPublicPackages(rows, q, org, cats, sortKey)
         let page = parseQueryInt(ctx, "page", 1)
         let size = parseQueryInt(ctx, "size", 20)
-        writeJson(ctx, 200u16, publicPackageListJson(hits, hits.size, page, size))
+        writeDto(ctx, 200u16, publicPackageListJson(hits, hits.size, page, size))
     }
 
     // ===== GET /api/packages/:name =====
@@ -76,7 +76,7 @@ public class PublicApi {
         }
         let versions = publicVersions(this.pkgStore, org, name, this.publisherResolver())
         if (versions.size == 0) {
-            writeJson(ctx, 404u16, "{\"error\":\"package not found\"}")
+            writeDto(ctx, 404u16, ErrorResp("package not found"))
             return
         }
         // README：取最新未软删版本的 README
@@ -86,7 +86,7 @@ public class PublicApi {
                 readme = d.readme
             }
         }
-        writeJson(ctx, 200u16, publicPackageDetailJson(org, name, versions, readme))
+        writeDto(ctx, 200u16, publicPackageDetailJson(org, name, versions, readme))
     }
 
     // ===== GET /api/packages/:name/:version =====
@@ -102,8 +102,8 @@ public class PublicApi {
             return
         }
         match (publicVersion(this.pkgStore, org, name, version, this.publisherResolver())) {
-            case Some(v) => writeJson(ctx, 200u16, publicVersionJsonRow(v))
-            case None => writeJson(ctx, 404u16, "{\"error\":\"version not found\"}")
+            case Some(v) => writeDto(ctx, 200u16, publicVersionJsonRow(v))
+            case None => writeDto(ctx, 404u16, ErrorResp("version not found"))
         }
     }
 
@@ -114,7 +114,7 @@ public class PublicApi {
             return
         }
         let rows = publicOrgRows(this.pkgStore, this.adminData, user, this.requireAuth)
-        writeJson(ctx, 200u16, publicOrgListJson(rows))
+        writeDto(ctx, 200u16, publicOrgListJson(rows))
     }
 
     // ===== 鉴权辅助 =====
@@ -131,7 +131,7 @@ public class PublicApi {
         match (user) {
             case Some(_) => return true
             case None =>
-                writeJson(ctx, 401u16, "{\"error\":\"missing or invalid token\"}")
+                writeDto(ctx, 401u16, ErrorResp("missing or invalid token"))
                 return false
         }
     }
@@ -144,7 +144,7 @@ public class PublicApi {
         if (canReadPackage(this.pkgStore, this.adminData, user, org, name)) {
             return true
         }
-        writeJson(ctx, 403u16, "{\"error\":\"no permission to read\"}")
+        writeDto(ctx, 403u16, ErrorResp("no permission to read"))
         return false
     }
 

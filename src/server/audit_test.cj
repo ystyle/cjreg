@@ -17,12 +17,6 @@ func testAuditHelpers() {
     @Expect(parseAuditKind("all").isNone(), true)
     @Expect(parseAuditKind("").isNone(), true)
     @Expect(parseAuditKind("bogus").isNone(), true)
-    // JSON 转义（UA/错误消息里可能有引号、反斜杠、换行）
-    @Expect(escapeJsonStr("cjpm/1.1 (linux)"), "cjpm/1.1 (linux)")
-    @Expect(escapeJsonStr("a\"b"), "a\\\"b")
-    @Expect(escapeJsonStr("a\\b"), "a\\\\b")
-    @Expect(escapeJsonStr("l1\nl2"), "l1\\nl2")
-    @Expect(escapeJsonStr("x\u{1}y"), "x\\u0001y")
     // 截断
     @Expect(truncateStr("abc", 5), "abc")
     @Expect(truncateStr("abcdef", 3), "abc")

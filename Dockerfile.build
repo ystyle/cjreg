@@ -1,0 +1,139 @@
+# cjreg — 自包含构建镜像（评审无需本地仓颉工具链）
+#
+# 与 `Dockerfile`（宿主工具链编译 → 镜像只打包）的区别：这里在**容器内**装工具链并编译，
+# 因此一条命令就能产出可用镜像：
+#
+#   docker build -f Dockerfile.build -t cjreg:selfbuild .
+#   docker run -d --name cjreg -p 8060:8060 -v ~/cjreg/data:/data cjreg:selfbuild
+#
+# 工具链获取方式：**cjv**（Cangjie Version Manager），与 GitHub Actions 里用的
+# `Zxilly/setup-cangjie` 同源。刻意不走发行版包管理器、也不用 `cjvs`：后者的覆盖面取决于
+# 发行版（换基础镜像就得跟着改），而 cjv 直接下载官方 SDK，基础镜像可自由更换。
+#
+# ⚠️ glibc：构建阶段与运行阶段**必须用同一个基础镜像**。仓颉编译产物动态依赖 glibc，
+# 两侧版本不一致会在容器里报 `GLIBC_2.x not found` → 容器起不来、反复重启。
+# 因此两个阶段都写 `archlinux:latest`；升级时一起升，并先 `docker pull archlinux:latest` 取新基础镜像。
+#
+# 常用构建参数：
+#   CANGJIE_VERSION  工具链版本（默认 1.1.3，与 cjpm.toml 的 cjc-version 对应）
+#   CJV_MIRROR       非空则让 cjv 安装脚本走国内镜像。该镜像源的资产与安装脚本预期的
+#                    文件名不一致（解压报 not in gzip format），GitHub 可达时不要开
+
+# ── 构建阶段 ────────────────────────────────────────────────────────────────
+FROM archlinux:latest AS build
+
+# liburing：badger-cj 的 io_uring 支持需要链接 -luring
+# curl/git/tar/gzip：取工具链与依赖；base-devel：编译期基础工具
+RUN pacman -Sy --noconfirm curl git tar gzip liburing base-devel \
+    && rm -rf /var/cache/pacman/pkg
+
+ARG CJV_MIRROR=""
+RUN if [ -n "$CJV_MIRROR" ]; then \
+        curl -sSf https://cjv.zxilly.dev/install.sh | sh -s -- --mirror; \
+    else \
+        curl -sSf https://cjv.zxilly.dev/install.sh | sh; \
+    fi
+ENV PATH="/root/.cjv/bin:${PATH}"
+
+# 工具链：先按版本装，失败再回落到 sts 通道（官方下载地址带 objectKey，逐版本不同，
+# 交给 cjv 处理而不是在这里拼 URL）
+ARG CANGJIE_VERSION=1.1.3
+RUN cjv install "${CANGJIE_VERSION}" --force || cjv install sts --force
+# 只 install 不会自动切换默认工具链：`cjpm`/`cjc` 仍会解析到镜像里原有的版本，
+# 与 cjpm.toml 的 cjc-version 不匹配时直接解析失败。这里显式切默认，
+# 并把版本打进构建日志（工具链版本是构建失败时最先要排除的一项）。
+RUN cjv default "sts-${CANGJIE_VERSION}" || cjv default sts || true
+RUN cjc --version && cjpm --version
+
+# stdx 扩展库（cjreg 直接用 stdx.crypto / stdx.encoding.json.stream / stdx.compress.zlib 等）：
+# 宿主侧由 `cjvs stdx-env` 注入路径，容器里必须显式装成组件，否则 cjpm 会报
+# "imports package 'stdx.…' … but it is not added as a dependency in cjpm.toml"。
+RUN cjv component add stdx
+RUN cjv component list 2>&1 | head -20
+
+# 装了组件还不够：cjpm 是通过 **CANGJIE_STDX_PATH** 找到 stdx 的
+# （宿主由 `cjvs stdx-env` 注入，CI 里也能看到 CANGJIE_STDX_PATH{,_STATIC,_DYNAMIC} 三个变量）。
+# 路径布局取自 CI：<cjv 根>/stdx/<toolchain>/static/stdx
+ENV CANGJIE_STDX_PATH="/root/.cjv/stdx/sts-${CANGJIE_VERSION}/static/stdx" \
+    CANGJIE_STDX_PATH_STATIC="/root/.cjv/stdx/sts-${CANGJIE_VERSION}/static" \
+    CANGJIE_STDX_PATH_DYNAMIC="/root/.cjv/stdx/sts-${CANGJIE_VERSION}/dynamic"
+# 打印实际目录：万一布局与预期不同，构建日志里直接看得到
+RUN find /root/.cjv -maxdepth 4 -type d -name 'stdx*' 2>/dev/null | head -8
+
+WORKDIR /src
+COPY . /src/
+# 依赖全部来自 registry（cjpm.toml 里没有 path 依赖与 replace），容器内可独立解析
+# 用 `cjv exec` 跑构建：它会把工具链与组件的运行时环境（含 stdx 路径）一并注入，
+# 等价于宿主上的 `eval "$(cjvs env zsh)" && eval "$(cjvs stdx-env zsh)"`
+RUN cjv exec cjpm build -j "$(nproc)"
+
+# ── 开发/测试环境（构建 stdx 及其用例）──────────────────────────────────────
+# 用途：`cjpm build` 在本机跑不通 stdx —— 它需要三项本机不齐的依赖：
+#   · flatbuffers：提供 `flatc`（上游 main 已移除 third_party/cmake/Flatbuffer.cmake，改依赖外部 flatc）
+#   · python-psutil：构建脚本 cjpm_build.py 依赖（系统 Python 装它会撞 PEP 668）
+#   · 较旧的 clang：本机 clang 22 对上游 C 代码报 -Wcast-function-type-mismatch，
+#     叠加 build/common/linux_toolchain.cmake 的 -Werror 即失败（容器内同理，见下方用法）
+#
+# 用法：
+#   docker build -f Dockerfile.build --target dev -t cjreg:dev .
+#   docker run --rm -v "$PWD/.smoke/stdx-fix:/src" -w /src cjreg:dev bash -lc '
+#     sed -i "s/ -Werror / /" build/common/linux_toolchain.cmake &&   # 仅构建期放宽，勿提交
+#     cjv exec cjpm build -j "$(nproc)"'
+FROM build AS dev
+
+# ARG 按 stage 生效：build 阶段的声明不会带到这里，必须重新声明（否则 ${CANGJIE_VERSION} 为空）
+ARG CANGJIE_VERSION=1.1.3
+
+# cmake/ninja：build.cj 的 checkBuildTools 硬检查二者（缺任一直接抛异常）；gcc 由 base-devel 提供
+RUN pacman -Sy --noconfirm flatbuffers python-psutil cmake ninja \
+    && rm -rf /var/cache/pacman/pkg
+
+# stdx 构建按 SDK 内路径查找 flatc（<toolchain>/third_party/flatbuffers/bin/flatc），
+# 而 cjv 装的 SDK 不自带，这里把系统的 flatc 链过去
+# CangjieFlatbuffers.cmake 会按 SDK 内路径查找 flatc / include / lib，三样都要在
+RUN FB="/root/.cjv/toolchains/sts-${CANGJIE_VERSION}/third_party/flatbuffers" \
+    && mkdir -p "$FB/bin" "$FB/lib" \
+    && ln -sf /usr/bin/flatc "$FB/bin/flatc" \
+    && ln -sfn /usr/include "$FB/include" \
+    && ln -sf /usr/lib/libflatbuffers.a "$FB/lib/libflatbuffers.a" 2>/dev/null || true
+RUN ls -l "/root/.cjv/toolchains/sts-${CANGJIE_VERSION}/third_party/flatbuffers/" | head -6
+
+# ── 运行阶段（与 Dockerfile 同构：同一基础镜像 → glibc 一致）────────────────
+FROM archlinux:latest
+
+RUN pacman -Sy --noconfirm \
+        liburing \
+        tzdata \
+        ca-certificates \
+        curl \
+    && rm -rf /var/cache/pacman/pkg
+
+# 非 root 运行（uid 1000 与宿主数据目录属主对齐，挂卷后可写）
+RUN useradd -u 1000 -m app
+
+WORKDIR /app
+
+COPY --from=build /src/target/release/bin/ystyle::cjreg /app/cjreg
+RUN chmod 0755 /app/cjreg
+
+# Web 界面静态资源（cjxt 的 serveStatic 相对运行目录）
+COPY public /app/public
+
+RUN mkdir -p /data && chown -R app:app /data /app
+
+USER app
+ENV HOME=/app
+
+# 发布大包（>30MB）时的 GC 堆；按机器内存覆盖
+ENV cjHeapSize=2GB \
+    cjGCThreshold=1GB \
+    cjGCInterval=100ms
+
+EXPOSE 8060
+
+# 优雅关闭：SIGTERM → 停 HTTP → flush memtable 落盘 → exit 0
+STOPSIGNAL SIGTERM
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8060/api/health || exit 1
+
+CMD ["/app/cjreg", "serve", "-d", "/data"]

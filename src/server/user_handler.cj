@@ -41,14 +41,11 @@ public class UserApi {
         let user = match (this.currentUser(ctx)) {
             case Some(u) => u
             case None =>
-                writeJson(ctx, 401u16, "{\"error\":\"not authenticated\"}")
+                writeDto(ctx, 401u16, ErrorResp("not authenticated"))
                 return
         }
-        writeJson(ctx, 200u16,
-            "{\"id\":${user.id},\"username\":\"${user.username}\",\"email\":\"${user.email}\"," +
-            "\"isAdmin\":${user.isAdmin},\"publishTokenMasked\":\"${maskToken(user.publishToken)}\"," +
-            "\"permissionMode\":\"${this.permissionMode}\"," +
-            "\"permissionHint\":\"${permissionHint(this.permissionMode)}\"}")
+        writeDto(ctx, 200u16, PortalMeResp(user.id, user.username, user.email, user.isAdmin,
+            maskToken(user.publishToken), this.permissionMode, permissionHint(this.permissionMode)))
     }
 
     // ===== POST /api/user/me/publish-token =====
@@ -57,15 +54,15 @@ public class UserApi {
         let user = match (this.currentUser(ctx)) {
             case Some(u) => u
             case None =>
-                writeJson(ctx, 401u16, "{\"error\":\"not authenticated\"}")
+                writeDto(ctx, 401u16, ErrorResp("not authenticated"))
                 return
         }
         match (this.auth.resetPublishToken(user.id)) {
             case Some(t) =>
                 this.adminData.addLog(LogKind.Auth, user.id, user.username, "reset publish token (portal)", "ok", nowMsUtc())
-                writeJson(ctx, 200u16, "{\"publishToken\":\"${t}\"}")
+                writeDto(ctx, 200u16, PublishTokenResp(t))
             case None =>
-                writeJson(ctx, 404u16, "{\"error\":\"user not found\"}")
+                writeDto(ctx, 404u16, ErrorResp("user not found"))
         }
     }
 
@@ -75,7 +72,7 @@ public class UserApi {
         let user = match (this.currentUser(ctx)) {
             case Some(u) => u
             case None =>
-                writeJson(ctx, 401u16, "{\"error\":\"not authenticated\"}")
+                writeDto(ctx, 401u16, ErrorResp("not authenticated"))
                 return
         }
         let page = parseQueryInt(ctx, "page", 1)
@@ -89,21 +86,14 @@ public class UserApi {
             }
         }
         let (start, end) = pageWindow(hits.size, page, size)
-        let sb = StringBuilder()
-        sb.append("{\"total\":${hits.size},\"page\":${page},\"size\":${size},\"items\":[")
+        let items = ArrayList<MyPackageRowDto>()
         var i = start
         while (i < end) {
-            if (i > start) {
-                sb.append(",")
-            }
             let r = hits[i]
-            sb.append("{\"organization\":\"${r.org}\",\"name\":\"${r.name}\",")
-            sb.append("\"versionCount\":${r.versionCount},\"latestVersion\":\"${r.latestVersion}\",")
-            sb.append("\"isOwner\":${r.isOwner},\"updatedAt\":${r.updatedAt}}")
+            items.add(MyPackageRowDto(r.org, r.name, r.versionCount, r.latestVersion, r.isOwner, r.updatedAt))
             i++
         }
-        sb.append("]}")
-        writeJson(ctx, 200u16, sb.toString())
+        writeDto(ctx, 200u16, MyPackageListResp(hits.size, page, size, items))
     }
 
     // ===== GET /api/user/me/teams =====
@@ -112,36 +102,15 @@ public class UserApi {
         let user = match (this.currentUser(ctx)) {
             case Some(u) => u
             case None =>
-                writeJson(ctx, 401u16, "{\"error\":\"not authenticated\"}")
+                writeDto(ctx, 401u16, ErrorResp("not authenticated"))
                 return
         }
         let rows = myTeamRows(this.adminData, user.id)
-        let sb = StringBuilder()
-        sb.append("{\"permissionMode\":\"${this.permissionMode}\",\"items\":[")
-        for (i in 0..rows.size) {
-            if (i > 0) {
-                sb.append(",")
-            }
-            let r = rows[i]
-            sb.append("{\"id\":${r.teamId},\"name\":\"${r.name}\",\"displayName\":\"${r.displayName}\",")
-            sb.append("\"permission\":\"${r.permission}\",\"organizations\":[")
-            for (j in 0..r.orgNames.size) {
-                if (j > 0) {
-                    sb.append(",")
-                }
-                sb.append("\"${r.orgNames[j]}\"")
-            }
-            sb.append("],\"packages\":[")
-            for (j in 0..r.packages.size) {
-                if (j > 0) {
-                    sb.append(",")
-                }
-                sb.append("\"${r.packages[j]}\"")
-            }
-            sb.append("]}")
+        let items = ArrayList<MyTeamRowDto>()
+        for (r in rows) {
+            items.add(MyTeamRowDto(r.teamId, r.name, r.displayName, r.permission, r.orgNames, r.packages))
         }
-        sb.append("]}")
-        writeJson(ctx, 200u16, sb.toString())
+        writeDto(ctx, 200u16, MyTeamsResp(this.permissionMode, items))
     }
 
     // ===== 工具 =====

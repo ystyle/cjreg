@@ -56,7 +56,7 @@ public func buildServer(
 
     // 健康检查（自有端点，非官方协议）
     app.get("/api/health", { ctx =>
-        ctx.writeString("{\"status\":\"ok\"}")
+        writeDto(ctx, 200u16, OkResp())
     })
 
     // 用户门户只读 API（/api/user/*）：session token 鉴权，普通用户与管理员均可
@@ -137,35 +137,35 @@ public func buildServer(
             case PublishOutcome.Ok =>
                 writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "ok", target, ctx,
                     detail: "size=${bodySize}")
-                ctx.status(200u16).writeStringWithCode(200u16, "{\"status\":\"ok\",\"id\":${result.pkgId}}")
+                writeDto(ctx, 200u16, OkIdResp(result.pkgId))
             case PublishOutcome.InvalidFormat =>
                 writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
                     error: "invalid data format")
-                ctx.status(400u16).writeStringWithCode(400u16, "{\"error\":\"invalid data format\"}")
+                writeDto(ctx, 400u16, ErrorResp("invalid data format"))
             case PublishOutcome.MetaMismatch =>
                 writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
                     error: result.message)
-                ctx.status(400u16).writeStringWithCode(400u16, "{\"error\":\"${result.message}\"}")
+                writeDto(ctx, 400u16, ErrorResp(result.message))
             case PublishOutcome.ShaMismatch =>
                 writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
                     error: result.message)
-                ctx.status(400u16).writeStringWithCode(400u16, "{\"error\":\"${result.message}\"}")
+                writeDto(ctx, 400u16, ErrorResp(result.message))
             case PublishOutcome.Conflict =>
                 writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
                     error: result.message)
-                ctx.status(409u16).writeStringWithCode(409u16, "{\"error\":\"conflict\",\"detail\":\"${result.message}\"}")
+                writeDto(ctx, 409u16, ErrorResp("conflict", detail: Some(result.message)))
             case PublishOutcome.BadRequest =>
                 writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
                     error: result.message)
-                ctx.status(400u16).writeStringWithCode(400u16, "{\"error\":\"${result.message}\"}")
+                writeDto(ctx, 400u16, ErrorResp(result.message))
             case PublishOutcome.Unauthorized =>
                 writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
                     error: "unauthorized: ${result.message}")
-                ctx.status(401u16).writeStringWithCode(401u16, "{\"error\":\"${result.message}\"}")
+                writeDto(ctx, 401u16, ErrorResp(result.message))
             case PublishOutcome.Forbidden =>
                 writeAudit(permData, LogKind.Publish, actorId, actorName, "publish", "failed", target, ctx,
                     error: "forbidden: ${result.message}")
-                ctx.status(403u16).writeStringWithCode(403u16, "{\"error\":\"${result.message}\"}")
+                writeDto(ctx, 403u16, ErrorResp(result.message))
         }
     })
 
@@ -199,10 +199,10 @@ public func buildServer(
                             .set("Content-Type", "application/x-gzip")
                         ctx.responseBuilder.body(st)
                     case None =>
-                        ctx.status(404u16).writeStringWithCode(404u16, "{\"error\":\"not found\"}")
+                        writeDto(ctx, 404u16, ErrorResp("not found"))
                 }
             case None =>
-                ctx.status(404u16).writeStringWithCode(404u16, "{\"error\":\"not found\"}")
+                writeDto(ctx, 404u16, ErrorResp("not found"))
         }
     })
 
@@ -217,12 +217,11 @@ public func buildServer(
         let name = ctx.param("name")
         let org = ctx.query("organization") ?? ""
         if (name.size < 3) {
-            ctx.status(400u16).writeStringWithCode(400u16, "{\"error\":\"invalid package name\"}")
+            writeDto(ctx, 400u16, ErrorResp("invalid package name"))
             return
         }
         if (!indexShardMatches(ctx.param("mo"), ctx.param("du"), name)) {
-            ctx.status(400u16).writeStringWithCode(400u16,
-                "{\"error\":\"Bad request: first two and second two not match module name.\"}")
+            writeDto(ctx, 400u16, ErrorResp("Bad request: first two and second two not match module name."))
             return
         }
         // 读鉴权（requireAuth=true）：token + read 权限
@@ -244,12 +243,12 @@ public func buildServer(
             case Some(proxy) =>
                 let (outcome, ndjson) = proxy.fetchIndex(org, name)
                 if (ndjson.isEmpty()) {
-                    ctx.status(404u16).writeStringWithCode(404u16, "{\"error\":\"not found\"}")
+                    writeDto(ctx, 404u16, ErrorResp("not found"))
                 } else {
                     ctx.contentType("application/x-ndjson").writeString(ndjson)
                 }
             case None =>
-                ctx.status(404u16).writeStringWithCode(404u16, "{\"error\":\"not found\"}")
+                writeDto(ctx, 404u16, ErrorResp("not found"))
         }
     })
 
@@ -312,18 +311,18 @@ func guardReadAccess(ctx: TangHttpContext, authSvc: AuthService, adminData: Admi
                      store: PackageStore, org: String, name: String): Bool {
     let token = extractAuthToken(ctx)
     if (token.isEmpty()) {
-        ctx.status(401u16).writeStringWithCode(401u16, "{\"error\":\"missing token\"}")
+        writeDto(ctx, 401u16, ErrorResp("missing token"))
         return false
     }
     match (authSvc.validateAuthToken(token)) {
         case Some(user) =>
             if (!checkReadPermission(store, adminData, user, org, name)) {
-                ctx.status(403u16).writeStringWithCode(403u16, "{\"error\":\"no permission to read\"}")
+                writeDto(ctx, 403u16, ErrorResp("no permission to read"))
                 return false
             }
             return true
         case None =>
-            ctx.status(401u16).writeStringWithCode(401u16, "{\"error\":\"invalid token\"}")
+            writeDto(ctx, 401u16, ErrorResp("invalid token"))
             return false
     }
 }

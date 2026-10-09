@@ -11,6 +11,7 @@ import ystyle::cjreg.store.*
 import ystyle::cjreg.auth.*
 import ystyle::cjreg.auth.model.*
 import ystyle::cjreg.config.*
+import ystyle::cjreg.index.*
 import ystyle::cjreg.ui.*
 import cjxt.*
 import cjxt.components.*
@@ -279,7 +280,14 @@ func seedDemoPackages(pkgStore: PackageStore): Unit {
         d.metaVersion = 1
         d.sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         d.tarballSize = 1024
-        d.indexJson = "{\"name\":\"${name}\",\"organization\":\"${org}\",\"version\":\"${version}\",\"sha256sum\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}"
+        // indexJson 是索引协议原文（单条 NDJSON 行）：走协议自己的序列化器，不手工拼
+        let idx = PackageIndex()
+        idx.organization = org
+        idx.name = name
+        idx.version = version
+        idx.cjcVersion = d.cjcVersion
+        idx.sha256sum = d.sha256
+        d.indexJson = generateNDJSON(ArrayList<PackageIndex>([idx]))
         pkgStore.save(d)
         injected++
     }

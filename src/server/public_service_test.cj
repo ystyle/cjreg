@@ -317,8 +317,4 @@ func testPublicJsonShapes() {
     @Expect(orgJson.contains("测试\\\"组织\\\""), true)          // 组织显示名转义
     @Expect(orgJson.contains("\"packageCount\":2"), true)
     @Expect(orgJson.contains("\"name\":\"other\",\"displayName\":\"\",\"description\":\"\",\"isDefault\":false"), true)
-
-    // 字符串数组序列化
-    @Expect(jsonStringArray(ArrayList<String>()), "[]")
-    @Expect(jsonStringArray(ArrayList<String>(["a", "b\"c"])), "[\"a\",\"b\\\"c\"]")
 }

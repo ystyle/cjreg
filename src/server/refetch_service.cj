@@ -205,8 +205,8 @@ public func shortSha(sha: String): String {
     return sha[0..12]
 }
 
-// 重拉结果 JSON（管理 API 用）
-public func refetchJson(r: RefetchResult): String {
+// 重拉结果 JSON（管理 API 用；status 是 RefetchOutcome 的稳定别名）
+public func refetchJson(r: RefetchResult): RefetchResp {
     let status = match (r.outcome) {
         case RefetchOutcome.Ok => "ok"
         case RefetchOutcome.NotFound => "not_found"
@@ -217,10 +217,5 @@ public func refetchJson(r: RefetchResult): String {
         case RefetchOutcome.Invalid => "invalid"
         case RefetchOutcome.Unavailable => "unavailable"
     }
-    let sb = StringBuilder()
-    sb.append("{\"status\":\"${status}\",\"message\":\"${escapeJsonStr(r.message)}\",")
-    sb.append("\"oldSha\":\"${r.oldSha}\",\"newSha\":\"${r.newSha}\",")
-    sb.append("\"changed\":${r.changed},\"size\":${r.size},\"readmeLength\":${r.readmeLen},")
-    sb.append("\"upstream\":\"${escapeJsonStr(r.upstreamName)}\"}")
-    sb.toString()
+    RefetchResp(status, r.message, r.oldSha, r.newSha, r.changed, r.size, r.readmeLen, r.upstreamName)
 }

@@ -90,7 +90,7 @@ func testUpstreamProbeJsonShape() {
     let up = makeUpstream(7, "official", "https://pkg.example.com/registry", "t", true)
     let r = classifyProbe(up, "https://pkg.example.com/registry/index/co/rd/cordis_core", true, 200, 88,
         34, "{\"name\":\"cordis_core\"}\n", "")
-    let json = upstreamProbeJson(r)
+    let json = jsonText(upstreamProbeJson(r))
     @Expect(json.contains("\"upstreamId\":7"), true)
     @Expect(json.contains("\"upstreamName\":\"official\""), true)
     @Expect(json.contains("\"healthy\":true"), true)
@@ -102,7 +102,7 @@ func testUpstreamProbeJsonShape() {
     @Expect(json.contains("\"summary\":\"连通"), true)
     // 含引号的错误信息被转义
     let dead = classifyProbe(up, "https://x", false, 0, 1, 0, "", "dial \"tcp\": refused")
-    @Expect(upstreamProbeJson(dead).contains("dial \\\"tcp\\\": refused"), true)
+    @Expect(jsonText(upstreamProbeJson(dead)).contains("dial \\\"tcp\\\": refused"), true)
 }
 
 @Test

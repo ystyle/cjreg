@@ -305,19 +305,3 @@ public class PublicOrgListDto <: JsonSerializable {
         w.endObject()
     }
 }
-
-// ===== 序列化辅助 =====
-
-// 字符串数组独立成 JSON 文本（`["a","b"]`）：保留给复用方拼接数组字段，不影响本簇的 DTO 序列化
-class JsonStringArrayBody <: JsonSerializable {
-    let items: ArrayList<String>
-
-    init(items: ArrayList<String>) {
-        this.items = items
-    }
-
-    // 接口成员必须是 public（实现 JsonSerializable 的可见性要求），类本身仅包内可见
-    public func toJson(w: JsonWriter): Unit {
-        w.writeValue(items)
-    }
-}

@@ -248,7 +248,8 @@ func joinNames(items: ArrayList<String>, limit: Int64): String {
 
 // ===== JSON =====
 
-public func orgResultJson(r: OrgResult): String {
+// 组织写操作结果（响应 DTO；HTTP 状态码由 orgResultCode 单独映射）
+public func orgResultJson(r: OrgResult): OrgResultResp {
     let status = match (r.outcome) {
         case OrgOutcome.Ok => "ok"
         case OrgOutcome.NotFound => "not_found"
@@ -259,8 +260,7 @@ public func orgResultJson(r: OrgResult): String {
         case OrgOutcome.RenameWithPackages => "rename_with_packages"
         case OrgOutcome.Failed => "failed"
     }
-    "{\"status\":\"${status}\",\"message\":\"${escapeJsonStr(r.message)}\",\"id\":${r.orgId}," +
-        "\"affected\":${r.affected}}"
+    OrgResultResp(status, r.message, r.orgId, r.affected)
 }
 
 public func orgResultCode(r: OrgResult): UInt16 {
@@ -276,25 +276,13 @@ public func orgResultCode(r: OrgResult): UInt16 {
     }
 }
 
-public func orgJson(o: OrgDoc, packageCount: Int64, versionCount: Int64, teamCount: Int64): String {
-    let sb = StringBuilder()
-    sb.append("{\"id\":${o.id},\"name\":\"${escapeJsonStr(o.name)}\",")
-    sb.append("\"displayName\":\"${escapeJsonStr(o.displayName)}\",")
-    sb.append("\"description\":\"${escapeJsonStr(o.description)}\",\"isDefault\":${o.isDefault},")
-    sb.append("\"ownerId\":${o.ownerId},\"packageCount\":${packageCount},\"versionCount\":${versionCount},")
-    sb.append("\"teamCount\":${teamCount},\"createdAt\":${o.createdAt},\"updatedAt\":${o.updatedAt}}")
-    sb.toString()
+// 组织行（packageCount/versionCount/teamCount 是列表页的聚合计数，不在 OrgDoc 里）
+public func orgJson(o: OrgDoc, packageCount: Int64, versionCount: Int64, teamCount: Int64): OrgDto {
+    OrgDto(o.id, o.name, o.displayName, o.description, o.isDefault, o.ownerId,
+        packageCount, versionCount, teamCount, o.createdAt, o.updatedAt)
 }
 
-public func orgListJson(items: ArrayList<String>, total: Int64): String {
-    let sb = StringBuilder()
-    sb.append("{\"total\":${total},\"items\":[")
-    for (i in 0..items.size) {
-        if (i > 0) {
-            sb.append(",")
-        }
-        sb.append(items[i])
-    }
-    sb.append("]}")
-    sb.toString()
+// 组织列表（total 由调用方给出，与 items 的分页口径一致）
+public func orgListJson(items: ArrayList<OrgDto>, total: Int64): OrgListResp {
+    OrgListResp(total, items)
 }

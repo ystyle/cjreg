@@ -52,7 +52,7 @@ func testValidateOrgNameAndOrgJson() {
     o.ownerId = 1
     o.createdAt = 100
     o.updatedAt = 200
-    let json = orgJson(o, 2, 3, 1)
+    let json = jsonText(orgJson(o, 2, 3, 1))
     @Expect(json.contains("\"id\":7"), true)
     @Expect(json.contains("\"name\":\"test\""), true)
     @Expect(json.contains("测试\\\"组织\\\""), true)          // 引号转义
@@ -60,12 +60,12 @@ func testValidateOrgNameAndOrgJson() {
     @Expect(json.contains("\"packageCount\":2"), true)
     @Expect(json.contains("\"versionCount\":3"), true)
     @Expect(json.contains("\"teamCount\":1"), true)
-    let listJson = orgListJson(ArrayList<String>([json]), 1)
+    let listJson = jsonText(orgListJson(ArrayList<OrgDto>([orgJson(o, 2, 3, 1)]), 1))
     @Expect(listJson.contains("\"total\":1"), true)
-    @Expect(orgListJson(ArrayList<String>(), 0), "{\"total\":0,\"items\":[]}")
+    @Expect(jsonText(orgListJson(ArrayList<OrgDto>(), 0)), "{\"total\":0,\"items\":[]}")
     // 结果 JSON 与状态码
     let ok = OrgResult(OrgOutcome.Ok, "已创建组织 #1", 1, 0)
-    @Expect(orgResultJson(ok).contains("\"status\":\"ok\""), true)
+    @Expect(jsonText(orgResultJson(ok)).contains("\"status\":\"ok\""), true)
     @Expect(orgResultCode(ok), 200u16)
     @Expect(orgResultCode(OrgResult(OrgOutcome.NotFound, "x", 0, 0)), 404u16)
     @Expect(orgResultCode(OrgResult(OrgOutcome.InvalidName, "x", 0, 0)), 400u16)
@@ -74,9 +74,9 @@ func testValidateOrgNameAndOrgJson() {
     @Expect(orgResultCode(OrgResult(OrgOutcome.ReferencedByTeams, "x", 0, 0)), 409u16)
     @Expect(orgResultCode(OrgResult(OrgOutcome.RenameWithPackages, "x", 0, 0)), 409u16)
     @Expect(orgResultCode(OrgResult(OrgOutcome.Failed, "x", 0, 0)), 500u16)
-    @Expect(orgResultJson(OrgResult(OrgOutcome.HasPackages, "仍有 \"2\" 个包", 5, 2))
+    @Expect(jsonText(orgResultJson(OrgResult(OrgOutcome.HasPackages, "仍有 \"2\" 个包", 5, 2)))
         .contains("\"status\":\"has_packages\""), true)
-    @Expect(orgResultJson(OrgResult(OrgOutcome.HasPackages, "仍有 \"2\" 个包", 5, 2))
+    @Expect(jsonText(orgResultJson(OrgResult(OrgOutcome.HasPackages, "仍有 \"2\" 个包", 5, 2)))
         .contains("\\\"2\\\""), true)
 }
 

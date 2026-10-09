@@ -10,7 +10,7 @@ import stdx.encoding.json.stream.*
 
 // 写 JSON 响应：content-type + 状态码 + DTO 直接进响应体
 public func writeDto<T>(ctx: TangHttpContext, code: UInt16, dto: T): Unit where T <: JsonSerializable {
-    ctx.contentType("application/json").jsonWithCode(code, dto)
+    ctx.contentType("application/json; charset=utf-8").jsonWithCode(code, dto)
 }
 
 // DTO → JSON 文本

@@ -69,7 +69,8 @@ public struct LifecycleResult {
     }
 }
 
-public func lifecycleJson(r: LifecycleResult): String {
+// 结果 JSON（响应 DTO；status 是 LifecycleOutcome 的稳定别名）
+public func lifecycleJson(r: LifecycleResult): LifecycleResp {
     let status = match (r.outcome) {
         case LifecycleOutcome.Ok => "ok"
         case LifecycleOutcome.NotFound => "not_found"
@@ -78,11 +79,7 @@ public func lifecycleJson(r: LifecycleResult): String {
         case LifecycleOutcome.ArtifactMissing => "artifact_missing"
         case LifecycleOutcome.Failed => "failed"
     }
-    let sb = StringBuilder()
-    sb.append("{\"status\":\"${status}\",\"message\":\"${escapeJsonStr(r.message)}\",")
-    sb.append("\"skippedPlanItems\":${r.skippedPlanItems},\"blobRemoved\":${r.blobRemoved},")
-    sb.append("\"artifactPresent\":${r.artifactPresent}}")
-    sb.toString()
+    LifecycleResp(status, r.message, r.skippedPlanItems, r.blobRemoved, r.artifactPresent)
 }
 
 /// 制品是否可用：blob 存在 → true；该版本来自上游（upstreamId != 0）→ 可重新回源，视为可用；

@@ -557,14 +557,6 @@ public func publicOrgListJson(rows: ArrayList<PublicOrgRow>): PublicOrgListDto {
 
 // ===== 公共辅助 =====
 
-/// 字符串数组 → JSON 数组
-///
-/// 转义交给 JsonWriter（与响应 DTO 同一套转义规则）：数组字段由本函数供数组上下文复用，
-/// 不参与 object 字段拼接。
-public func jsonStringArray(items: ArrayList<String>): String {
-    jsonText(JsonStringArrayBody(items))
-}
-
 /// 逗号分隔参数 → 去空项数组（`category=a,b` → [a, b]）
 public func splitCommaList(raw: String): ArrayList<String> {
     let out = ArrayList<String>()

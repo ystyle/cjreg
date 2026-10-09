@@ -186,36 +186,32 @@ public class AdminService {
                 if (lr.username.isEmpty() || lr.password.isEmpty()) {
                     writeAudit(this.adminData, LogKind.Auth, 0, lr.username, "login", "failed", lr.username, ctx,
                         error: "username and password required")
-                    writeJson(ctx, 400u16, "{\"error\":\"username and password required\"}")
+                    writeDto(ctx, 400u16, ErrorResp("username and password required"))
                     return
                 }
                 match (this.auth.login(lr.username, lr.password)) {
                     case Some((user, token)) =>
                         writeAudit(this.adminData, LogKind.Auth, user.id, user.username, "login", "ok", user.username, ctx,
                             detail: "isAdmin=${user.isAdmin}")
-                        writeJson(ctx, 200u16,
-                            "{\"id\":${user.id},\"username\":\"${user.username}\"," +
-                            "\"isAdmin\":${user.isAdmin},\"token\":\"${token.token}\"," +
-                            "\"expiresAt\":${token.expiresAt}}")
+                        writeDto(ctx, 200u16, LoginResp(user.id, user.username, user.isAdmin,
+                            token.token, token.expiresAt))
                     case None =>
                         writeAudit(this.adminData, LogKind.Auth, 0, lr.username, "login", "failed", lr.username, ctx,
                             error: "invalid username or password")
-                        writeJson(ctx, 401u16, "{\"error\":\"invalid username or password\"}")
+                        writeDto(ctx, 401u16, ErrorResp("invalid username or password"))
                 }
             case None =>
-                writeJson(ctx, 400u16, "{\"error\":\"invalid JSON body\"}")
+                writeDto(ctx, 400u16, ErrorResp("invalid JSON body"))
         }
     }
 
     public func me(ctx: TangHttpContext): Unit {
         match (this.currentUser(ctx)) {
             case Some(user) =>
-                writeJson(ctx, 200u16,
-                    "{\"id\":${user.id},\"username\":\"${user.username}\"," +
-                    "\"isAdmin\":${user.isAdmin},\"isActive\":${user.isActive}," +
-                    "\"publishToken\":\"${user.publishToken}\"}")
+                writeDto(ctx, 200u16, AdminMeResp(user.id, user.username, user.isAdmin,
+                    user.isActive, user.publishToken))
             case None =>
-                writeJson(ctx, 401u16, "{\"error\":\"not authenticated\"}")
+                writeDto(ctx, 401u16, ErrorResp("not authenticated"))
         }
     }
 
@@ -230,7 +226,7 @@ public class AdminService {
                 writeAudit(this.adminData, LogKind.Auth, u.id, u.username, "logout", "ok", u.username, ctx)
             case None => ()
         }
-        writeJson(ctx, 200u16, "{\"status\":\"ok\"}")
+        writeDto(ctx, 200u16, OkResp())
     }
 
     public func listUsers(ctx: TangHttpContext): Unit {
@@ -238,18 +234,12 @@ public class AdminService {
             return
         }
         let users = this.userStore.listAllUsers()
-        let sb = StringBuilder()
-        sb.append("[")
-        for (i in 0..users.size) {
-            let u = users[i]
-            if (i > 0) {
-                sb.append(",")
-            }
-            sb.append("{\"id\":${u.id},\"username\":\"${u.username}\"," +
-                "\"isAdmin\":${u.isAdmin},\"isActive\":${u.isActive}}")
+        let rows = ArrayList<UserRowResp>()
+        for (u in users) {
+            rows.add(UserRowResp(u.id, u.username, u.isAdmin, u.isActive))
         }
-        sb.append("]")
-        writeJson(ctx, 200u16, sb.toString())
+        // 契约是**裸数组**（不是 {total,items} 包装）：外部脚本按 Array 解析
+        writeDto(ctx, 200u16, rows)
     }
 
     // 创建用户（普通/管理员）：body {username, password, isAdmin?, email?}
@@ -262,7 +252,7 @@ public class AdminService {
         match (req) {
             case Some(r) =>
                 if (r.username.isEmpty() || r.password.isEmpty()) {
-                    writeJson(ctx, 400u16, "{\"error\":\"username and password required\"}")
+                    writeDto(ctx, 400u16, ErrorResp("username and password required"))
                     return
                 }
                 let (actorId, actorName) = this.actorOf(ctx)
@@ -270,15 +260,14 @@ public class AdminService {
                     case Some(u) =>
                         writeAudit(this.adminData, LogKind.Admin, actorId, actorName, "create_user", "ok", u.username, ctx,
                             detail: "isAdmin=${u.isAdmin} email=${r.email}")
-                        writeJson(ctx, 200u16,
-                            "{\"id\":${u.id},\"username\":\"${u.username}\",\"isAdmin\":${u.isAdmin}}")
+                        writeDto(ctx, 200u16, UserAdminResp(u.id, u.username, u.isAdmin))
                     case None =>
                         writeAudit(this.adminData, LogKind.Admin, actorId, actorName, "create_user", "failed", r.username, ctx,
                             error: "user already exists")
-                        writeJson(ctx, 409u16, "{\"error\":\"user already exists\"}")
+                        writeDto(ctx, 409u16, ErrorResp("user already exists"))
                 }
             case None =>
-                writeJson(ctx, 400u16, "{\"error\":\"invalid JSON body\"}")
+                writeDto(ctx, 400u16, ErrorResp("invalid JSON body"))
         }
     }
 
@@ -293,7 +282,7 @@ public class AdminService {
             case None => 0
         }
         if (uid <= 0) {
-            writeJson(ctx, 400u16, "{\"error\":\"invalid user id\"}")
+            writeDto(ctx, 400u16, ErrorResp("invalid user id"))
             return
         }
         let req = parseJsonBody<SetUserAdminRequest>(ctx.bodyRaw(), { r => SetUserAdminRequest.fromJson(r) })
@@ -310,12 +299,12 @@ public class AdminService {
             case None => ()
         }
         if (!hasFlag) {
-            writeJson(ctx, 400u16, "{\"error\":\"isAdmin (bool) required in JSON body\"}")
+            writeDto(ctx, 400u16, ErrorResp("isAdmin (bool) required in JSON body"))
             return
         }
         match (this.userStore.getUser(uid)) {
             case None =>
-                writeJson(ctx, 404u16, "{\"error\":\"user not found\"}")
+                writeDto(ctx, 404u16, ErrorResp("user not found"))
                 return
             case Some(_) => ()
         }
@@ -328,14 +317,13 @@ public class AdminService {
             }
             writeAudit(this.adminData, LogKind.Admin, actorId, actorName, action, "failed", name, ctx,
                 error: "cannot revoke the last active admin")
-            writeJson(ctx, 409u16, "{\"error\":\"cannot revoke the last active admin\"}")
+            writeDto(ctx, 409u16, ErrorResp("cannot revoke the last active admin"))
             return
         }
         let u = this.userStore.getUser(uid).getOrThrow()
         writeAudit(this.adminData, LogKind.Admin, actorId, actorName, action, "ok", u.username, ctx,
             detail: "isAdmin=${u.isAdmin}")
-        writeJson(ctx, 200u16,
-            "{\"id\":${u.id},\"username\":\"${u.username}\",\"isAdmin\":${u.isAdmin}}")
+        writeDto(ctx, 200u16, UserAdminResp(u.id, u.username, u.isAdmin))
     }
 
     // 当前操作者（requireAdmin 通过后必然存在；解析失败按匿名记）
@@ -373,22 +361,12 @@ public class AdminService {
             case Some(ad) => ad.queryLogs(kind, keyword, status, from, to, offset, limit)
             case None => (ArrayList<LogDoc>(), 0)
         }
-        let sb = StringBuilder()
-        sb.append("{\"total\":${total},\"offset\":${offset},\"limit\":${limit},\"items\":[")
-        for (i in 0..rows.size) {
-            if (i > 0) {
-                sb.append(",")
-            }
-            let d = rows[i]
-            sb.append("{\"id\":${d.id},\"kind\":\"${d.kind}\",\"actorId\":${d.actorId}," +
-                "\"actorName\":\"${escapeJsonStr(d.actorName)}\",\"action\":\"${escapeJsonStr(d.action)}\"," +
-                "\"status\":\"${escapeJsonStr(d.status)}\",\"target\":\"${escapeJsonStr(d.target)}\"," +
-                "\"detail\":\"${escapeJsonStr(d.detail)}\",\"error\":\"${escapeJsonStr(d.error)}\"," +
-                "\"ipAddr\":\"${escapeJsonStr(d.ipAddr)}\",\"userAgent\":\"${escapeJsonStr(d.userAgent)}\"," +
-                "\"createdAt\":${d.createdAt}}")
+        let items = ArrayList<LogRowDto>()
+        for (d in rows) {
+            items.add(LogRowDto(d.id, d.kind, d.actorId, d.actorName, d.action, d.status, d.target,
+                d.detail, d.error, d.ipAddr, d.userAgent, d.createdAt))
         }
-        sb.append("]}")
-        writeJson(ctx, 200u16, sb.toString())
+        writeDto(ctx, 200u16, LogQueryResp(total, offset, limit, items))
     }
 
     // POST /api/admin/logs/clean  body {kind?: publish|admin|auth|all, before?: 毫秒}
@@ -416,7 +394,7 @@ public class AdminService {
                 }
                 r.endObject()
             } catch (e: Exception) {
-                writeJson(ctx, 400u16, "{\"error\":\"invalid JSON body\"}")
+                writeDto(ctx, 400u16, ErrorResp("invalid JSON body"))
                 return
             }
         }
@@ -429,7 +407,7 @@ public class AdminService {
         writeAudit(this.adminData, LogKind.Admin, actorId, actorName, "clean_logs", "ok",
             if (kindRaw.isEmpty()) { "all" } else { kindRaw }, ctx,
             detail: "deleted=${deleted} before=${before}")
-        writeJson(ctx, 200u16, "{\"deleted\":${deleted}}")
+        writeDto(ctx, 200u16, DeletedResp(deleted))
     }
 
     // 查询参数转 Int64（缺失/非法 → 0）
@@ -452,7 +430,7 @@ public class AdminService {
         let store = match (this.pkgStore) {
             case Some(s) => s
             case None =>
-                writeJson(ctx, 500u16, "{\"error\":\"package store unavailable\"}")
+                writeDto(ctx, 500u16, ErrorResp("package store unavailable"))
                 return
         }
         let org = ctx.query("organization") ?? ""
@@ -476,24 +454,15 @@ public class AdminService {
         let size = parseI64(ctx.query("size"))
         let (start, end) = pageWindow(hits.size, if (page <= 0) { 1 } else { page },
             if (size <= 0) { 50 } else { size })
-        let sb = StringBuilder()
-        sb.append("{\"total\":${hits.size},\"items\":[")
+        let items = ArrayList<AdminPackageDto>()
         var i = start
         while (i < end) {
-            if (i > start) {
-                sb.append(",")
-            }
             let d = hits[i]
-            sb.append("{\"id\":${d.id},\"organization\":\"${escapeJsonStr(d.organization)}\",")
-            sb.append("\"name\":\"${escapeJsonStr(d.name)}\",\"version\":\"${escapeJsonStr(d.version)}\",")
-            sb.append("\"deletedAt\":${d.deletedAt},\"sha256\":\"${escapeJsonStr(d.sha256)}\",")
-            sb.append("\"tarballSize\":${d.tarballSize},\"downloads\":${d.downloadCount},")
-            sb.append("\"publisherId\":${d.publisherId},\"upstreamId\":${d.upstreamId},")
-            sb.append("\"createdAt\":${d.createdAt},\"updatedAt\":${d.updatedAt}}")
+            items.add(AdminPackageDto(d.id, d.organization, d.name, d.version, d.deletedAt, d.sha256,
+                d.tarballSize, d.downloadCount, d.publisherId, d.upstreamId, d.createdAt, d.updatedAt))
             i++
         }
-        sb.append("]}")
-        writeJson(ctx, 200u16, sb.toString())
+        writeDto(ctx, 200u16, AdminPackageListResp(hits.size, items))
     }
 
     // ===== 组织 CRUD（REST）=====
@@ -502,13 +471,13 @@ public class AdminService {
         let ad = match (this.adminData) {
             case Some(x) => x
             case None =>
-                writeJson(ctx, 500u16, "{\"error\":\"admin data store unavailable\"}")
+                writeDto(ctx, 500u16, ErrorResp("admin data store unavailable"))
                 return None
         }
         let ps = match (this.pkgStore) {
             case Some(x) => x
             case None =>
-                writeJson(ctx, 500u16, "{\"error\":\"package store unavailable\"}")
+                writeDto(ctx, 500u16, ErrorResp("package store unavailable"))
                 return None
         }
         Some((ad, ps))
@@ -523,12 +492,12 @@ public class AdminService {
             case Some(v) => v
             case None => return
         }
-        let items = ArrayList<String>()
+        let items = ArrayList<OrgDto>()
         for (o in ad.listOrgs()) {
             let (pkgs, versions) = orgPackageStats(ps, o.name)
             items.add(orgJson(o, pkgs, versions, orgReferencingTeams(ad, o.id).size))
         }
-        writeJson(ctx, 200u16, orgListJson(items, items.size))
+        writeDto(ctx, 200u16, orgListJson(items, items.size))
     }
 
     // GET /api/admin/organizations/:id → 详情
@@ -546,15 +515,15 @@ public class AdminService {
         }
         let org = match (ad.getOrg(id)) {
             case Some(o) => if (o.deletedAt == 0) { o } else {
-                writeJson(ctx, 404u16, "{\"error\":\"organization not found\"}")
+                writeDto(ctx, 404u16, ErrorResp("organization not found"))
                 return
             }
             case None =>
-                writeJson(ctx, 404u16, "{\"error\":\"organization not found\"}")
+                writeDto(ctx, 404u16, ErrorResp("organization not found"))
                 return
         }
         let (pkgs, versions) = orgPackageStats(ps, org.name)
-        writeJson(ctx, 200u16, orgJson(org, pkgs, versions, orgReferencingTeams(ad, org.id).size))
+        writeDto(ctx, 200u16, orgJson(org, pkgs, versions, orgReferencingTeams(ad, org.id).size))
     }
 
     // POST /api/admin/organizations  body {name, displayName?, description?, isDefault?}
@@ -569,14 +538,14 @@ public class AdminService {
         let body = match (parseJsonBody<OrgUpsertRequest>(ctx.bodyRaw(), { r => OrgUpsertRequest.fromJson(r) })) {
             case Some(b) => b
             case None =>
-                writeJson(ctx, 400u16, "{\"error\":\"invalid JSON body\"}")
+                writeDto(ctx, 400u16, ErrorResp("invalid JSON body"))
                 return
         }
         let (actorId, _) = this.actorOf(ctx)
         let r = createOrgChecked(ad, body.name.trimAscii(), body.displayName, body.description,
             body.isDefault, actorId, auditNowMs())
         this.auditOrg(ctx, "create_org", body.name.trimAscii(), r)
-        writeJson(ctx, orgResultCode(r), orgResultJson(r))
+        writeDto(ctx, orgResultCode(r), orgResultJson(r))
     }
 
     // PUT /api/admin/organizations/:id  body {name?, displayName?, description?, isDefault?}
@@ -596,13 +565,13 @@ public class AdminService {
         let body = match (parseJsonBody<OrgUpsertRequest>(ctx.bodyRaw(), { r => OrgUpsertRequest.fromJson(r) })) {
             case Some(b) => b
             case None =>
-                writeJson(ctx, 400u16, "{\"error\":\"invalid JSON body\"}")
+                writeDto(ctx, 400u16, ErrorResp("invalid JSON body"))
                 return
         }
         let cur = match (ad.getOrg(id)) {
             case Some(o) => o
             case None =>
-                writeJson(ctx, 404u16, "{\"error\":\"organization not found\"}")
+                writeDto(ctx, 404u16, ErrorResp("organization not found"))
                 return
         }
         let displayName = if (body.hasDisplayName) { body.displayName } else { cur.displayName }
@@ -612,7 +581,7 @@ public class AdminService {
         let r = updateOrgChecked(ps, ad, id, wantedName, displayName, description, isDefault, auditNowMs())
         let target = if (wantedName.isEmpty() || wantedName == cur.name) { cur.name } else { "${cur.name}→${wantedName}" }
         this.auditOrg(ctx, "update_org", target, r)
-        writeJson(ctx, orgResultCode(r), orgResultJson(r))
+        writeDto(ctx, orgResultCode(r), orgResultJson(r))
     }
 
     // DELETE /api/admin/organizations/:id → 软删（有包或仍被团队关联时 409）
@@ -634,7 +603,7 @@ public class AdminService {
         }
         let r = deleteOrgChecked(ps, ad, id, auditNowMs())
         this.auditOrg(ctx, "delete_org", name, r)
-        writeJson(ctx, orgResultCode(r), orgResultJson(r))
+        writeDto(ctx, orgResultCode(r), orgResultJson(r))
     }
 
     // 组织操作审计（与 UI 侧 uiAudit 的动作名保持一致）
@@ -656,7 +625,7 @@ public class AdminService {
         let store = match (this.pkgStore) {
             case Some(s) => s
             case None =>
-                writeJson(ctx, 500u16, "{\"error\":\"package store unavailable\"}")
+                writeDto(ctx, 500u16, ErrorResp("package store unavailable"))
                 return
         }
         let id = match (Int64.tryParse(ctx.param("id"))) {
@@ -666,10 +635,10 @@ public class AdminService {
         let doc = match (store.getById(id)) {
             case Some(d) => d
             case None =>
-                writeJson(ctx, 404u16, "{\"error\":\"package version not found\"}")
+                writeDto(ctx, 404u16, ErrorResp("package version not found"))
                 return
         }
-        writeJson(ctx, 200u16, this.versionDetailJson(store, doc))
+        writeDto(ctx, 200u16, this.versionDetailJson(store, doc))
     }
 
     // POST /api/admin/packages/:id/refetch[?force=1] → 按上游内容重拉并覆盖本地缓存
@@ -683,25 +652,25 @@ public class AdminService {
             case None => 0
         }
         if (id <= 0) {
-            writeJson(ctx, 400u16, "{\"error\":\"invalid package id\"}")
+            writeDto(ctx, 400u16, ErrorResp("invalid package id"))
             return
         }
         let store = match (this.pkgStore) {
             case Some(s) => s
             case None =>
-                writeJson(ctx, 500u16, "{\"error\":\"package store unavailable\"}")
+                writeDto(ctx, 500u16, ErrorResp("package store unavailable"))
                 return
         }
         let proxy = match (this.proxySvc) {
             case Some(p) => p
             case None =>
-                writeJson(ctx, 503u16, "{\"error\":\"proxy service unavailable（未配置上游回源）\"}")
+                writeDto(ctx, 503u16, ErrorResp("proxy service unavailable（未配置上游回源）"))
                 return
         }
         let doc = match (store.getById(id)) {
             case Some(d) => d
             case None =>
-                writeJson(ctx, 404u16, "{\"error\":\"package version not found\"}")
+                writeDto(ctx, 404u16, ErrorResp("package version not found"))
                 return
         }
         let force = (ctx.query("force") ?? "") == "1"
@@ -724,11 +693,11 @@ public class AdminService {
             case RefetchOutcome.Unreachable => code = 502u16
             case _ => code = 200u16
         }
-        writeJson(ctx, code, refetchJson(r))
+        writeDto(ctx, code, refetchJson(r))
     }
 
-    // 单版本详情 JSON（管理端用，含 README 全文；不走公开接口的脱敏口径）
-    func versionDetailJson(store: PackageStore, doc: PackageDoc): String {
+    // 单版本详情（管理端用，含 README 全文；不走公开接口的脱敏口径）
+    func versionDetailJson(store: PackageStore, doc: PackageDoc): PackageVersionDetailDto {
         let publisher = if (doc.publisherId > 0) {
             match (this.userStore.getUser(doc.publisherId)) {
                 case Some(u) => u.username
@@ -749,25 +718,11 @@ public class AdminService {
             case Some(b) => b
             case None => MemoryBlobStore()
         }
-        let sb = StringBuilder()
-        sb.append("{\"id\":${doc.id},\"organization\":\"${escapeJsonStr(doc.organization)}\",")
-        sb.append("\"name\":\"${escapeJsonStr(doc.name)}\",\"version\":\"${escapeJsonStr(doc.version)}\",")
-        sb.append("\"cjcVersion\":\"${escapeJsonStr(doc.cjcVersion)}\",")
-        sb.append("\"description\":\"${escapeJsonStr(doc.description)}\",")
-        sb.append("\"artifactType\":\"${escapeJsonStr(doc.artifactType)}\",\"executable\":${doc.executable},")
-        sb.append("\"authors\":${jsonStringArray(doc.authors)},\"repository\":\"${escapeJsonStr(doc.repository)}\",")
-        sb.append("\"homepage\":\"${escapeJsonStr(doc.homepage)}\",")
-        sb.append("\"documentation\":\"${escapeJsonStr(doc.documentation)}\",")
-        sb.append("\"tag\":${jsonStringArray(doc.tag)},\"category\":${jsonStringArray(doc.category)},")
-        sb.append("\"license\":${jsonStringArray(doc.license)},")
-        sb.append("\"sha256\":\"${escapeJsonStr(doc.sha256)}\",\"tarballSize\":${doc.tarballSize},")
-        sb.append("\"downloads\":${doc.downloadCount},\"publisherId\":${doc.publisherId},")
-        sb.append("\"publisher\":\"${escapeJsonStr(publisher)}\",")
-        sb.append("\"upstreamId\":${doc.upstreamId},\"upstreamName\":\"${escapeJsonStr(upstream)}\",")
-        sb.append("\"deletedAt\":${doc.deletedAt},\"createdAt\":${doc.createdAt},\"updatedAt\":${doc.updatedAt},")
-        sb.append("\"readme\":\"${escapeJsonStr(doc.readme)}\",\"readmeLength\":${doc.readme.size},")
-        sb.append("\"artifactPresent\":${artifactAvailable(store, blobs, doc)}}")
-        sb.toString()
+        PackageVersionDetailDto(doc.id, doc.organization, doc.name, doc.version, doc.cjcVersion,
+            doc.description, doc.artifactType, doc.executable, doc.authors, doc.repository, doc.homepage,
+            doc.documentation, doc.tag, doc.category, doc.license, doc.sha256, doc.tarballSize,
+            doc.downloadCount, doc.publisherId, publisher, doc.upstreamId, upstream, doc.deletedAt,
+            doc.createdAt, doc.updatedAt, doc.readme, doc.readme.size, artifactAvailable(store, blobs, doc))
     }
 
     // ===== 包三级删除闭环 =====
@@ -797,19 +752,19 @@ public class AdminService {
             case None => 0
         }
         if (id <= 0) {
-            writeJson(ctx, 400u16, "{\"error\":\"invalid package id\"}")
+            writeDto(ctx, 400u16, ErrorResp("invalid package id"))
             return
         }
         let store = match (this.pkgStore) {
             case Some(s) => s
             case None =>
-                writeJson(ctx, 500u16, "{\"error\":\"package store unavailable\"}")
+                writeDto(ctx, 500u16, ErrorResp("package store unavailable"))
                 return
         }
         let doc = match (store.getById(id)) {
             case Some(d) => d
             case None =>
-                writeJson(ctx, 404u16, "{\"error\":\"package version not found\"}")
+                writeDto(ctx, 404u16, ErrorResp("package version not found"))
                 return
         }
         let blobs: BlobStore = match (this.blobStore) {
@@ -849,7 +804,7 @@ public class AdminService {
             case LifecycleOutcome.Failed => code = 500u16
             case _ => code = 200u16
         }
-        writeJson(ctx, code, lifecycleJson(result))
+        writeDto(ctx, code, lifecycleJson(result))
     }
 
     // ===== 上游管理 =====
@@ -858,20 +813,13 @@ public class AdminService {
             return
         }
         let list = this.upstreamStore.listAll()
-        let sb = StringBuilder()
-        sb.append("[")
-        for (i in 0..list.size) {
-            let u = list[i]
-            if (i > 0) {
-                sb.append(",")
-            }
-            sb.append("{\"id\":${u.id},\"name\":\"${u.name}\",\"url\":\"${u.url}\"," +
-                "\"enabled\":${u.enabled},\"isOfficial\":${u.isOfficial}," +
-                "\"priority\":${u.priority},\"cacheTtl\":${u.cacheTtl}," +
-                "\"proxyEnabled\":${u.proxyEnabled},\"asTarget\":${u.asTarget}}")
+        let rows = ArrayList<UpstreamDto>()
+        for (u in list) {
+            rows.add(UpstreamDto(u.id, u.name, u.url, u.enabled, u.isOfficial, u.priority, u.cacheTtl,
+                u.proxyEnabled, u.asTarget))
         }
-        sb.append("]")
-        writeJson(ctx, 200u16, sb.toString())
+        // 契约是**裸数组**（不是 {total,items} 包装）：外部脚本按 Array 解析
+        writeDto(ctx, 200u16, rows)
     }
 
     public func addUpstream(ctx: TangHttpContext): Unit {
@@ -917,7 +865,7 @@ public class AdminService {
         }
         let priority = parsePriority(priorityStr)
         if (name.isEmpty() || url.isEmpty()) {
-            writeJson(ctx, 400u16, "{\"error\":\"name and url required\"}")
+            writeDto(ctx, 400u16, ErrorResp("name and url required"))
             return
         }
         let (upActorId, upActorName) = this.actorOf(ctx)
@@ -925,12 +873,12 @@ public class AdminService {
             case Some(u) =>
                 writeAudit(this.adminData, LogKind.Admin, upActorId, upActorName, "add_upstream", "ok", name, ctx,
                     detail: "url=${url} priority=${priority} proxyEnabled=${proxyEnabled} asTarget=${asTarget}")
-                writeJson(ctx, 200u16, "{\"id\":${u.id},\"name\":\"${u.name}\",\"isOfficial\":${u.isOfficial}," +
-                    "\"proxyEnabled\":${u.proxyEnabled},\"asTarget\":${u.asTarget}}")
+                writeDto(ctx, 200u16, UpstreamAddedResp(u.id, u.name, u.isOfficial, u.proxyEnabled,
+                    u.asTarget))
             case None =>
                 writeAudit(this.adminData, LogKind.Admin, upActorId, upActorName, "add_upstream", "failed", name, ctx,
                     error: "upstream name exists or invalid")
-                writeJson(ctx, 409u16, "{\"error\":\"upstream name exists or invalid\"}")
+                writeDto(ctx, 409u16, ErrorResp("upstream name exists or invalid"))
         }
     }
 
@@ -944,7 +892,7 @@ public class AdminService {
         let id = match (Int64.tryParse(ctx.param("id").trimAscii())) {
             case Some(n) => n
             case None =>
-                writeJson(ctx, 400u16, "{\"error\":\"invalid upstream id (expect numeric id)\"}")
+                writeDto(ctx, 400u16, ErrorResp("invalid upstream id (expect numeric id)"))
                 return
         }
         let body = String.fromUtf8(ctx.bodyRaw())
@@ -981,18 +929,18 @@ public class AdminService {
             }
         } catch (e: Exception) {
             eprintln("[cjreg] 更新上游请求体解析失败: " + e.toString())
-            writeJson(ctx, 400u16, "{\"error\":\"invalid json body\"}")
+            writeDto(ctx, 400u16, ErrorResp("invalid json body"))
             return
         }
         let (actorId, actorName) = this.actorOf(ctx)
         if (this.upstreamSvc.update(id, enabled, priority, cacheTtl, authToken, proxyEnabled: proxyEnabled, asTarget: asTarget)) {
             writeAudit(this.adminData, LogKind.Admin, actorId, actorName, "update_upstream", "ok", "#${id}", ctx,
                 detail: "enabled=${enabled.isSome()} proxyEnabled=${proxyEnabled.isSome()} asTarget=${asTarget.isSome()}")
-            writeJson(ctx, 200u16, "{\"status\":\"ok\"}")
+            writeDto(ctx, 200u16, OkResp())
         } else {
             writeAudit(this.adminData, LogKind.Admin, actorId, actorName, "update_upstream", "failed", "#${id}", ctx,
                 error: "not found")
-            writeJson(ctx, 404u16, "{\"error\":\"upstream not found\"}")
+            writeDto(ctx, 404u16, ErrorResp("upstream not found"))
         }
     }
 
@@ -1005,7 +953,7 @@ public class AdminService {
         let id = match (Int64.tryParse(ctx.param("id").trimAscii())) {
             case Some(n) => n
             case None =>
-                writeJson(ctx, 400u16, "{\"error\":\"invalid upstream id (expect numeric id)\"}")
+                writeDto(ctx, 400u16, ErrorResp("invalid upstream id (expect numeric id)"))
                 return
         }
         let (delActorId, delActorName) = this.actorOf(ctx)
@@ -1018,11 +966,11 @@ public class AdminService {
         }
         if (this.upstreamSvc.remove(id)) {
             writeAudit(this.adminData, LogKind.Admin, delActorId, delActorName, "delete_upstream", "ok", upName, ctx)
-            writeJson(ctx, 200u16, "{\"status\":\"ok\"}")
+            writeDto(ctx, 200u16, OkResp())
         } else {
             writeAudit(this.adminData, LogKind.Admin, delActorId, delActorName, "delete_upstream", "failed", upName, ctx,
                 error: "not found or official protected")
-            writeJson(ctx, 409u16, "{\"error\":\"cannot delete (not found or official protected)\"}")
+            writeDto(ctx, 409u16, ErrorResp("cannot delete (not found or official protected)"))
         }
     }
 
@@ -1039,7 +987,7 @@ public class AdminService {
         let up = match (this.upstreamStore.getById(id)) {
             case Some(u) => u
             case None =>
-                writeJson(ctx, 404u16, "{\"error\":\"upstream not found\"}")
+                writeDto(ctx, 404u16, ErrorResp("upstream not found"))
                 return
         }
         let name = ctx.query("name") ?? ""
@@ -1050,7 +998,7 @@ public class AdminService {
             if (result.reachable) { "ok" } else { "failed" }, up.name, ctx,
             error: result.error,
             detail: "status=${result.status} latency=${result.latencyMs}ms healthy=${result.healthy} url=${result.testedUrl}")
-        writeJson(ctx, 200u16, upstreamProbeJson(result))
+        writeDto(ctx, 200u16, upstreamProbeJson(result))
     }
 
     // ===== resolve 诊断端点 =====
@@ -1062,7 +1010,7 @@ public class AdminService {
         let org = ctx.query("organization") ?? ""
         let require = ctx.query("require") ?? ""
         if (name.isEmpty()) {
-            writeJson(ctx, 400u16, "{\"error\":\"name required\"}")
+            writeDto(ctx, 400u16, ErrorResp("name required"))
             return
         }
         let fetchIndex: (String, String) -> ?String = { o: String, n: String =>
@@ -1078,33 +1026,17 @@ public class AdminService {
             }
         }
         let r = this.resolveSvc.resolve(name, org, require, fetchIndex)
-        let sb = StringBuilder()
-        sb.append("{\"name\":\"${r.name}\",\"org\":\"${r.org}\",\"require\":\"${r.require}\",")
-        sb.append("\"found\":${r.found},\"replaced\":${r.replaced},")
-        sb.append("\"replacedBy\":\"${r.replacedBy}\",")
-        sb.append("\"selected\":")
-        match (r.selected) {
-            case Some(c) =>
-                sb.append("{\"repo\":\"${c.repo}\",\"version\":\"${c.version}\",\"sha256sum\":\"${c.sha256sum}\",\"conflict\":${c.conflict}}")
-            case None => sb.append("null")
+        // selected 未命中时输出 null（不是省略字段）：消费方靠它区分「没有候选」与「字段缺失」
+        let selected = match (r.selected) {
+            case Some(c) => Some(resolveCandidateDto(c))
+            case None => Option<ResolveCandidateDto>.None
         }
-        sb.append(",\"candidates\":[")
-        for (i in 0..r.candidates.size) {
-            let c = r.candidates[i]
-            if (i > 0) {
-                sb.append(",")
-            }
-            sb.append("{\"repo\":\"${c.repo}\",\"version\":\"${c.version}\",\"sha256sum\":\"${c.sha256sum}\",\"conflict\":${c.conflict}}")
+        let candidates = ArrayList<ResolveCandidateDto>()
+        for (c in r.candidates) {
+            candidates.add(resolveCandidateDto(c))
         }
-        sb.append("],\"trace\":[")
-        for (i in 0..r.trace.size) {
-            if (i > 0) {
-                sb.append(",")
-            }
-            sb.append("\"${r.trace[i]}\"")
-        }
-        sb.append("]}")
-        writeJson(ctx, 200u16, sb.toString())
+        writeDto(ctx, 200u16, ResolveResp(r.name, r.org, r.require, r.found, r.replaced, r.replacedBy,
+            selected, candidates, r.trace))
     }
 
     // ===== 发布计划 analyze =====
@@ -1126,30 +1058,20 @@ public class AdminService {
         var roots = ArrayList<(String, String, String)>()
         parsePackagesBody(body, roots)
         if (roots.size == 0) {
-            writeJson(ctx, 400u16, "{\"error\":\"packages required\"}")
+            writeDto(ctx, 400u16, ErrorResp("packages required"))
             return
         }
         let targetId = parseTargetUpstream(body)
         let analysis = this.analyzeWithTarget(roots, targetId)
-        let sb = StringBuilder()
-        sb.append("{\"target_checked\":${analysis.targetChecked},")
-        sb.append("\"target_error\":\"${escapeJsonStr(analysis.targetError)}\",")
-        sb.append("\"publish_order\":[")
-        for (i in 0..analysis.items.size) {
-            if (i > 0) {
-                sb.append(",")
-            }
-            let it = analysis.items[i]
-            sb.append("{\"name\":\"${it.name}\",\"org\":\"${it.org}\",\"version\":\"${it.version}\",")
-            sb.append("\"order\":${it.order},\"category\":\"${planCategoryName(it.category)}\",")
-            sb.append("\"selected\":${it.selected},\"local_sha256\":\"${it.localSha256}\",")
-            sb.append("\"remote_sha256\":\"${it.remoteSha256}\",\"requirement\":\"${escapeJsonStr(it.requirement)}\",")
+        let order = ArrayList<PlanItemAnalysisDto>()
+        for (it in analysis.items) {
             // 目标仓对照：`target_version` 是目标仓该包最新版本；没做成对照时它为空，
             // 消费方必须连 `target_compared` 一起看才能区分「目标仓没有这个包」与「没查到」。
-            sb.append("\"target_version\":\"${it.targetVersion}\",\"target_compared\":${it.targetCompared}}")
+            order.add(PlanItemAnalysisDto(it.name, it.org, it.version, it.order, planCategoryName(it.category),
+                it.selected, it.localSha256, it.remoteSha256, it.requirement, it.targetVersion, it.targetCompared))
         }
-        sb.append("],\"hasCycle\":${analysis.hasCycle}}")
-        writeJson(ctx, 200u16, sb.toString())
+        writeDto(ctx, 200u16, PlanAnalyzeResp(analysis.targetChecked, analysis.targetError, order,
+            analysis.hasCycle))
     }
 
     // 按目标上游做 analyze（targetId <= 0 或上游不存在 = 不做目标仓对比）
@@ -1184,30 +1106,30 @@ public class AdminService {
             itemId = -1
         }
         if (planId < 0 || itemId < 0) {
-            writeJson(ctx, 400u16, "{\"error\":\"invalid plan or item id\"}")
+            writeDto(ctx, 400u16, ErrorResp("invalid plan or item id"))
             return
         }
         let (actorId, actorName) = this.actorOf(ctx)
         match (this.adminData) {
-            case None => writeJson(ctx, 503u16, "{\"error\":\"admin store unavailable\"}")
+            case None => writeDto(ctx, 503u16, ErrorResp("admin store unavailable"))
             case Some(ad) =>
                 let item = ad.getPlanItem(itemId)
                 match (item) {
                     case None =>
                         writeAudit(this.adminData, LogKind.Admin, actorId, actorName, "skip_plan_item", "failed",
                             "plan=${planId} item=${itemId}", ctx, error: "item not found")
-                        writeJson(ctx, 404u16, "{\"error\":\"plan item not found\"}")
+                        writeDto(ctx, 404u16, ErrorResp("plan item not found"))
                     case Some(it) =>
                         // 归属校验：不能拿 A 计划的 id 去改 B 计划的项
                         if (it.planId != planId) {
-                            writeJson(ctx, 404u16, "{\"error\":\"plan item not found in this plan\"}")
+                            writeDto(ctx, 404u16, ErrorResp("plan item not found in this plan"))
                             return
                         }
                         ad.updatePlanItem(itemId, "skipped", "手动跳过", nowMsUtc())
                         let target = "${it.packageOrg}::${it.packageName}@${it.packageVersion}"
                         writeAudit(this.adminData, LogKind.Admin, actorId, actorName, "skip_plan_item", "ok",
                             target, ctx, detail: "plan=${planId} item=${itemId}")
-                        writeJson(ctx, 200u16, "{\"status\":\"ok\",\"itemId\":${itemId}}")
+                        writeDto(ctx, 200u16, SkipItemResp(itemId))
                 }
         }
     }
@@ -1224,14 +1146,14 @@ public class AdminService {
             planId = -1
         }
         if (planId < 0) {
-            writeJson(ctx, 400u16, "{\"error\":\"invalid plan id\"}")
+            writeDto(ctx, 400u16, ErrorResp("invalid plan id"))
             return
         }
         match (this.adminData) {
-            case None => writeJson(ctx, 503u16, "{\"error\":\"admin store unavailable\"}")
+            case None => writeDto(ctx, 503u16, ErrorResp("admin store unavailable"))
             case Some(ad) =>
                 match (ad.getPlan(planId)) {
-                    case None => writeJson(ctx, 404u16, "{\"error\":\"plan not found\"}")
+                    case None => writeDto(ctx, 404u16, ErrorResp("plan not found"))
                     case Some(plan) =>
                         let payload = buildPlanEventsPayload(plan, ad.listPlanItems(planId))
                         ctx.responseBuilder
@@ -1285,7 +1207,7 @@ public class AdminService {
         if (roots.size == 0 || targetUrl.isEmpty()) {
             writeAudit(this.adminData, LogKind.Admin, planActorId, planActorName, "execute_publish_plan", "failed",
                 targetUrl, ctx, error: "packages and target_url required")
-            writeJson(ctx, 400u16, "{\"error\":\"packages and target_url required\"}")
+            writeDto(ctx, 400u16, ErrorResp("packages and target_url required"))
             return
         }
         // 目标仓鉴权：显式 target_token 优先，否则按 URL 匹配上游表取该上游 authToken
@@ -1297,7 +1219,7 @@ public class AdminService {
         if (items.size == 0) {
             writeAudit(this.adminData, LogKind.Admin, planActorId, planActorName, "execute_publish_plan", "failed",
                 targetUrl, ctx, error: "no packages found locally")
-            writeJson(ctx, 400u16, "{\"error\":\"no packages found locally\"}")
+            writeDto(ctx, 400u16, ErrorResp("no packages found locally"))
             return
         }
         let report = this.executor.execute(items, targetUrl, token)
@@ -1321,18 +1243,8 @@ public class AdminService {
             detail: "success=${report.success} skipped=${report.skipped} failed=${report.failed} " +
                 "total=${report.total} aborted=${report.aborted} roots=${roots.size} " +
                 "explicitToken=${!targetToken.isEmpty()}")
-        let sb = StringBuilder()
-        sb.append("{\"success\":${report.success},\"skipped\":${report.skipped},")
-        sb.append("\"failed\":${report.failed},\"total\":${report.total},")
-        sb.append("\"aborted\":${report.aborted},\"abort_reason\":\"${escapeJsonStr(report.abortReason)}\",\"errors\":[")
-        for (i in 0..report.errors.size) {
-            if (i > 0) {
-                sb.append(",")
-            }
-            sb.append("\"${escapeJsonStr(report.errors[i])}\"")
-        }
-        sb.append("]}")
-        writeJson(ctx, 200u16, sb.toString())
+        writeDto(ctx, 200u16, PlanExecuteResp(report.success, report.skipped, report.failed, report.total,
+            report.aborted, report.abortReason, report.errors))
     }
 
     func requireAdmin(ctx: TangHttpContext): Bool {
@@ -1341,10 +1253,10 @@ public class AdminService {
                 if (user.isAdmin) {
                     return true
                 }
-                writeJson(ctx, 403u16, "{\"error\":\"admin required\"}")
+                writeDto(ctx, 403u16, ErrorResp("admin required"))
                 return false
             case None =>
-                writeJson(ctx, 401u16, "{\"error\":\"not authenticated\"}")
+                writeDto(ctx, 401u16, ErrorResp("not authenticated"))
                 return false
         }
     }
@@ -1382,10 +1294,11 @@ func trimUrl(v: String): String {
     s
 }
 
-// 写 JSON 响应
-public func writeJson(ctx: TangHttpContext, code: UInt16, body: String): Unit {
-    ctx.contentType("application/json").status(code).writeStringWithCode(code, body)
+// 解析候选项 → 响应 DTO（selected 与 candidates 同一形态）
+func resolveCandidateDto(c: ResolveCandidate): ResolveCandidateDto {
+    ResolveCandidateDto(c.repo, c.version, c.sha256sum, c.conflict)
 }
+
 
 // 解析登录 JSON body（{username, password}）
 public func parseLoginBody(body: Array<Byte>): ?LoginRequest {
@@ -1423,26 +1336,23 @@ func adminPkgAsc(a: PackageDoc, b: PackageDoc): Ordering {
 }
 
 public func buildPlanEventsPayload(plan: PlanDoc, items: ArrayList<PlanItemDoc>): String {
+    let rows = ArrayList<PlanProgressItemDto>()
+    for (it in items) {
+        rows.add(PlanProgressItemDto(it.id, it.packageOrg, it.packageName, it.packageVersion,
+            it.status, it.error))
+    }
+    // 帧结构（event/data/空行）与终态 done 语义不变；data 里的 JSON 由序列化器生成
     let sb = StringBuilder()
     sb.append("event: progress\n")
-    sb.append("data: {\"planId\":${plan.id},\"status\":\"${escapeJsonStr(plan.status)}\",")
-    sb.append("\"completed\":${plan.completedCount},\"total\":${plan.totalCount},")
-    sb.append("\"lastError\":\"${escapeJsonStr(plan.lastError)}\",\"items\":[")
-    for (i in 0..items.size) {
-        if (i > 0) {
-            sb.append(",")
-        }
-        let it = items[i]
-        sb.append("{\"id\":${it.id},\"org\":\"${escapeJsonStr(it.packageOrg)}\",")
-        sb.append("\"name\":\"${escapeJsonStr(it.packageName)}\",")
-        sb.append("\"version\":\"${escapeJsonStr(it.packageVersion)}\",")
-        sb.append("\"status\":\"${escapeJsonStr(it.status)}\",")
-        sb.append("\"error\":\"${escapeJsonStr(it.error)}\"}")
-    }
-    sb.append("]}\n\n")
+    sb.append("data: ")
+    sb.append(jsonText(PlanProgressDto(plan.id, plan.status, plan.completedCount, plan.totalCount,
+        plan.lastError, rows)))
+    sb.append("\n\n")
     if (plan.status == "completed" || plan.status == "failed") {
         sb.append("event: done\n")
-        sb.append("data: {\"planId\":${plan.id},\"status\":\"${escapeJsonStr(plan.status)}\"}\n\n")
+        sb.append("data: ")
+        sb.append(jsonText(PlanDoneDto(plan.id, plan.status)))
+        sb.append("\n\n")
     }
     return sb.toString()
 }

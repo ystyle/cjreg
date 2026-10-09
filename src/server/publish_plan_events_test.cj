@@ -75,6 +75,11 @@ func testPlanEventsPayloadRunningHasNoDone() {
     @Expect(s.contains("event: done"), false)
     // SSE 事件必须以空行结束
     @Expect(s.endsWith("\n\n"), true)
+    // 帧逐字契约：`event: progress` + `data: <紧凑 JSON>` + 空行；data 的字段顺序即契约
+    @Expect(s, "event: progress\ndata: {\"planId\":7,\"status\":\"running\",\"completed\":1,\"total\":2," +
+        "\"lastError\":\"\",\"items\":[{\"id\":11,\"org\":\"demo\",\"name\":\"mathUtils\"," +
+        "\"version\":\"1.0.0\",\"status\":\"completed\",\"error\":\"\"},{\"id\":12,\"org\":\"demo\"," +
+        "\"name\":\"strUtils\",\"version\":\"1.0.0\",\"status\":\"waiting_index\",\"error\":\"\"}]}\n\n")
 }
 
 @Test
@@ -88,6 +93,9 @@ func testPlanEventsPayloadTerminalEmitsDone() {
     @Expect(s.contains("event: progress"), true)
     @Expect(s.contains("event: done"), true)
     @Expect(s.contains("\"status\":\"completed\""), true)
+    // 终态帧逐字契约：progress 快照之后紧跟 done 帧（各以空行结束）
+    @Expect(s, "event: progress\ndata: {\"planId\":9,\"status\":\"completed\",\"completed\":1,\"total\":1," +
+        "\"lastError\":\"\",\"items\":[]}\n\nevent: done\ndata: {\"planId\":9,\"status\":\"completed\"}\n\n")
     // 计划级错误也要带给客户端（刷新页面后仍能解释为什么停下来）
     let failed = PlanDoc()
     failed.id = 10

@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # 路由守卫：从源码抽出全部 @Page 路径，逐个 HTTP 探测，任一 404 即失败。
 #
-# 为什么需要它：cjxt 的 @Page 是宏，注册代码落在**定义它的包**里；若该包没有被任何
-# 包 import，其包初始化不会执行 —— 编译无警告、符号也在二进制里，但页面**静默 404**。
+# 为什么需要它：cjxt 的 @Page 是宏，注册代码落在**定义它的包**里；cjpm 只链接「从根包
+# import 可达」的包 —— 子包没被任何包 import 时它不进链接图、包初始化不执行，页面
+# **静默 404**：编译无警告，二进制里连该页面的符号都没有。
 # ui 包已按站点面拆成子包（src/ui/、src/ui/public/、src/ui/admin/），这条守卫用来
 # 盯住"新页面放进子包却忘了在 main.cj 引用"这类回归。
-# 详见工作区 `docs/issue/2026-10-09-cjxt-subpackage-page-registration.md`。
+# 注意：不能用 nm / 符号表判断注册成功（未链接的包符号根本不在二进制里；即便用
+# --whole-archive 强塞入符号，包初始化依然不执行）——判据只能取运行时路由表或 HTTP 探测。
+# 详见 ../cjxt/docs/issue/2026-10-09-cjxt-subpackage-page-registration.md。
 #
 # 用法：bash scripts/check-routes.sh            # 用默认端口 18099
 #       PORT=18088 DATA=... bash scripts/check-routes.sh

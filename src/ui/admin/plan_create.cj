@@ -136,10 +136,14 @@ class PublishPlanCreatePage <: Component {
             }
             out.add(d)
         }
-        // 按包名 + 版本号倒序（同名的多个版本，新版本在前）
+        // 包名升序；同名的多个版本**新版本在前**。
+        //
+        // 主键必须是「组织 + 包名」，不能拿 pkgLabel（含 `@version`）当主键：
+        // 那样同名不同版本之间 ka != kb 恒成立，版本分支永远走不到，
+        // 排序退化成整串字典序（`alpha@1.10.0 < alpha@1.9.0`），与「新版本在前」相悖。
         sort(out, lessThan: { a, b =>
-            let ka = pkgLabel(a)
-            let kb = pkgLabel(b)
+            let ka = a.organization + "::" + a.name
+            let kb = b.organization + "::" + b.name
             if (ka != kb) { ka < kb } else { compareVersions(a.version, b.version) > 0 }
         })
         out

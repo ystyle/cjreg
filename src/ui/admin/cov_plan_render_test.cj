@@ -464,25 +464,26 @@ public class CovPlanCreateRenderTest {
         @Expect(page.pickerHint(), "本站还没有自发布的包：回源镜像不作为发布源，请先发布到本仓")
     }
 
-    // 候选表排序：包名升序；同名多版本按**版本号字符串**升序。
+    // 候选表排序：包名（组织 + 包名）升序；同名多版本**新版本在前**。
     //
-    // 这里断言的是**实际行为**：比较器用完整标签 `org::name@version` 做主键（`ka != kb`），
-    // 而标签里已经含版本号，所以版本分支（`ka == kb` 时才比版本）实际上永远走不到 →
-    // 得到的是字典序升序，而不是源码注释里写的"新版本在前"。先在测试里钉住现状，
-    // 待确认这是有意为之还是缺陷后再决定是否改生产代码。
+    // 这条守着一个真实缺陷：比较器原先拿 `pkgLabel`（`org::name@version`，**含版本号**）
+    // 当主键，同名不同版本之间 `ka != kb` 恒成立 → 版本分支永远走不到，
+    // 排序退化成整串字典序（`alpha@1.10.0 < alpha@1.9.0`），与「新版本在前」相悖。
+    // 主键改为「组织 + 包名」后，版本比较才真正生效。
+    // 数据里特意放 1.9.0 / 1.10.0：字符串序与版本序在这一对上是相反的，能真正咬住回归。
     @TestCase
     public func covPlanCreate_candidateOrdering(): Unit {
         let state = makePortalState("team")
         let _ = covSeedPkg(state, "ystyle", "beta", "1.0.0")
-        let _ = covSeedPkg(state, "ystyle", "alpha", "1.0.0")
+        let _ = covSeedPkg(state, "ystyle", "alpha", "1.9.0")
+        let _ = covSeedPkg(state, "ystyle", "alpha", "1.10.0")
         let _ = covSeedPkg(state, "ystyle", "alpha", "1.2.0")
-        let _ = covSeedPkg(state, "ystyle", "alpha", "1.1.0")
         let page = mountPlanCreateCov(state)
         let rows = page.pkgRows.get()
         @Expect(rows.size, 4)
         @Expect(rows[0].name, "alpha")
-        @Expect(rows[0].version, "1.0.0")
-        @Expect(rows[1].version, "1.1.0")
+        @Expect(rows[0].version, "1.10.0")   // 新版本在前（字符串序会给出 1.2.0）
+        @Expect(rows[1].version, "1.9.0")
         @Expect(rows[2].version, "1.2.0")
         @Expect(rows[3].name, "beta")
     }

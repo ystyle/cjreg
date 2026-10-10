@@ -149,6 +149,8 @@ class UsersPage <: Component {
                 uiAudit(st, ctx, "create_user", uname, status: "failed", error: "user already exists")
                 this.notify("创建失败（用户已存在）", false)
         }
+        // 行数据由 dataVersion 派生（store 不是信号）：不 bump 的话新建的用户不会出现在列表里
+        this.bump()
         PatchResult.ReRender
     }
 
@@ -289,6 +291,8 @@ class UsersPage <: Component {
         }
         this.confirmVisible.set(false)
         this.pendingDeleteId = 0
+        // 同 submitCreate：删除后必须 bump，否则被删用户仍留在表上（与 toggleActive/toggleAdmin 一致）
+        this.bump()
         PatchResult.ReRender
     }
 

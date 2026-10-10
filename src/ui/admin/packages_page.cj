@@ -346,6 +346,9 @@ class PackagesPage <: Component {
             case None =>
                 this.refetchVisible.set(false)
                 this.msg.set("版本不存在")
+                // 与 Ok / 其它失败两条出口一致：弹窗收起就复位目标 id，
+                // 否则下次打开弹窗会带着已被删除的那条记录
+                this.refetchDocId = 0
                 return PatchResult.ReRender
         }
         let force = this.refetchForce.get()

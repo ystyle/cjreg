@@ -141,8 +141,8 @@ public class CovUsersRenderTest {
         @Expect(page.rows.get().size, 1)
     }
 
-    // 新增/删除后列表不会自己刷新（这两条路径不 bump）——用例按实际行为断言，
-    // 并守住"显式 bump 之后一定跟上"，避免把这条缺口当正确行为固化。
+    // 行数据由 dataVersion 派生（store 不是信号）：只有 bump 之后列表才跟上。
+    // 这条守住派生的基本语义，也说明写路径为什么必须 bump。
     @TestCase
     public func covUsers_listRefreshRequiresBump(): Unit {
         let state = makePortalState("team")
@@ -154,6 +154,60 @@ public class CovUsersRenderTest {
         page.bump()
         @Expect(page.rows.get().size, 1)
         @Expect(page.rows.get()[0].username, "created-behind-the-scenes")
+    }
+
+    // 创建用户后列表**自己**就刷新（submitCreate 末尾 bump）。
+    // 原先漏了 bump：新建的用户要手动刷新才出现 —— 这是被单测抓出来的缺陷。
+    // 断言用「增量」而不是绝对条数：会话本身可能已带有用户。
+    @TestCase
+    public func covUsers_submitCreateRefreshesList(): Unit {
+        let state = makePortalState("team")
+        let page = mountUsersCov(state)
+        let (actx, _) = covActx(state)
+        page.bump()
+        let before = page.rows.get().size
+
+        let _ = page.openCreate(actx)
+        page.formUser.set("fresh-user")
+        page.formPass.set("FreshPass1")
+        let _ = page.submitCreate(actx)
+
+        // 没有显式 bump：列表必须自己多出这一行
+        let after = page.rows.get()
+        @Expect(after.size, before + 1)
+        var found = false
+        for (r in after) {
+            if (r.username == "fresh-user") {
+                found = true
+            }
+        }
+        @Expect(found, true)
+    }
+
+    // 删除用户后列表**自己**就刷新（confirmDelete 末尾 bump）。
+    @TestCase
+    public func covUsers_confirmDeleteRefreshesList(): Unit {
+        let state = makePortalState("team")
+        let uid = seedCovUser(state, "doomed-user")
+        let page = mountUsersCov(state)
+        let (actx, _) = covActx(state)
+        page.bump()
+        let before = page.rows.get().size
+        @Expect(before >= 1, true)
+
+        page.pendingDeleteId = uid
+        page.pendingDeleteName = "doomed-user"
+        let _ = page.confirmDelete(actx)
+
+        let after = page.rows.get()
+        @Expect(after.size, before - 1)
+        var stillThere = false
+        for (r in after) {
+            if (r.username == "doomed-user") {
+                stillThere = true
+            }
+        }
+        @Expect(stillThere, false)
     }
 
     // 新增弹窗：openCreate 复位四个字段与两条校验错误

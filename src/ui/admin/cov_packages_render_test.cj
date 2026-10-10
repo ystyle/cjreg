@@ -619,7 +619,10 @@ public class CovPackagesActionsTest {
         @Expect(page.refetchVisible.get(), false)
     }
 
-    // 重拉时记录已不存在 → 「版本不存在」
+    // 重拉时记录已不存在 → 「版本不存在」，并复位 refetchDocId
+    //
+    // 这条守着一个真实缺陷：该出口原先只关弹窗、**不复位** refetchDocId，
+    // 与 Ok / 其它失败两条出口不一致 —— 下次打开重拉弹窗会带着已被删除的那条记录。
     @TestCase
     public func covPkg_refetchMissingRecord(): Unit {
         let blob = MemoryBlobStore()
@@ -631,9 +634,8 @@ public class CovPackagesActionsTest {
         let _ = page.doRefetch(actx)
         @Expect(page.msg.get(), "版本不存在")
         @Expect(page.refetchVisible.get(), false)
-        // 这一条出口只关弹窗、**不复位** refetchDocId（compare：Ok / 其它失败两条出口都复位）。
-        // 按实际行为断言，避免把不一致当正确行为固化（已记进交付说明）。
-        @Expect(page.refetchDocId, 999999)
+        // 三条出口口径统一：弹窗收起就复位目标 id
+        @Expect(page.refetchDocId, 0)
     }
 
     // ===== 版本行下拉菜单的命令分发 =====

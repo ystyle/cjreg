@@ -172,6 +172,9 @@ class OrganizationsPage <: Component {
         }
         this.confirmVisible.set(false)
         this.pendingDeleteId = 0
+        // 行数据是 rows 信号（不是从 store 派生）：删完必须重查，否则被删组织仍挂在表上
+        // （本页其它写路径——创建/更新——都走 refresh()，这里原先漏了）
+        this.refresh()
         PatchResult.ReRender
     }
 

@@ -282,12 +282,11 @@ public class CovOrgsRenderTest {
         @Expect(state.adminData.getOrg(id).getOrThrow().deletedAt, 0)
     }
 
-    // 确认删除：软删 + 提示 + 审计 + 待删 id 复位
+    // 确认删除：软删 + 提示 + 审计 + 待删 id 复位 + **列表自己重查**
     //
-    // 注意断言的口径：这一页的 confirmDelete **不重查列表**（compare plan_list.confirmDelete 里的
-    // this.refresh()），所以删完之后那一行仍留在表格上，直到分页/再次 refresh 才消失。
-    // 这里守住的是"库与提示已正确落定"，行消失与否由紧随其后的 refresh() 断言覆盖；
-    // 「删完行还挂着」这条体验缺口记在交付说明里，不在测试里当正确行为固化。
+    // 这条守着一个真实缺陷：confirmDelete 原先不重查列表，删完之后那一行仍挂在表格上
+    // （本页创建/更新两条写路径都走 refresh()，只有删除漏了）。现在删完立即消失，
+    // 断言里不再需要手动 refresh()。
     @TestCase
     public func covOrgs_confirmDelete(): Unit {
         let state = makePortalState("team")
@@ -306,8 +305,7 @@ public class CovOrgsRenderTest {
         let (_, total) = state.adminData.queryLogs(Some("admin"), "delete_org", "", 0, 0, 0, 10)
         @Expect(total, 1)
 
-        // 显式重查后行才消失（listOrgs 已过滤软删）
-        page.refresh()
+        // 不需要显式 refresh：confirmDelete 里已经重查过（listOrgs 已过滤软删）
         @Expect(page.rows.get().size, 0)
         @Expect(page.total.get(), 0)
         @Expect(page.listHint(), "暂无组织，点击「新增组织」创建")

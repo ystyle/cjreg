@@ -13,14 +13,22 @@ import ystyle::cjreg.index.*
 import stdx.net.http.*
 import std.collection.*
 import std.convert.*
+import stdx.crypto.digest.SHA256
+import stdx.encoding.hex.toHexString
+import std.io.InputStream
 import std.fs.{Directory, File, Path, exists, removeIfExists}
 import std.unittest.*
 import std.unittest.testmacro.*
 
 // 造一个代理夹具（可选磁盘 blob 目录 = 走流式路径）
+//
+// ⚠️ 用自己的 Storm 列表而不是共享的 beginTestStores()/testStorm()：后者会关掉**别的**
+// 并发用例的库（unittest 同进程并发跑），导致它们间歇性失败。
+let proxyLiveStorms = ArrayList<Storm>()
+
 func makeProxy(tmpDir!: String = ""): (ProxyService, PackageStore, BlobStore, UpstreamService, Storm) {
-    beginTestStores()
-    let storm = testStorm()
+    let storm = Storm.inMemory()
+    proxyLiveStorms.add(storm)
     let pkgStore = PackageStore(storm)
     let blob: BlobStore = if (tmpDir.isEmpty()) { MemoryBlobStore() } else { DiskBlobStore(tmpDir) }
     let upStore = BstormUpstreamStore(storm)
@@ -170,11 +178,32 @@ class ProxyArtifactTest {
         @Expect(outcome == ProxyOutcome.NotFound, true)
     }
 
+    // 边读边算 sha（不把整包再物化一份：readStreamToBytes 会 ByteBuffer + readToEnd 双份，
+    // 在测试进程默认堆下叠加夹具本身的内存会触顶 —— 见 docs/verification.md §4.7 的同类教训）
+    func digestOfStream(stream: InputStream): (Int64, String) {
+        let sha = SHA256()
+        let buf = Array<Byte>(64 * 1024, repeat: 0)
+        var total: Int64 = 0
+        while (true) {
+            let n = stream.read(buf)
+            if (n <= 0) {
+                break
+            }
+            total += n
+            sha.write(buf[0..n])
+        }
+        (total, toHexString(sha.finish()))
+    }
+
     // fetchArtifactStream 走磁盘：tmpDir 非空 → 分块回源落盘后以流返回
+    //
+    // 用 10 MiB（> blockSize 8 MiB）确保真的跨了两个分块，验证分块循环；
+    // 断言用流式摘要而不是再读一份完整字节，控制测试内存。
     @TestCase
     func testFetchArtifactStreamViaDiskAndRange(): Unit {
-        // 用 20 MiB 触发 >1 个 8 MiB 分块（验证分块循环）
-        let payload = Array<Byte>(20 * 1024 * 1024, repeat: 7)
+        let size: Int64 = 10 * 1024 * 1024
+        let payload = Array<Byte>(size, repeat: 7)
+        let expectSha = sha256Hex(payload)
         let (base, server) = startArtifactUpstream(payload)
         try {
             let dir = covScratch("artifact-range")
@@ -183,12 +212,12 @@ class ProxyArtifactTest {
 
             let (outcome, stream, sha) = proxy.fetchArtifactStream("acme", "big", "1.0.0")
             @Expect(outcome == ProxyOutcome.FetchedFromUpstream, true)
-            @Expect(sha, sha256Hex(payload))
+            @Expect(sha, expectSha)
             match (stream) {
                 case Some(st) =>
-                    let got = readStreamToBytes(st)
-                    @Expect(got.size, payload.size)
-                    @Expect(sha256Hex(got), sha)
+                    let (gotSize, gotSha) = digestOfStream(st)
+                    @Expect(gotSize, size)
+                    @Expect(gotSha, sha)
                 case None => @Fail("disk-backed fetch should yield a stream")
             }
             // 制品的字节已落到 blob（按内容寻址）

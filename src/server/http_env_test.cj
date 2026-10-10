@@ -24,6 +24,7 @@ import ystyle::cjreg.index.*
 import stdx.net.http.*
 import std.collection.*
 import std.convert.*
+import std.fs.{Directory, exists}
 import std.io.StringReader
 import std.sync.*
 
@@ -57,11 +58,26 @@ func startInProcServer(app: Tang): (String, Server, Client) {
     (("http://127.0.0.1:" + holder.value.toString()), server, ClientBuilder().build())
 }
 
-// 上一代服务/客户端：新建夹具时统一关闭，防止用例中途失败 return 时泄漏
+// 本夹具自己持有的内存库/服务/客户端。
+//
+// ⚠️ 刻意**不复用** test_stores_test.cj 的 beginTestStores()/testStorm()：那是全包共享的
+// 「关掉上一代」列表，而 unittest 会在同一进程内并发跑用例 —— 一个用例建夹具时把共享列表里
+// 别的用例的库一起关掉，会让那些用例在随机时刻踩到已关闭的库（实测：全量跑时
+// resolve_integration_test / publish_plan_order_test 里的用例间歇性失败，单独跑却全绿）。
+// 因此这里只关自己这一代，互不干扰。
+let covLiveStorms = ArrayList<Storm>()
 let liveServers = ArrayList<Server>()
 let liveClients = ArrayList<Client>()
 
 func closeTestServers(): Unit {
+    for (st in covLiveStorms) {
+        try {
+            st.close()
+        } catch (_: Exception) {
+            ()
+        }
+    }
+    covLiveStorms.clear()
     for (c in liveClients) {
         try {
             c.close()
@@ -130,23 +146,42 @@ class HttpEnv {
         } catch (_: Exception) {
             ()
         }
+        // 关掉本次夹具自己的内存库（Badger 的后台线程持有实例引用，不关既不回收内存
+        // 也会继续占着大对象空间 —— 见 docs/verification.md §4.7）
+        try {
+            this.storm.close()
+        } catch (_: Exception) {
+            ()
+        }
     }
 }
 
 // 夹具工厂：mode = permission_mode（open / team），requireAuth 决定读路径是否要鉴权
+//
+// tmpDir 非空时用 **DiskBlobStore**（生产同款）：制品落真实文件。这条很重要 ——
+// 下载 handler 把 InputStream 直接交给响应体，stdx 需要能确定长度（File 可以，
+// 自定义 InputStream 会报 "Unknown body size for Content-Length"），
+// 所以"下载成功"这类断言只有走磁盘实现才与生产语义一致。
 func newHttpEnv(mode!: String = "open", requireAuth!: Bool = false,
                 maxRequestBytes!: Int64 = 10 * 1024 * 1024,
                 tmpDir!: String = ""): HttpEnv {
     closeTestServers()
-    beginTestStores()
     PasswordHash.ITERATIONS = 1000  // 测试提速（PBKDF2 默认迭代数很慢）
-    let storm = testStorm()
+    let storm = Storm.inMemory()
+    covLiveStorms.add(storm)
     let pkgStore = PackageStore(storm)
     let userStore = BstormUserStore(storm)
     let upStore = BstormUpstreamStore(storm)
     let authSvc = AuthService(userStore, 3600)
     let adminData = AdminDataStore(storm)
-    let blobStore: BlobStore = MemoryBlobStore()
+    var blobStore: BlobStore = MemoryBlobStore()
+    if (!tmpDir.isEmpty()) {
+        let _ = covScratch("_")  // 确保父目录存在
+        if (!exists(tmpDir)) {
+            Directory.create(tmpDir, recursive: true)
+        }
+        blobStore = DiskBlobStore(tmpDir)
+    }
     let upSvc = UpstreamService(upStore)
     let proxySvc = ProxyService(pkgStore, blobStore, upSvc, tmpDir: tmpDir)
     let admin = AdminService(authSvc, upSvc, userStore, upStore, ResolveService(upSvc), Some(proxySvc),
@@ -164,6 +199,16 @@ func newHttpEnv(mode!: String = "open", requireAuth!: Bool = false,
     liveClients.add(client)
     HttpEnv(storm, pkgStore, userStore, upStore, authSvc, adminData, blobStore, proxySvc,
         admin, app, server, client, base, cfg, tmpDir)
+}
+
+// 本次测试进程内可用的 scratch 目录（放工作区 .smoke 下，已被 gitignore）
+// 已存在时复用：Directory.create 对已存在路径会抛 FSException，不能无条件建。
+func covScratch(name: String): String {
+    let dir = "./.smoke/http-cov/" + name
+    if (!exists(dir)) {
+        Directory.create(dir, recursive: true)
+    }
+    dir
 }
 
 // ===== 请求辅助 =====
@@ -263,6 +308,12 @@ func loginToken(env: HttpEnv, username: String, password: String): String {
     let resp = httpPostJson(env, "/api/admin/login",
         "{\"username\":\"" + username + "\",\"password\":\"" + password + "\"}")
     extractJsonString(bodyText(resp), "token")
+}
+
+// 用 session token 换一个发布 token（走用户门户的重置端点，返回的是明文新 token）
+func publishTokenOf(env: HttpEnv, sessionToken: String): String {
+    let resp = httpPostJson(env, "/api/user/me/publish-token", "", token: sessionToken)
+    extractJsonString(bodyText(resp), "publishToken")
 }
 
 // 从 JSON 文本里取字符串字段值（测试断言辅助；找不到返回 ""）

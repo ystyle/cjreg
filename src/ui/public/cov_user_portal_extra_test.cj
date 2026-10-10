@@ -512,4 +512,81 @@ public class UserPortalTeamsAndActionsTest {
         @Expect(json.contains("确定继续？"), true)
         @Expect(json.contains("取消"), true)
     }
+
+    // 「我的包」表格「详情」按钮：点了跳 /packages/org::name（含无组织包的裸名形态）
+    @TestCase
+    public func testDetailButtonNavigatesToPackage(): Unit {
+        let state = makePortalState("team")
+        let alice = state.auth.createUser("alice", "AlicePass1", false).getOrThrow()
+        seedPortalPkg(state, "ystyle", "crc", "1.0.0", publisherId: alice.id)
+        seedPortalPkg(state, "", "bare", "1.0.0", publisherId: alice.id)
+
+        let ctxMap = userCtxMap(alice.id, "alice", false)
+        let page = mountPortal(state, ctxMap)
+        @Expect(page.pkgTotal.get(), 2)
+
+        // 展开渲染树，把表格单元格里的「详情」动作全部取出来执行
+        let handlers = HashMap<String, ActionHandler>()
+        let _ = serializeSubtree(RenderContext.expandTree(page.render(), ""), handlers)
+        @Expect(handlers.size > 0, true)
+
+        let (actx, nav) = portalActionCtx(state, ctxMap)
+        for ((_, h) in handlers) {
+            try {
+                h(actx)
+            } catch (_: Exception) {
+                ()   // 其它控件的动作（分页/消息框）不在本用例关注范围
+            }
+        }
+        // 至少有一个详情跳转，且有组织时用 org::name 形态
+        @Expect(nav.size > 0, true)
+        var foundScoped = false
+        var foundBare = false
+        for (p in nav) {
+            if (p.contains("/packages/ystyle::crc")) { foundScoped = true }
+            if (p.contains("/packages/bare")) { foundBare = true }
+        }
+        @Expect(foundScoped, true)
+        @Expect(foundBare, true)
+    }
+
+    // 未挂载（state=None）时三个区块渲染分支各自回退，不抛异常
+    @TestCase
+    public func testSectionsWithoutStateFallBack(): Unit {
+        let page = UserPortalPage()          // 不 onMount：state=None、sctx=None
+        // renderTokenSection / renderTeamsSection / render 都走 None 分支
+        let json = renderPortal(page)
+        @Expect(json.contains("http://<cjreg 地址>"), true)   // publicUrl 回退占位符
+        @Expect(json.contains("开放模式"), true)                // permissionMode 回退 open
+        @Expect(json.contains("当前登录："), true)              // username 回退空串
+        @Expect(json.contains("我的发布 Token"), true)
+    }
+
+    // refresh 在 state=None 时直接返回（uid>0 但没挂 state 的边界）
+    @TestCase
+    public func testRefreshWithoutStateIsSafe(): Unit {
+        let page = UserPortalPage()
+        page.loadedUid = 999
+        page.refresh()                        // 内部 currentUid()=0 → 直接 return
+        @Expect(page.pkgTotal.get(), 0)
+        @Expect(page.teamRows.get().size, 0)
+        @Expect(page.tokenValue.get(), "")
+    }
+
+    // 重置失败分支：会话校验通过、但用户已被删（resetPublishToken 返回 None）
+    @TestCase
+    public func testConfirmResetTokenWhenUserVanished(): Unit {
+        let state = makePortalState("team")
+        let alice = state.auth.createUser("alice", "AlicePass1", false).getOrThrow()
+        let ctxMap = userCtxMap(alice.id, "alice", false)
+        let page = mountPortal(state, ctxMap)
+        // 让会话里的 uid 指向一个"存在但 getUser 返回 None"后仍能通过 userSession 的场景：
+        // 直接把用户从库里删掉 → userSession 也会返回 None（走"会话已失效"分支）。
+        let _ = state.userStore.removeUser(alice.id)
+        let (actx, _) = portalActionCtx(state, ctxMap)
+        let _ = page.confirmResetToken(actx)
+        // 用户没了 → 要么提示会话失效，要么提示重置失败，但绝不能报"已重置"
+        @Expect(page.msgOk.get(), false)
+        @Expect(page.msg.get() == "已重置发布 Token（旧 Token 已失效）", false)
+    }
 }

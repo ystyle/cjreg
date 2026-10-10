@@ -24,6 +24,7 @@ import ystyle::cjreg.index.*
 import stdx.net.http.*
 import std.collection.*
 import std.convert.*
+import std.fs.{Directory, exists}
 import std.io.StringReader
 import std.sync.*
 
@@ -134,6 +135,11 @@ class HttpEnv {
 }
 
 // 夹具工厂：mode = permission_mode（open / team），requireAuth 决定读路径是否要鉴权
+//
+// tmpDir 非空时用 **DiskBlobStore**（生产同款）：制品落真实文件。这条很重要 ——
+// 下载 handler 把 InputStream 直接交给响应体，stdx 需要能确定长度（File 可以，
+// 自定义 InputStream 会报 "Unknown body size for Content-Length"），
+// 所以"下载成功"这类断言只有走磁盘实现才与生产语义一致。
 func newHttpEnv(mode!: String = "open", requireAuth!: Bool = false,
                 maxRequestBytes!: Int64 = 10 * 1024 * 1024,
                 tmpDir!: String = ""): HttpEnv {
@@ -146,7 +152,14 @@ func newHttpEnv(mode!: String = "open", requireAuth!: Bool = false,
     let upStore = BstormUpstreamStore(storm)
     let authSvc = AuthService(userStore, 3600)
     let adminData = AdminDataStore(storm)
-    let blobStore: BlobStore = MemoryBlobStore()
+    var blobStore: BlobStore = MemoryBlobStore()
+    if (!tmpDir.isEmpty()) {
+        let _ = covScratch("_")  // 确保父目录存在
+        if (!exists(tmpDir)) {
+            Directory.create(tmpDir, recursive: true)
+        }
+        blobStore = DiskBlobStore(tmpDir)
+    }
     let upSvc = UpstreamService(upStore)
     let proxySvc = ProxyService(pkgStore, blobStore, upSvc, tmpDir: tmpDir)
     let admin = AdminService(authSvc, upSvc, userStore, upStore, ResolveService(upSvc), Some(proxySvc),
@@ -164,6 +177,16 @@ func newHttpEnv(mode!: String = "open", requireAuth!: Bool = false,
     liveClients.add(client)
     HttpEnv(storm, pkgStore, userStore, upStore, authSvc, adminData, blobStore, proxySvc,
         admin, app, server, client, base, cfg, tmpDir)
+}
+
+// 本次测试进程内可用的 scratch 目录（放工作区 .smoke 下，已被 gitignore）
+// 已存在时复用：Directory.create 对已存在路径会抛 FSException，不能无条件建。
+func covScratch(name: String): String {
+    let dir = "./.smoke/http-cov/" + name
+    if (!exists(dir)) {
+        Directory.create(dir, recursive: true)
+    }
+    dir
 }
 
 // ===== 请求辅助 =====
@@ -263,6 +286,12 @@ func loginToken(env: HttpEnv, username: String, password: String): String {
     let resp = httpPostJson(env, "/api/admin/login",
         "{\"username\":\"" + username + "\",\"password\":\"" + password + "\"}")
     extractJsonString(bodyText(resp), "token")
+}
+
+// 用 session token 换一个发布 token（走用户门户的重置端点，返回的是明文新 token）
+func publishTokenOf(env: HttpEnv, sessionToken: String): String {
+    let resp = httpPostJson(env, "/api/user/me/publish-token", "", token: sessionToken)
+    extractJsonString(bodyText(resp), "publishToken")
 }
 
 // 从 JSON 文本里取字符串字段值（测试断言辅助；找不到返回 ""）

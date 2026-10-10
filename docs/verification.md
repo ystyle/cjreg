@@ -7,8 +7,8 @@
 
 | 验证层次 | 手段 | 规模 | 结果 |
 |---|---|---|---|
-| 单元测试 | `cjpm test` | 24 个测试文件 / **154 个用例** | ✅ 全部通过 |
-| 代码覆盖率 | `cjpm test --coverage` + `cjcov` | 35 个源文件 / 6033 行 | **39.3%**（纯逻辑层 85%–97%，详见 §3.2） |
+| 单元测试 | `cjpm test` | **929 个用例**（含 handler 级 HTTP 测试与页面渲染测试） | ✅ 全部通过 |
+| 代码覆盖率 | `cjpm test --coverage` + `cjcov` | 87 个源文件 / 11245 行 | **91.8%**（详见 §3.2） |
 | 协议端到端 | `tests/e2e.sh` 双仓脚本 | 6 个真实依赖包 | ✅ 发布 → 拓扑 → 6/6 推送 → 目标仓校验 |
 | 权限矩阵 | curl（team 模式 + require_auth） | 15+ 分支 | ✅ 401/403/200/409 全部符合规格 |
 | 配置生效 | curl + CLI | 4 项 | ✅ 命令行 > 配置文件 > 默认值 |
@@ -37,7 +37,7 @@
 eval "$(cjvs env zsh)" && eval "$(cjvs stdx-env zsh)"
 cd cjreg && cjpm build -j 16
 
-# 1) 单元测试（179 用例）
+# 1) 单元测试（929 用例）
 cjpm test -j 16 --no-progress
 
 # 2) 覆盖率报告（HTML 输出到 .smoke/coverage）
@@ -63,22 +63,25 @@ EOF
 
 ## 3. 逐项结果与证据
 
-### 3.1 单元测试（179 用例全绿）
+### 3.1 单元测试（929 用例全绿）
 
 ```text
 $ cjpm test -j 16 --no-progress
-Summary: TOTAL: 179
-    PASSED: 179, SKIPPED: 0, ERROR: 0
+Summary: TOTAL: 929
+    PASSED: 929, SKIPPED: 0, ERROR: 0
     FAILED: 0
 ```
 
 > 测试包按 `cjpm -j 16` 并行分发到多个进程，每个包内共享同一 GC 堆；
-> 内存态 Storm 的回收约定见 §4.7（`test_stores_test.cj`）。
+> 内存态 Storm 的回收约定见 §4.7，并发建库的已知抖动见 §4.8（`test_stores_test.cj`）。
 
-覆盖模块：`protocol`（官方二进制格式、URL 分片）、`semver_range`（区间匹配/版本比较）、`index`（NDJSON 生成与兼容解析）、
-`store`（bstorm 文档、持久化、自增 id 恢复）、`auth`（pbkdf2、token、生命周期、多管理员约束）、
-`config`（配置解析/优先级/上游表）、`server`（发布裁决、owner 模型、读鉴权、发布计划、用户门户读模型、目标仓 token 解析）、
-`ui`（守卫、导航登录态、门户渲染、文档示例配置化）。
+覆盖模块：`protocol`（官方二进制格式、URL 分片、发布体接收）、`semver_range`（区间匹配/版本比较）、
+`index`（NDJSON 生成与兼容解析）、`store`（bstorm 文档、持久化、自增 id 恢复）、
+`auth`（pbkdf2、token、生命周期、多管理员约束）、`config`（配置解析/优先级/上游表）、
+`server`（协议端点、管理 API 全量、公开读 API、用户门户 API、发布裁决、发布计划与 SSE、
+代理回源传输层/制品层、流式发布、目标仓 token 解析）、
+`ui`（守卫、导航登录态、门户渲染、文档示例配置化、管理端与公开端页面渲染与交互）、
+根包 `main.cj`（CLI 参数解析与命令分派返回码）。
 
 回归固化：官方索引 `index-version` 为字符串、cjpm meta 为 pretty 多行 JSON、sha256sum 位于嵌套 index、
 bstorm 重启 reindex、二进制制品不可走 UTF-8 文本流等 5 个兼容性坑均有对应用例。
@@ -86,27 +89,43 @@ bstorm 重启 reindex、二进制制品不可走 UTF-8 文本流等 5 个兼容�
 ### 3.2 覆盖率（cjcov）
 
 ```text
-$ cjcov --root=./ -o .smoke/coverage --html-details -i "$PWD/src" -e "*_test.cj"
-Files: 41   Lines: 3124 / 7596   Coverage: 41.1 %
+$ cjpm test --coverage -j 16 --no-progress
+$ cjcov --root=./ -o .smoke/cov-final --html-details -i "$PWD/src" -e "*_test.cj"
+Files: 87   Lines: 10325 / 11245   Coverage: 91.8 %
 ```
 
 按包（行覆盖率 = 包内命中行 / 包内总行，**加权**，不是文件均值）：
 
 | 包 | 覆盖率 | 说明 |
 |---|---|---|
-| `protocol` | 94.9% | 官方二进制格式、URL 分片（纯逻辑，充分单测） |
-| `config` | 94.4% | 配置解析/优先级、上游表 |
-| `auth` | 92.5% | 认证/授权/多管理员约束 |
-| `index` | 88.3% | NDJSON 生成与兼容解析 |
+| `protocol` | 88.3% | 官方二进制格式、URL 分片、发布体流式接收 |
+| `config` | 95.6% | 配置解析/优先级、上游表 |
+| `auth` | 94.6% | 认证/授权/多管理员约束 |
+| `index` | 87.7% | NDJSON 生成与兼容解析 |
 | `semver_range` | 86.7% | 版本区间与比较 |
-| `store` | 85.2% | bstorm 文档存取/持久化（`upstream_store` 17.7% 拉低，其余 88–93%） |
-| `server` | 50.5% | 逻辑层高（`user_service` 98.8%、`public_service` 96.6%、`publish_service` 92.3%、`org_service` 88.1%）；handler 与装配层低（`admin_handler` 7.5%，`public_handler`/`user_handler`/`server.cj` 0%），由 e2e 覆盖 |
-| `ui` | 10.5% | 门户读模型 `pages_user` 73.4%、文档 51.1%；管理页/公开页/登录/布局（0–5%）是 cjxt WS 渲染适配层，靠 e2e + 浏览器冒烟覆盖 |
-| `main.cj`（根包） | 0% | 命令装配与进程入口（init/serve/admin），不适合单测 |
+| `store` | 95.5% | bstorm 文档存取/持久化 |
+| `server` | 89.2% | **handler 层已补进程内 HTTP 测试**（见下）；逻辑层 88–99% |
+| `ui`（框架） | 93.3% | 布局/状态/列表绑定/守卫/格式化 |
+| `ui.public` | 98.6% | 公开端页面渲染与交互 |
+| `ui.admin` | 96.4% | 管理端页面渲染与交互 |
+| `main.cj`（根包） | 68.5% | CLI 参数解析与命令分派（见下） |
+| **合计** | **91.8%** | 87 个源文件 / 11245 行 |
 
-> 说明：整体 41.1% 的分母含 UI 页面与 HTTP handler/装配层（这些以 e2e 与浏览器验证为主）。
-> 单纯逻辑层（`protocol`/`config`/`auth`/`index`/`semver_range`/`store`）行覆盖率 **85%–95%**。
-> 提升空间：为 `admin_handler` 补 handler 级测试、为公开页补 `serializeSubtree` 渲染测试（已有先例，低成本）。
+**怎么提上来的**（初赛 41.1% → 决赛 91.8%）：
+
+1. **handler 层改用进程内真实 HTTP 测试**。handler 的输入是 `TangHttpContext`，此前只能测纯函数
+   （body 解析），路由/鉴权/状态码/DTO 序列化这一段没有单测。现在夹具起一个真实 stdx Server
+   （`127.0.0.1` + 端口 0 随机绑定），用真实 Client 发请求 —— 走的就是生产那条路径。
+   覆盖：协议三端点（发布/下载/索引）、读鉴权、管理 API 全量（用户/组织/上游/日志/包管理/发布计划/SSE）、
+   公开只读 API、用户门户 API、流式发布全分支、代理回源（传输层 + 制品层，用本地 stub 上游，不打外网）。
+2. **页面渲染测试**用 `serializeSubtree` 断言渲染结果（项目已有先例），把管理端与公开端页面补到 96%+/98%+。
+3. **CLI 可测化**：`main` 是仓颉关键字、且包被导入时不会导出，同包测试也引用不到它，
+   于是把入口函数体逐字提取为普通函数 `runCli(args)`（`main` 只做一行转发，行为等价、实测返回码一致），
+   参数解析与命令分派的返回码语义因此可被单测守住。剩余未覆盖部分是 `cmdServe`/`cmdAdminUI`
+   里 `serve()` 之后的阻塞段（起 HTTP 服务，单测不调用）。
+
+> 说明：未覆盖的行主要是三类 —— 阻塞的 serve 路径、cjxt 组件渲染里的防御性闭包分支、
+> 以及 `Storm.inMemory()` 并发场景下无法稳定触发的竞态分支（见 §4.7 与 §4.8）。
 
 ### 3.3 双仓发布计划 e2e（`tests/e2e.sh`）
 
@@ -265,6 +284,44 @@ $ bash tests/e2e.sh
 - **教训**：`Storm.inMemory()` 在测试里也必须配对 `close()`（内存态不等于「GC 会收」）；
   多个用例共用一个进程的测试包，夹具泄漏会累积成与业务无关的 OOM。
 
+### 4.8 单测「全量跑间歇失败、单独跑全绿」的两个来源（已修 + 一个上游残留）
+
+决赛迭代 5 把用例从 179 扩到 929 后，暴露出**先于本次改动就存在**的测试抖动：
+`cjpm test` 全量跑偶尔失败、单独跑该用例全绿，且**每次失败的用例都不同**
+（server 与 ui 包都有）。定位到两个独立来源，其中一个修完仍有上游残留。
+
+**来源 ①（已修）：内存库夹具共用一份进程级「上一代」列表**
+
+- `src/server|store|ui/test_stores_test.cj` 的 `liveTestStorms` 是包级 `ArrayList`，
+  `beginTestStores()` 会把列表里**所有**库 `close()` —— 而 unittest 用多个 worker 线程
+  并发跑同一包内的用例，于是 A 用例建夹具时把 B **正在用的**库关掉了。
+- 症状与该机制吻合：失败点在随机漂移、单独跑必绿。
+- 修复：三处都改为 `ThreadLocal<ArrayList<Storm>>`，每个 worker 只管自己那一代
+  （见 `test_stores_test.cj` 头部的说明）。
+- 验证：改前 `resolve_integration_test.testResolveWithMultilineCache`、
+  `publish_plan_order_test.planDependencyEdges_*` 等全量跑间歇失败；改后不再复现。
+
+**来源 ②（已缓解）：测试进程堆偏小**
+
+- 每个用例一个内存态 Storm（见 §4.7 的分配量），默认堆（256 MB）下会随机触发分配失败。
+- 缓解：`cjpm.toml` 用 `[profile.test.env]` 把测试进程固定为 `cjHeapSize=8GB` /
+  `cjGCThreshold=4GB`，让 `cjpm test` **开箱即稳定**（实测该字段生效：用例内读到 8GB）。
+
+**残留（上游问题，未修）：`Storm.inMemory()` 并发建实例会丢写**
+
+- 关掉上述两个来源后仍有约 1/8 概率丢 1–4 例。用一个**与该笔改动无关**的纯净探针定位：
+  8 个线程各自 `Storm.inMemory()` + 独立 `PackageStore`，各写 3 条后读回 ——
+  偶发只读到 2 条（干净探针 8 轮里复现 1 轮 `bad=2`）；单线程串行同一批次 100% 正常。
+  失败的用例表现为「存了 N 条只看到 N-1 条」这类数据可见性问题，与断言写法无关。
+- 判据：这是 `bstorm 1.4.11` / `badgercj 1.6.21` 在**并发创建多个内存库**时的竞争，
+  不在本仓代码内；本仓已把可修的共享可变状态（来源 ①）修净。
+- 处置建议：CI 侧接受该已知抖动并记录在案，或向上游报「并发 InMemory 实例数据丢失」。
+  单测断言本身无问题：完整跑通时 **929/929 全绿**，覆盖率构建亦全绿。
+
+- **教训**：看到「全量间歇失败、单独全绿、失败用例每次不同」，先怀疑**共享可变状态**
+  （全局列表 / `static var`）与**底层库并发建实例**；用固定堆与 `--parallel 1`
+  可以把「并发缺陷」与「内存压力」两类原因分开。
+
 
 
 | # | 缺陷 | 影响 | 修复 |
@@ -293,15 +350,20 @@ $ bash tests/e2e.sh
 
 ### 5.2 其他
 
-- 覆盖率分母含 UI/HTTP 适配层（整体 39.3%）；建议补 handler 级测试与公开页渲染测试。
+- 覆盖率整体 **91.8%**（87 个源文件 / 11245 行）；未覆盖的集中在三类：阻塞的 `serve()` 路径、
+  cjxt 组件渲染里的防御性闭包分支、以及 §4.8 的并发抖动分支。
+- 单测存在**已知上游抖动**：`Storm.inMemory()` 并发建实例偶发丢写（约 1/8 轮次会丢 1–4 例），
+  与用例断言无关，详见 §4.8。完整跑通时为 **929/929 全绿**。
 - `tests/e2e.sh` 使用固定端口（18060/18070），需保证端口空闲。
 - 演示/冒烟数据目录位于 `.smoke/`（已 gitignore），不进仓库。
-- 发布计划 item 状态目前为 `pending/running/completed/failed` 四态（设计中的 `publishing`/`waiting_index`/`skipped` 与 SSE 进度流未实现，
-  现以 `App.pushUpdate` 推送进度）；`analyze` 响应暂未输出 `dependency_range/local_versions/remote_versions/recommended_version`。
-- 包三级删除的「恢复/硬删」入口尚未实现（清单与优先级见 `docs/gap-analysis.md`）；
-  审计日志（发布/认证/管理三类 + IP/UA + 查询/清理端点 + 管理端页面）与公开只读 API（C1–C5）
-  已实现，分别纳入 `tests/e2e.sh` 第 5 步与第 6 步，详见 `docs/audit-log.md`、`docs/public-api.md`。
-- 性能数据为单机冒烟测量，非正式基准。
+- `analyze` 响应暂未输出 `dependency_range/local_versions/remote_versions/recommended_version`
+  （发布计划 item 六态 `pending/running/publishing/waiting_index/completed/failed`、
+  手动 `skipped` 与 SSE 进度流 `GET /api/admin/publish-plans/:id/events` 均已实现）。
+- 审计日志（发布/认证/管理三类 + IP/UA + 查询/清理端点 + 管理端页面）与公开只读 API（C1–C5）
+  已实现，分别纳入 `tests/e2e.sh` 第 5 步与第 6 步，详见 `docs/audit-log.md`、`docs/public-api.md`；
+  包三级删除（软删 / 恢复 / 硬删）闭环亦已实现（`src/server/package_lifecycle.cj`）。
+- 性能数据的正式基准报告见 [`docs/benchmark.md`](benchmark.md)（脚本可复现：`scripts/bench.sh`）；
+  本报告里的性能数字是其中的摘录。
 
 ## 6. 结论
 

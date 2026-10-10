@@ -59,27 +59,53 @@ func startInProcServer(app: Tang): (String, Server, Client) {
 }
 
 // 上一代服务/客户端：新建夹具时统一关闭，防止用例中途失败 return 时泄漏。
-// （内存库的生命周期交给线程局部的 beginTestStores()/testStorm()，见 test_stores_test.cj）
-let liveServers = ArrayList<Server>()
-let liveClients = ArrayList<Client>()
+//
+// ⚠️ 同样是**线程局部**的：unittest 用多个 worker 线程并发跑用例，进程级列表会让
+// 一个用例建夹具时把别的用例正在用的 server/client 一起关掉（症状与内存库那条一致：
+// 「全量跑间歇失败、单独跑全绿」，且失败点每次漂移）。
+// 内存库的生命周期交给线程局部的 beginTestStores()/testStorm()，见 test_stores_test.cj。
+let liveServers = ThreadLocal<ArrayList<Server>>()
+let liveClients = ThreadLocal<ArrayList<Client>>()
+
+func covServerList(): ArrayList<Server> {
+    match (liveServers.get()) {
+        case Some(l) => l
+        case None =>
+            let l = ArrayList<Server>()
+            liveServers.set(Some(l))
+            l
+    }
+}
+
+func covClientList(): ArrayList<Client> {
+    match (liveClients.get()) {
+        case Some(l) => l
+        case None =>
+            let l = ArrayList<Client>()
+            liveClients.set(Some(l))
+            l
+    }
+}
 
 func closeTestServers(): Unit {
-    for (c in liveClients) {
+    let clients = covClientList()
+    for (c in clients) {
         try {
             c.close()
         } catch (_: Exception) {
             ()
         }
     }
-    liveClients.clear()
-    for (s in liveServers) {
+    clients.clear()
+    let servers = covServerList()
+    for (s in servers) {
         try {
             s.closeGracefully()
         } catch (_: Exception) {
             ()
         }
     }
-    liveServers.clear()
+    servers.clear()
 }
 
 // handler 测试的完整运行环境：真实 store + 真实服务 + 真实 client
@@ -175,8 +201,8 @@ func newHttpEnv(mode!: String = "open", requireAuth!: Bool = false,
     let app = buildServer(pkgStore, Some(admin), Some(upSvc), blobStore,
         config: cfg, adminData: Some(adminData), tmpDir: tmpDir)
     let (base, server, client) = startInProcServer(app)
-    liveServers.add(server)
-    liveClients.add(client)
+    covServerList().add(server)
+    covClientList().add(client)
     HttpEnv(storm, pkgStore, userStore, upStore, authSvc, adminData, blobStore, proxySvc,
         admin, app, server, client, base, cfg, tmpDir)
 }

@@ -43,7 +43,10 @@ func printUsage(): Unit {
     println("  init 会在数据目录生成一份带注释的 cjreg.toml 模板")
 }
 
-main(args: Array<String>): Int64 {
+// CLI 入口实现。`main` 是仓颉关键字、且包被导入时不会被导出，同包测试也无法引用它，
+// 所以参数解析与命令分派放在这个普通函数里，让 CLI 的返回码语义能被单测守住。
+// 行为与原来完全一致：main 只做转发。
+func runCli(args: Array<String>): Int64 {
     let specs = [
         Full("data", r'd', RequiredValue),
         Full("port", r'p', RequiredValue),
@@ -127,6 +130,10 @@ main(args: Array<String>): Int64 {
             printUsage()
             return 2
     }
+}
+
+main(args: Array<String>): Int64 {
+    runCli(args)
 }
 
 // 打开共享存储（PackageStore + BstormUserStore + 上游 store）

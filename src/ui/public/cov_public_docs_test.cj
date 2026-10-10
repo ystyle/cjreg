@@ -234,4 +234,42 @@ public class DocsPageRenderTest {
         @Expect(renderDocs(mountDocs(state)).contains("登录"), true)
         @Expect(renderDocs(mountDocs(state, loggedIn: true)).contains("管理后台"), true)
     }
+
+    // 点左侧章节项：确实切换 activeDoc（navItem 的 onClick 闭包与返回 ReRender 都覆盖到）
+    @TestCase
+    public func testNavItemClickSwitchesDoc(): Unit {
+        let state = docsState(publicUrl: "https://pkg.example.com")
+        let page = mountDocs(state)
+        @Expect(page.activeDoc.get(), "quickstart")     // 初始章节
+
+        // 导航项挂了动作（active=false 与 active=true 两种类名分支）
+        let handlers = HashMap<String, ActionHandler>()
+        let _ = serializeSubtree(page.navItem("permission", "访问控制", false), handlers)
+        @Expect(handlers.size, 1)
+        for ((_, h) in handlers) {
+            // PatchResult 是 enum，@Expect 推不出泛型参数：按 match 断言其形态
+            match (h(docsActionCtx(state))) {
+                case PatchResult.ReRender => ()
+                case _ => @Fail("导航项动作应返回 ReRender")
+            }
+        }
+        @Expect(page.activeDoc.get(), "permission")
+        @Expect(renderDocs(page).contains("权限矩阵"), true)
+
+        // 当前项（active=true）同样可点，且渲染出激活类名
+        @Expect(renderDocs(page).contains("docs-nav-active"), true)
+        let handlers2 = HashMap<String, ActionHandler>()
+        let _ = serializeSubtree(page.navItem("publish", "发布包", true), handlers2)
+        @Expect(handlers2.size, 1)
+        for ((_, h) in handlers2) { h(docsActionCtx(state)) }
+        @Expect(page.activeDoc.get(), "publish")
+    }
+}
+
+// docs 页动作只需要能推路由的 ActionContext
+func docsActionCtx(state: CjregState): ActionContext {
+    let states = HashMap<String, AppState>()
+    states.add(TypeInfo.of<CjregState>().qualifiedName, state)
+    return ActionContext("sid-docs", HashMap<String, String>(), HashMap<String, String>(),
+        Router("sid-docs", { _ => () }), sessionStates: states)
 }

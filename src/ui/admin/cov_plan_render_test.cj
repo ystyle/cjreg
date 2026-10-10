@@ -1396,6 +1396,102 @@ public class CovPlanDetailRenderTest {
         @Expect(state.planBusy.get(), false)
     }
 
+    // 执行线程真的跑起来（有制品库、目标不可达）：走 execute 的失败收口与 summary 分支。
+    //
+    // 用 `http://127.0.0.1:1` 当目标（必然连不上）→ 执行器内部重试后判该项失败 →
+    // runExecutionInner 的 catch/summary/落盘/解登记整条收口链路都被走到。
+    @TestCase
+    public func covPlanDetail_runExecutionRealFailurePath(): Unit {
+        let state = makePortalState("team")
+        // runExecutionInner 的第一道判据就是 st.app：没有 App 会直接早退（不写计划状态）。
+        // 这里注入一个真实 App：它没有对应 WS 会话，pushUpdate 返回 false 但不抛 —— 正好只
+        // 走「落库 + 收口」，把 UI 推送那层隔离开，断言才聚焦在状态机上。
+        state.app = Some(App())
+        let blob = MemoryBlobStore()
+        state.blobStore = Some(blob)
+        let doc = covSeedPublishable(state, "ystyle", "alpha", "1.0.0")
+        blob.put(doc.sha256, [UInt8(1), UInt8(2)])
+        // 目标上游指向一个必然连不上的地址（本项目不依赖外网）
+        let upId = covSeedUpstream(state, "dead-up", url: "http://127.0.0.1:1")
+        let pid = covSeedPlan(state, "real-exec", targetUpstream: upId)
+        let itemId = covSeedPlanItem(state, pid, "alpha", 1)
+        let page = mountPlanDetailCov(state, pid)
+
+        let items = ArrayList<PlanItem>()
+        let it = PlanItem(doc.id, "alpha", "ystyle", "1.0.0", PlanCategory.NeedPublish, 1)
+        items.add(it)
+        let docIds = HashMap<Int64, Int64>()
+        docIds[doc.id] = itemId
+        let up = state.upStore.getById(upId).getOrThrow()
+        addPlanId(state, pid, false)
+        page.runExecution(state, "sid-test", items, docIds, up, 0)
+
+        // 收口：解登记 + 清 busy（runExecution 的 finally）
+        @Expect(containsId(state.planRunIds.get(), pid), false)
+        @Expect(containsId(state.planCancelIds.get(), pid), false)
+        @Expect(state.planBusy.get(), false)
+        // 计划落 failed 并写了失败原因；条目状态与错误也落库了（先落盘再推界面）
+        let plan = state.adminData.getPlan(pid).getOrThrow()
+        @Expect(plan.status, "failed")
+        @Expect(plan.lastError.startsWith("失败 1 项："), true)
+        @Expect(state.adminData.getPlanItem(itemId).getOrThrow().status, "failed")
+        // 发布态审计：无论成败都记一条
+        let (logs, total) = state.adminData.queryLogs(Some("publish"), "plan ${pid} failed", "", 0, 0, 0, 10)
+        @Expect(total, 1)
+        @Expect(logs[0].status, "failed")
+    }
+
+    // 执行线程：全部跳过（未勾选）→ 「本次没有实际上传」这条 summary 分支
+    @TestCase
+    public func covPlanDetail_runExecutionAllSkippedSummary(): Unit {
+        let state = makePortalState("team")
+        state.app = Some(App())
+        let blob = MemoryBlobStore()
+        state.blobStore = Some(blob)
+        let upId = covSeedUpstream(state, "skip-up", url: "http://127.0.0.1:1")
+        let pid = covSeedPlan(state, "skip-exec", targetUpstream: upId)
+        let page = mountPlanDetailCov(state, pid)
+
+        let items = ArrayList<PlanItem>()
+        let it = PlanItem(1, "alpha", "ystyle", "1.0.0", PlanCategory.NeedPublish, 1)
+        it.selected = false          // 未勾选 → 执行器记 skipped
+        items.add(it)
+        let up = state.upStore.getById(upId).getOrThrow()
+        page.runExecution(state, "sid-test", items, HashMap<Int64, Int64>(), up, 0)
+
+        let plan = state.adminData.getPlan(pid).getOrThrow()
+        @Expect(plan.status, "completed")   // 0 失败、total>0 → completed
+        @Expect(plan.lastError.startsWith("本次没有实际上传："), true)
+        @Expect(state.planBusy.get(), false)
+    }
+
+    // 执行线程：用户已请求停止 → aborted 收口为 paused + 额外记一条「用户停止」审计
+    @TestCase
+    public func covPlanDetail_runExecutionAbortedSummary(): Unit {
+        let state = makePortalState("team")
+        state.app = Some(App())
+        let blob = MemoryBlobStore()
+        state.blobStore = Some(blob)
+        let upId = covSeedUpstream(state, "abort-up", url: "http://127.0.0.1:1")
+        let pid = covSeedPlan(state, "abort-exec", targetUpstream: upId)
+        let page = mountPlanDetailCov(state, pid)
+
+        // 先登记「已请求停止」：执行器每项开推前会看到 → aborted
+        addPlanId(state, pid, true)
+        let items = ArrayList<PlanItem>()
+        items.add(PlanItem(1, "alpha", "ystyle", "1.0.0", PlanCategory.NeedPublish, 1))
+        let up = state.upStore.getById(upId).getOrThrow()
+        page.runExecution(state, "sid-test", items, HashMap<Int64, Int64>(), up, 0)
+
+        let plan = state.adminData.getPlan(pid).getOrThrow()
+        @Expect(plan.status, "paused")
+        @Expect(plan.lastError, "用户已停止执行")
+        // 停止有专门的审计（与常规收口那条并存）
+        let (_, stopLogs) = state.adminData.queryLogs(Some("publish"), "用户停止", "", 0, 0, 0, 10)
+        @Expect(stopLogs, 1)
+        @Expect(containsId(state.planCancelIds.get(), pid), false)   // 收口时两条登记都清掉
+    }
+
     // 停止执行：非管理员 / 没在跑 / 正常请求停止
     @TestCase
     public func covPlanDetail_stopExecution(): Unit {

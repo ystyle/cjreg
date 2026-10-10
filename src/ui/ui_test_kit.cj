@@ -18,18 +18,33 @@ import ystyle::cjreg.auth.model.*
 import ystyle::cjreg.config.*
 import std.reflect.*
 
-let liveTestStorms = ArrayList<Storm>()
+// 列表必须是**线程局部**的：unittest 用多个 worker 线程并发跑用例，共用一份进程级列表时
+// A 用例建夹具会把 B 用例正在用的库一起 close，B 随后踩到已关闭的库 —— 症状是
+// 「全量跑间歇失败、单独跑全绿」。ThreadLocal 让每个 worker 只管自己那一代。
+// （server 包的 test_stores_test.cj 同一处理。）
+let liveTestStorms = ThreadLocal<ArrayList<Storm>>()
+
+func kitStormList(): ArrayList<Storm> {
+    match (liveTestStorms.get()) {
+        case Some(l) => l
+        case None =>
+            let l = ArrayList<Storm>()
+            liveTestStorms.set(Some(l))
+            l
+    }
+}
 
 public func beginTestStores(): Unit {
-    for (s in liveTestStorms) {
+    let list = kitStormList()
+    for (s in list) {
         s.close()
     }
-    liveTestStorms.clear()
+    list.clear()
 }
 
 public func testStorm(): Storm {
     let s = Storm.inMemory()
-    liveTestStorms.add(s)
+    kitStormList().add(s)
     return s
 }
 

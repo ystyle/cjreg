@@ -21,14 +21,9 @@ import std.unittest.*
 import std.unittest.testmacro.*
 
 // 造一个代理夹具（可选磁盘 blob 目录 = 走流式路径）
-//
-// ⚠️ 用自己的 Storm 列表而不是共享的 beginTestStores()/testStorm()：后者会关掉**别的**
-// 并发用例的库（unittest 同进程并发跑），导致它们间歇性失败。
-let proxyLiveStorms = ArrayList<Storm>()
-
 func makeProxy(tmpDir!: String = ""): (ProxyService, PackageStore, BlobStore, UpstreamService, Storm) {
-    let storm = Storm.inMemory()
-    proxyLiveStorms.add(storm)
+    beginTestStores()
+    let storm = testStorm()
     let pkgStore = PackageStore(storm)
     let blob: BlobStore = if (tmpDir.isEmpty()) { MemoryBlobStore() } else { DiskBlobStore(tmpDir) }
     let upStore = BstormUpstreamStore(storm)

@@ -28,6 +28,15 @@
   "ystyle::tar" = "1.1.0"
   "cjxt" = "1.1.0"
 
+# 测试运行的仓颉堆：**每个用例一个内存态 Storm**（Badger 打开即预分配 skiplist Segment，
+# 约 17 万个原子对象 + 1.3 MB 连续数组），单测进程累计后在默认堆（256 MB）下会随机触发
+# 分配失败 —— 症状是**全量跑间歇失败、单独跑全绿**，且失败用例每次都不一样
+# （实测：默认堆连跑 3 次全挂、换 8GB 连跑 2 次全绿，见 docs/verification.md §4.7）。
+# 这里把测试进程的堆固定调大，让 `cjpm test` 的开箱行为就是稳定的。
+[profile.test.env]
+cjHeapSize = { value = "8GB", splice-type = "replace" }
+cjGCThreshold = { value = "4GB", splice-type = "replace" }
+
 # badger-cj（bstorm 底层）的 io_uring 支持
 [target.x86_64-unknown-linux-gnu]
   link-option = "-luring"

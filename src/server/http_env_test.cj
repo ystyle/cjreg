@@ -58,26 +58,12 @@ func startInProcServer(app: Tang): (String, Server, Client) {
     (("http://127.0.0.1:" + holder.value.toString()), server, ClientBuilder().build())
 }
 
-// 本夹具自己持有的内存库/服务/客户端。
-//
-// ⚠️ 刻意**不复用** test_stores_test.cj 的 beginTestStores()/testStorm()：那是全包共享的
-// 「关掉上一代」列表，而 unittest 会在同一进程内并发跑用例 —— 一个用例建夹具时把共享列表里
-// 别的用例的库一起关掉，会让那些用例在随机时刻踩到已关闭的库（实测：全量跑时
-// resolve_integration_test / publish_plan_order_test 里的用例间歇性失败，单独跑却全绿）。
-// 因此这里只关自己这一代，互不干扰。
-let covLiveStorms = ArrayList<Storm>()
+// 上一代服务/客户端：新建夹具时统一关闭，防止用例中途失败 return 时泄漏。
+// （内存库的生命周期交给线程局部的 beginTestStores()/testStorm()，见 test_stores_test.cj）
 let liveServers = ArrayList<Server>()
 let liveClients = ArrayList<Client>()
 
 func closeTestServers(): Unit {
-    for (st in covLiveStorms) {
-        try {
-            st.close()
-        } catch (_: Exception) {
-            ()
-        }
-    }
-    covLiveStorms.clear()
     for (c in liveClients) {
         try {
             c.close()
@@ -146,13 +132,7 @@ class HttpEnv {
         } catch (_: Exception) {
             ()
         }
-        // 关掉本次夹具自己的内存库（Badger 的后台线程持有实例引用，不关既不回收内存
-        // 也会继续占着大对象空间 —— 见 docs/verification.md §4.7）
-        try {
-            this.storm.close()
-        } catch (_: Exception) {
-            ()
-        }
+
     }
 }
 
@@ -166,9 +146,9 @@ func newHttpEnv(mode!: String = "open", requireAuth!: Bool = false,
                 maxRequestBytes!: Int64 = 10 * 1024 * 1024,
                 tmpDir!: String = ""): HttpEnv {
     closeTestServers()
+    beginTestStores()
     PasswordHash.ITERATIONS = 1000  // 测试提速（PBKDF2 默认迭代数很慢）
-    let storm = Storm.inMemory()
-    covLiveStorms.add(storm)
+    let storm = testStorm()
     let pkgStore = PackageStore(storm)
     let userStore = BstormUserStore(storm)
     let upStore = BstormUpstreamStore(storm)

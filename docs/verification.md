@@ -7,8 +7,8 @@
 
 | 验证层次 | 手段 | 规模 | 结果 |
 |---|---|---|---|
-| 单元测试 | `cjpm test` | **934 个用例**（含 handler 级 HTTP 测试与页面渲染测试） | ✅ 全部通过 |
-| 代码覆盖率 | `cjpm test --coverage` + `cjcov` | 87 个源文件 / 11245 行 | **92.0%**（详见 §3.2） |
+| 单元测试 | `cjpm test` | **936 个用例**（含 handler 级 HTTP 测试与页面渲染测试） | ✅ 全部通过 |
+| 代码覆盖率 | `cjpm test --coverage` + `cjcov` | 87 个源文件 / 11249 行 | **91.9%**（详见 §3.2） |
 | 协议端到端 | `tests/e2e.sh` 双仓脚本 | 6 个真实依赖包 | ✅ 发布 → 拓扑 → 6/6 推送 → 目标仓校验 |
 | 权限矩阵 | curl（team 模式 + require_auth） | 15+ 分支 | ✅ 401/403/200/409 全部符合规格 |
 | 配置生效 | curl + CLI | 4 项 | ✅ 命令行 > 配置文件 > 默认值 |
@@ -37,7 +37,7 @@
 eval "$(cjvs env zsh)" && eval "$(cjvs stdx-env zsh)"
 cd cjreg && cjpm build -j 16
 
-# 1) 单元测试（934 用例）
+# 1) 单元测试（936 用例）
 cjpm test -j 16 --no-progress
 
 # 2) 覆盖率报告（HTML 输出到 .smoke/coverage）
@@ -63,12 +63,12 @@ EOF
 
 ## 3. 逐项结果与证据
 
-### 3.1 单元测试（934 用例全绿）
+### 3.1 单元测试（936 用例全绿）
 
 ```text
 $ cjpm test -j 16 --no-progress
-Summary: TOTAL: 934
-    PASSED: 934, SKIPPED: 0, ERROR: 0
+Summary: TOTAL: 936
+    PASSED: 936, SKIPPED: 0, ERROR: 0
     FAILED: 0
 ```
 
@@ -91,7 +91,7 @@ bstorm 重启 reindex、二进制制品不可走 UTF-8 文本流等 5 个兼容�
 ```text
 $ cjpm test --coverage -j 16 --no-progress
 $ cjcov --root=./ -o .smoke/cov-final --html-details -i "$PWD/src" -e "*_test.cj"
-Files: 87   Lines: 10340 / 11245   Coverage: 92.0 %
+Files: 87   Lines: 10337 / 11249   Coverage: 91.9 %
 ```
 
 按包（行覆盖率 = 包内命中行 / 包内总行，**加权**，不是文件均值）：
@@ -109,9 +109,9 @@ Files: 87   Lines: 10340 / 11245   Coverage: 92.0 %
 | `ui.public` | 99.3% | 公开端页面渲染与交互 |
 | `ui.admin` | 96.4% | 管理端页面渲染与交互 |
 | `main.cj`（根包） | 68.5% | CLI 参数解析与命令分派（见下） |
-| **合计** | **92.0%** | 87 个源文件 / 11245 行 |
+| **合计** | **91.9%** | 87 个源文件 / 11249 行 |
 
-**怎么提上来的**（初赛 41.1% → 决赛 92.0%）：
+**怎么提上来的**（初赛 41.1% → 决赛 91.9%）：
 
 1. **handler 层改用进程内真实 HTTP 测试**。handler 的输入是 `TangHttpContext`，此前只能测纯函数
    （body 解析），路由/鉴权/状态码/DTO 序列化这一段没有单测。现在夹具起一个真实 stdx Server
@@ -286,7 +286,7 @@ $ bash tests/e2e.sh
 
 ### 4.8 单测「全量跑间歇失败、单独跑全绿」的两个来源（已修 + 一个上游残留）
 
-决赛迭代 5 把用例从 179 扩到 934 后，暴露出**先于本次改动就存在**的测试抖动：
+决赛迭代 5 把用例从 179 扩到 936 后，暴露出**先于本次改动就存在**的测试抖动：
 `cjpm test` 全量跑偶尔失败、单独跑该用例全绿，且**每次失败的用例都不同**
 （server 与 ui 包都有）。定位到两个独立来源，其中一个修完仍有上游残留。
 
@@ -316,7 +316,7 @@ $ bash tests/e2e.sh
 - 判据：这是 `bstorm 1.4.11` / `badgercj 1.6.21` 在**并发创建多个内存库**时的竞争，
   不在本仓代码内；本仓已把可修的共享可变状态（来源 ①）修净。
 - 处置建议：CI 侧接受该已知抖动并记录在案，或向上游报「并发 InMemory 实例数据丢失」。
-  单测断言本身无问题：完整跑通时 **934/934 全绿**（`--parallel 1` 亦全绿），覆盖率构建可行。
+  单测断言本身无问题：完整跑通时 **936/936 全绿**（`--parallel 1` 亦全绿），覆盖率构建可行。
 
 - **教训**：看到「全量间歇失败、单独全绿、失败用例每次不同」，先怀疑**共享可变状态**
   （全局列表 / `static var`）与**底层库并发建实例**；用固定堆与 `--parallel 1`
@@ -330,6 +330,14 @@ $ bash tests/e2e.sh
 | 2 | `tests/e2e.sh` 未注入发布 token（测试包 `cangjie-repo.toml` 的 token 为空） | 双仓 e2e 第一步即 401 失败，验证材料无法复现 | 脚本改为运行时取 A/B 两仓发布 token 并写入测试包配置 + 推送请求带 `target_token` |
 | 3 | `executePlan` 把目标仓 token 硬编码为 `""` | 推送到需认证的目标仓必然失败 | 支持 `target_token`，未显式提供时按 URL 匹配上游表取该上游 `authToken`（新增纯函数 + 单测） |
 | 4 | HTTP 请求体上限沿用 stdx 默认 **2 MB** | 超过 ~2 MB 的包发布被拒（413 / 连接重置）；官方协议允许单段 500 MB | 新增配置 `max_request_bytes`（默认 **500 MiB**，`-1` 不限）；cjxt 补 `App.serverBuilder()` 挂钩以定制 stdx `ServerBuilder` |
+| 5 | `plan_create.candidatePkgs` 排序比较器拿 `pkgLabel`（含 `@version`）当主键 | 版本分支永不生效，候选表按整串字典序排（`alpha@1.10.0 < alpha@1.9.0`），与注释「新版本在前」相悖 —— 选包时容易挑到旧版本 | 主键改为「组织 + 包名」，版本比较（`compareVersions`）才真正生效 |
+| 6 | `users_page.submitCreate` / `confirmDelete` 不 `bump()` | 行数据由 `dataVersion` 派生，不 bump 则新建的用户不出现、删掉的用户仍挂在表上（同页 `toggleActive`/`toggleAdmin` 都有 bump） | 两条写路径末尾补 `bump()` |
+| 7 | `orgs_page.confirmDelete` 不 `refresh()` | 本页创建/更新都走 `refresh()`，只有删除漏了 → 删完行还挂在表上 | 删除后补 `refresh()` |
+| 8 | `packages_page.doRefetch` 的「记录不存在」出口不复位 `refetchDocId` | 与 Ok / 其它失败两条出口不一致 → 下次打开重拉弹窗会带着已被删除的记录 | 该出口补 `refetchDocId = 0` |
+
+> 缺陷 5–8 是**决赛迭代 5 补页面渲染测试时抓出来的**：它们都属「同一页里同类路径口径不一致」，
+> 单测按实际行为钉住后才暴露。修正后对应用例改为断言正确行为，其中排序那条做过变异检验
+> （把比较器改回旧写法 → 用例必须失败）确认断言有牙。
 
 ## 5. 已知限制与风险
 
@@ -350,10 +358,10 @@ $ bash tests/e2e.sh
 
 ### 5.2 其他
 
-- 覆盖率整体 **92.0%**（87 个源文件 / 11245 行）；未覆盖的集中在三类：阻塞的 `serve()` 路径、
+- 覆盖率整体 **91.9%**（87 个源文件 / 11249 行）；未覆盖的集中在三类：阻塞的 `serve()` 路径、
   cjxt 组件渲染里的防御性闭包分支、以及 §4.8 的并发抖动分支。
 - 单测存在**已知上游抖动**：`Storm.inMemory()` 并发建实例偶发丢写（约 1/8 轮次会丢 1–4 例），
-  与用例断言无关，详见 §4.8。完整跑通时为 **934/934 全绿**。
+  与用例断言无关，详见 §4.8。完整跑通时为 **936/936 全绿**。
 - `tests/e2e.sh` 使用固定端口（18060/18070），需保证端口空闲。
 - 演示/冒烟数据目录位于 `.smoke/`（已 gitignore），不进仓库。
 - `analyze` 响应暂未输出 `dependency_range/local_versions/remote_versions/recommended_version`

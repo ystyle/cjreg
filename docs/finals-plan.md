@@ -134,10 +134,10 @@ git push origin v0.1.0-submission     # 决赛写差异说明时以此 tag 为�
 
 ### 迭代 5：测试覆盖 90%+（质量维度）—— ✅ 已完成（2026-10-10）
 
-- **结果**：`src/` 行覆盖率 **39.3% → 91.8%**（87 个源文件 / 11245 行），逐包：
+- **结果**：`src/` 行覆盖率 **39.3% → 92.0%**（87 个源文件 / 11245 行），逐包：
   `protocol` 88.3% · `config` 95.6% · `auth` 94.6% · `index` 87.7% · `semver_range` 86.7% ·
-  `store` 95.5% · `server` 89.2% · `ui`(框架) 93.3% · `ui.public` 98.6% · `ui.admin` 96.4% ·
-  `main.cj` 68.5%。用例数 **179 → 929**，全绿。
+  `store` 95.5% · `server` 89.4% · `ui`(框架) 93.7% · `ui.public` 99.3% · `ui.admin` 96.4% ·
+  `main.cj` 68.5%。用例数 **179 → 934**，全绿。
 - **做法**：
   1. **handler 层改进程内真实 HTTP 测试**（`src/server/http_env_test.cj`）：起真实 stdx Server
      （127.0.0.1 + 端口 0），用真实 Client 发请求 —— 覆盖路由/鉴权/状态码/DTO 序列化，
@@ -153,7 +153,7 @@ git push origin v0.1.0-submission     # 决赛写差异说明时以此 tag 为�
   （`[profile.test.env]` 固定 8GB）。残留的并发建库丢写已定位为 bstorm/badgercj 上游问题。
   详见 `docs/verification.md` §4.8。
 - 验收：`cjcov` 报告 + `docs/verification.md` §3.2 / §3.1 已更新；用例纳入 CI。
-- 演示：展示覆盖率报告 before/after（41.1% → 91.8%）。
+- 演示：展示覆盖率报告 before/after（41.1% → 92.0%）。
 
 ### 迭代 6：团队所有者（owner 自助）
 

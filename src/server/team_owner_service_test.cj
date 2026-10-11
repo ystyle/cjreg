@@ -8,6 +8,7 @@ package ystyle::cjreg.server
 import ystyle::cjreg.store.*
 import ystyle::cjreg.auth.*
 import bstorm.*
+import stdx.encoding.json.stream.*
 import ystyle::cjreg.auth.model.*
 import std.collection.*
 import std.unittest.*
@@ -392,5 +393,125 @@ class TeamOwnerStoreTest {
             }
         }
         @Expect(ownerMarked, 1)
+    }
+}
+
+@Test
+class TeamLinksSelfServiceTest {
+    // owner 自助改组织关联：合法组织成功、落库正确
+    @TestCase
+    func testSetTeamOrgsChecked(): Unit {
+        let (ad, _, _, auth) = ownerEnv()
+        let owner = mkUser(auth, "linkowner")
+        let tid = ad.createTeam("t", 1000, ownerId: owner.id, selfService: true)
+        let o1 = ad.createOrg("acme", "", owner.id, 1)
+        let o2 = ad.createOrg("beta", "", owner.id, 1)
+
+        let r = setTeamOrgsChecked(ad, tid, [o1, o2], 2000)
+        @Expect(r.ok, true)
+        @Expect(ad.listTeamOrganizationIds(tid).size, 2)
+
+        // 覆盖式：再设一个 → 只剩一个
+        let r2 = setTeamOrgsChecked(ad, tid, [o1], 3000)
+        @Expect(r2.ok, true)
+        @Expect(ad.listTeamOrganizationIds(tid).size, 1)
+
+        // 空数组 = 清空关联（等于收回该范围权限）
+        let r3 = setTeamOrgsChecked(ad, tid, Array<Int64>(), 4000)
+        @Expect(r3.ok, true)
+        @Expect(ad.listTeamOrganizationIds(tid).size, 0)
+    }
+
+    // 组织不存在 / 已软删 → 拒绝（关联到不存在的组织 = 给出无效权限）
+    @TestCase
+    func testSetTeamOrgsRejectsBadOrg(): Unit {
+        let (ad, _, _, auth) = ownerEnv()
+        let owner = mkUser(auth, "linkowner2")
+        let tid = ad.createTeam("t", 1000, ownerId: owner.id, selfService: true)
+
+        let r = setTeamOrgsChecked(ad, tid, [99999], 2000)
+        @Expect(r.ok, false)
+        @Expect(r.outcome, "org_not_found")
+
+        let oid = ad.createOrg("gone", "", owner.id, 1)
+        let _ = ad.deleteOrg(oid, 2)
+        @Expect(setTeamOrgsChecked(ad, tid, [oid], 3000).outcome, "org_not_found")
+
+        // 「无组织包」哨兵 0 允许
+        @Expect(setTeamOrgsChecked(ad, tid, [0], 4000).ok, true)
+        // 团队不存在
+        @Expect(setTeamOrgsChecked(ad, 99999, [0], 1).outcome, "team_not_found")
+    }
+
+    // owner 自助改包关联：包必须存在本地版本
+    @TestCase
+    func testSetTeamPkgsChecked(): Unit {
+        let (ad, storm, _, auth) = ownerEnv()
+        let owner = mkUser(auth, "pkglink")
+        let pkgStore = PackageStore(storm)
+        let tid = ad.createTeam("t", 1000, ownerId: owner.id, selfService: true)
+
+        // 包不存在 → 拒绝
+        let bad = setTeamPkgsChecked(ad, pkgStore, tid, [("acme", "ghost")], 2000)
+        @Expect(bad.ok, false)
+        @Expect(bad.outcome, "package_not_found")
+
+        // 造一个真实包
+        let d = PackageDoc()
+        d.organization = "acme"
+        d.name = "real"
+        d.version = "1.0.0"
+        pkgStore.save(d)
+        let ok = setTeamPkgsChecked(ad, pkgStore, tid, [("acme", "real")], 3000)
+        @Expect(ok.ok, true)
+        @Expect(ad.listTeamPackages(tid).size, 1)
+
+        // 团队不存在
+        @Expect(setTeamPkgsChecked(ad, pkgStore, 99999, Array<(String, String)>(), 1).outcome, "team_not_found")
+    }
+
+    // ★ 这一条把「owner 改关联」与「成员获得发布权」串起来：
+    // 关联前后同一个成员对同一包的有效权限不同 —— 证明下放边界真的落地了
+    @TestCase
+    func testLinkChangeGrantsEffectivePermission(): Unit {
+        let (ad, storm, userStore, auth) = ownerEnv()
+        let owner = mkUser(auth, "linkperm-owner")
+        let member = mkUser(auth, "linkperm-member")
+        let pkgStore = PackageStore(storm)
+        let tid = ad.createTeam("t", 1000, ownerId: owner.id, selfService: true, permission: "write")
+        let _ = addTeamMemberChecked(ad, userStore, tid, member.id)
+
+        // 造包
+        let d = PackageDoc()
+        d.organization = "acme"
+        d.name = "target"
+        d.version = "1.0.0"
+        pkgStore.save(d)
+
+        // 未关联：成员无权限
+        @Expect(effectivePermission(pkgStore, ad, member, "acme", "target"), 0)
+
+        // owner 关联该包 → 成员对该包获得团队 write（2）
+        let r = setTeamPkgsChecked(ad, pkgStore, tid, [("acme", "target")], 2000)
+        @Expect(r.ok, true)
+        @Expect(effectivePermission(pkgStore, ad, member, "acme", "target"), 2)
+
+        // 取消关联 → 权限收回
+        let _ = setTeamPkgsChecked(ad, pkgStore, tid, Array<(String, String)>(), 3000)
+        @Expect(effectivePermission(pkgStore, ad, member, "acme", "target"), 0)
+    }
+
+    // 团队关联的响应体形状
+    @TestCase
+    func testTeamLinksJson(): Unit {
+        let (ad, _, _, auth) = ownerEnv()
+        let owner = mkUser(auth, "linksjson")
+        let tid = ad.createTeam("t", 1000, ownerId: owner.id)
+        let oid = ad.createOrg("acme", "", owner.id, 1)
+        let _ = setTeamOrgsChecked(ad, tid, [oid], 2000)
+        let j = jsonText(teamLinksJson(ad, tid))
+        @Expect(j.contains("\"organizationIds\":["), true)
+        @Expect(j.contains(oid.toString()), true)
+        @Expect(j.contains("\"packages\":[]"), true)
     }
 }

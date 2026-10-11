@@ -9,7 +9,8 @@ import ystyle::cjreg.store.*
 import ystyle::cjreg.auth.model.*
 import ystyle::cjreg.server.{MyPackageRow, MyTeamRow, myPackageRows, myTeamRows, permissionHint,
     TeamMemberResp, TeamSelfServiceResult, teamMemberRows, addTeamMemberChecked, removeTeamMemberChecked,
-    transferTeamOwnerChecked, canManageTeam, teamManageDeniedMessage}
+    transferTeamOwnerChecked, canManageTeam, teamManageDeniedMessage,
+    setTeamOrgsChecked, setTeamPkgsChecked}
 import std.collection.*
 import std.time.*
 import std.convert.*
@@ -54,6 +55,10 @@ class UserPortalPage <: Component {
     var removeVisible = Signal<Bool>(false)
     var pendingRemoveId = Signal<Int64>(0)
     var pendingRemoveName = Signal<String>("")
+    // 关联管理（组织 / 包）：owner 能改关联才真正落地"加人=授予发布权"
+    var linkOrgs = Signal<ArrayList<String>>(ArrayList<String>())
+    var linkPkgs = Signal<ArrayList<String>>(ArrayList<String>())   // "org::name" 形式
+    var linkPkgInput = Signal<String>("")
 
     public func onMount(ctx: LifecycleContext): Unit {
         this.state = Some(ctx.getState<CjregState>())
@@ -203,6 +208,21 @@ class UserPortalPage <: Component {
             return
         }
         this.memberRows.set(teamMemberRows(st.adminData, teamId, this.teamOwnerId(teamId), st.userStore))
+        // 关联：组织 id 列表 + 包 "org::name" 列表
+        let orgs = ArrayList<String>()
+        for (oid in st.adminData.listTeamOrganizationIds(teamId)) {
+            orgs.add(oid.toString())
+        }
+        this.linkOrgs.set(orgs)
+        let pkgs = ArrayList<String>()
+        for (p in st.adminData.listTeamPackages(teamId)) {
+            if (p.organization.isEmpty()) {
+                pkgs.add(p.packageName)
+            } else {
+                pkgs.add("${p.organization}::${p.packageName}")
+            }
+        }
+        this.linkPkgs.set(pkgs)
     }
 
     // 团队当前 owner 的 id（本地读，仅用于列表标注）
@@ -302,6 +322,105 @@ class UserPortalPage <: Component {
         this.notify(r.message, r.ok)
         this.pendingRemoveId.set(0)
         this.reloadMembers()
+        PatchResult.ReRender
+    }
+
+    // 切换某个组织的关联（勾选/取消）—— 关闭组织关联等于收回该范围权限，必然影响成员有效权限
+    func toggleTeamOrg(ctx: ActionContext, orgId: Int64): PatchResult {
+        let teamId = this.manageTeamId.get()
+        if (teamId <= 0) {
+            return PatchResult.ReRender
+        }
+        let (st, actor) = match (this.guardManage(ctx, teamId)) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        let cur = ArrayList<Int64>()
+        var removed = false
+        for (v in this.linkOrgs.get()) {
+            let n = match (Int64.tryParse(v)) {
+                case Some(x) => x
+                case None => 0
+            }
+            if (n == orgId) {
+                removed = true      // 已关联 → 这次取消
+            } else {
+                cur.add(n)
+            }
+        }
+        if (!removed) {
+            cur.add(orgId)
+        }
+        let r = setTeamOrgsChecked(st.adminData, teamId, cur.toArray(), nowMs())
+        this.auditManage(st, actor, "set_team_links", teamId, r)
+        this.notify(r.message, r.ok)
+        if (r.ok) {
+            this.reloadMembers()
+        }
+        PatchResult.ReRender
+    }
+
+    // 增加包关联（输入 "org::name" 或裸包名）
+    func addTeamPkg(ctx: ActionContext): PatchResult {
+        let teamId = this.manageTeamId.get()
+        let raw = this.linkPkgInput.get().trimAscii()
+        if (teamId <= 0) {
+            return PatchResult.ReRender
+        }
+        if (raw.isEmpty()) {
+            this.notify("请输入包名（org::name 或 name）", false)
+            return PatchResult.ReRender
+        }
+        let (st, actor) = match (this.guardManage(ctx, teamId)) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        var org = ""
+        var name = raw
+        let sep = raw.indexOf("::")
+        match (sep) {
+            case Some(i) =>
+                org = raw[0..i]
+                name = raw[(i + 2)..raw.size]
+            case None => ()
+        }
+        let next = ArrayList<(String, String)>()
+        for (p in st.adminData.listTeamPackages(teamId)) {
+            next.add((p.organization, p.packageName))
+        }
+        next.add((org, name))
+        let r = setTeamPkgsChecked(st.adminData, st.pkgStore, teamId, next.toArray(), nowMs())
+        this.auditManage(st, actor, "set_team_links", teamId, r)
+        this.notify(r.message, r.ok)
+        if (r.ok) {
+            this.linkPkgInput.set("")
+            this.reloadMembers()
+        }
+        PatchResult.ReRender
+    }
+
+    // 移除包关联
+    func removeTeamPkg(ctx: ActionContext, org: String, name: String): PatchResult {
+        let teamId = this.manageTeamId.get()
+        if (teamId <= 0) {
+            return PatchResult.ReRender
+        }
+        let (st, actor) = match (this.guardManage(ctx, teamId)) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        let next = ArrayList<(String, String)>()
+        for (p in st.adminData.listTeamPackages(teamId)) {
+            if (!(p.organization == org && p.packageName == name)) {
+                next.add((p.organization, p.packageName))
+            }
+        }
+        let r = setTeamPkgsChecked(st.adminData, st.pkgStore, teamId, next.toArray(), nowMs())
+        this.auditManage(st, actor, "set_team_links", teamId, r)
+        this.notify(r.message, r.ok)
+        if (r.ok) {
+            this.reloadMembers()
+        }
         PatchResult.ReRender
     }
 
@@ -546,6 +665,59 @@ class UserPortalPage <: Component {
                 emptyState("该团队暂无成员")
             } else {
                 div([memberTable])
+            },
+            this.renderLinkPanel(),
+        ], attrs: Some(HashMap<String, String>([("class", cls("portal-section"))])))
+    }
+
+    // 关联管理：组织（勾选/取消）+ 包（增删）。
+    // 这一步决定成员的有效权限范围 —— 只改成员不改关联，等于没真正下放发布权。
+    func renderLinkPanel(): IComponent {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return div()
+        }
+        let teamId = this.manageTeamId.get()
+        let orgRows = ArrayList<IComponent>()
+        for (o in st.adminData.listOrgs()) {
+            let linked = this.linkOrgs.get().contains(o.id.toString())
+            let label = if (o.displayName.isEmpty()) { o.name } else { "${o.name}（${o.displayName}）" }
+            let toggleH: ActionHandler = { ctx => this.toggleTeamOrg(ctx, o.id) }
+            orgRows.add(div([
+                Button(if (linked) { "已关联 ✓" } else { "关联" })
+                    .size(ButtonSize.Small)
+                    .kind(if (linked) { ButtonKind.Primary } else { ButtonKind.Default })
+                    .onClick(toggleH),
+                text(" " + label),
+            ]))
+        }
+        let pkgRows = ArrayList<IComponent>()
+        for (p in st.adminData.listTeamPackages(teamId)) {
+            let orgName = p.organization
+            let pkgName = p.packageName
+            let rmH: ActionHandler = { ctx => this.removeTeamPkg(ctx, orgName, pkgName) }
+            pkgRows.add(div([
+                text(if (orgName.isEmpty()) { pkgName } else { "${orgName}::${pkgName}" }),
+                Button("移除").size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(rmH),
+            ]))
+        }
+        let addPkgH: ActionHandler = { ctx => this.addTeamPkg(ctx) }
+        div([
+            div([text("关联范围（决定成员的有效发布权限）")],
+                attrs: Some(HashMap<String, String>([("class", cls("portal-section-title"))]))),
+            if (orgRows.size == 0) {
+                div([text("（当前没有组织）")])
+            } else {
+                div(orgRows.toArray())
+            },
+            div([
+                Input().bind(this.linkPkgInput).placeholder("包名，如 acme::demo"),
+                Button("关联该包").size(ButtonSize.Small).onClick(addPkgH),
+            ]),
+            if (pkgRows.size == 0) {
+                div([text("（尚未关联任何包）")])
+            } else {
+                div(pkgRows.toArray())
             },
         ], attrs: Some(HashMap<String, String>([("class", cls("portal-section"))])))
     }

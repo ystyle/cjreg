@@ -149,6 +149,45 @@ public class UserApi {
         }
     }
 
+
+    // ===== owner 自助：团队关联（组织 / 包）=====
+    //
+    // 「owner 加人 = 授予发布权」的关键在此：团队绑定哪些组织/包决定成员的有效权限范围。
+    // 只让 owner 改成员、不让改关联，等于下放边界没落地（本条由生产实机验证时发现）。
+    public func manageTeamLinks(ctx: TangHttpContext): Unit {
+        let teamId = match (Int64.tryParse(ctx.param("id"))) {
+            case Some(n) => n
+            case None => 0
+        }
+        let v = this.guardTeamManage(ctx, teamId)
+        if (!v.allowed) {
+            return
+        }
+        match (ctx.request.method) {
+            case "GET" =>
+                writeDto(ctx, 200u16, teamLinksJson(this.adminData, teamId))
+            case "PUT" =>
+                let req = match (parseJsonBody<TeamLinksRequest>(ctx.bodyRaw(), { r => TeamLinksRequest.fromJson(r) })) {
+                    case Some(b) => b
+                    case None =>
+                        writeDto(ctx, 400u16, ErrorResp("invalid JSON body"))
+                        return
+                }
+                let now = nowMsUtc()
+                var r = teamSelfServiceOk("未变更", teamId)
+                if (req.hasOrganizations) {
+                    r = setTeamOrgsChecked(this.adminData, teamId, req.organizationIds.toArray(), now)
+                }
+                if (r.ok && req.hasPackages) {
+                    r = setTeamPkgsChecked(this.adminData, this.pkgStore, teamId, req.packages.toArray(), now)
+                }
+                this.auditTeamManage(ctx, v, "set_team_links", r, teamId)
+                writeDto(ctx, teamSelfServiceCode(r), teamSelfServiceResp(r))
+            case _ =>
+                writeDto(ctx, 405u16, ErrorResp("method not allowed"))
+        }
+    }
+
     // DELETE /api/user/me/teams/:id/members/:userId
     public func removeTeamMemberSelf(ctx: TangHttpContext): Unit {
         let teamId = match (Int64.tryParse(ctx.param("id"))) {

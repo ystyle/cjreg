@@ -328,7 +328,91 @@ extend AdminService {
             error: if (r.ok) { "" } else { r.message }, detail: "id=${id} userId=${uid}")
         writeDto(ctx, teamSelfServiceCode(r), teamSelfServiceResp(r))
     }
+    // GET /api/admin/teams/:id/links → 当前关联（组织 id 列表 + 包列表）
+    public func getTeamLinks(ctx: TangHttpContext): Unit {
+        if (!requireAdmin(ctx)) {
+            return
+        }
+        let ad = match (this.teamStores(ctx)) {
+            case Some(x) => x
+            case None => return
+        }
+        let id = match (Int64.tryParse(ctx.param("id"))) {
+            case Some(n) => n
+            case None => 0
+        }
+        match (ad.getTeam(id)) {
+            case Some(t) => if (t.deletedAt != 0) {
+                writeDto(ctx, 404u16, ErrorResp("team not found"))
+                return
+            }
+            case None =>
+                writeDto(ctx, 404u16, ErrorResp("team not found"))
+                return
+        }
+        writeDto(ctx, 200u16, teamLinksJson(ad, id))
+    }
+
+    // PUT /api/admin/teams/:id/links  body {organizationIds:[..]} 或 {packages:[{organization,name}]}
+    // 覆盖式：传哪个字段就整体替换哪个（与 UI 的保存语义一致）
+    public func setTeamLinks(ctx: TangHttpContext): Unit {
+        if (!requireAdmin(ctx)) {
+            return
+        }
+        let ad = match (this.teamStores(ctx)) {
+            case Some(x) => x
+            case None => return
+        }
+        let id = match (Int64.tryParse(ctx.param("id"))) {
+            case Some(n) => n
+            case None => 0
+        }
+        let team = match (ad.getTeam(id)) {
+            case Some(t) => if (t.deletedAt == 0) { t } else {
+                writeDto(ctx, 404u16, ErrorResp("team not found"))
+                return
+            }
+            case None =>
+                writeDto(ctx, 404u16, ErrorResp("team not found"))
+                return
+        }
+        let req = match (parseJsonBody<TeamLinksRequest>(ctx.bodyRaw(), { r => TeamLinksRequest.fromJson(r) })) {
+            case Some(b) => b
+            case None =>
+                writeDto(ctx, 400u16, ErrorResp("invalid JSON body"))
+                return
+        }
+        let now = auditNowMs()
+        let (actorId, actorName) = this.actorOf(ctx)
+        var msg = ""
+        if (req.hasOrganizations) {
+            let r = setTeamOrgsChecked(ad, id, req.organizationIds.toArray(), now)
+            if (!r.ok) {
+                writeDto(ctx, 400u16, ErrorResp(r.message))
+                return
+            }
+            msg = r.message
+        }
+        if (req.hasPackages) {
+            let ps = match (this.pkgStore) {
+                case Some(x) => x
+                case None =>
+                    writeDto(ctx, 500u16, ErrorResp("package store unavailable"))
+                    return
+            }
+            let r = setTeamPkgsChecked(ad, ps, id, req.packages.toArray(), now)
+            if (!r.ok) {
+                writeDto(ctx, 400u16, ErrorResp(r.message))
+                return
+            }
+            msg = r.message
+        }
+        writeAudit(this.adminData, LogKind.Admin, actorId, actorName, "set_team_links", "ok", team.name, ctx,
+            detail: "id=${id} orgs=${req.organizationIds.size} pkgs=${req.packages.size}")
+        writeDto(ctx, 200u16, TeamSelfServiceResp(true, "ok", msg, id))
+    }
 }
+
 
 // 自助结果的 outcome → HTTP 状态码（供管理端与门户共用一份口径）
 public func teamSelfServiceCode(r: TeamSelfServiceResult): UInt16 {

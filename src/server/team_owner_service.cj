@@ -214,3 +214,54 @@ public func ownedTeamBlockingUserRemoval(adminData: AdminDataStore, userId: Int6
     }
     ""
 }
+
+// ===== owner 自助：团队关联（组织 / 包）=====
+//
+// 这一步是「owner 加人 = 授予发布权」的关键：团队绑定哪些组织/包，决定了成员的有效权限范围
+// （effectivePermission 按团队关联命中来给 level）。所以 owner 自助若只能改成员、不能改关联，
+// 「下放边界」其实没有落地。
+
+// 设置团队关联的组织（覆盖式，与 UI 的管理端行为一致）。
+// 校验：组织必须存在且未软删 —— 关联到不存在的组织等于给出无效权限。
+public func setTeamOrgsChecked(adminData: AdminDataStore, teamId: Int64,
+                               orgIds: Array<Int64>, now: Int64): TeamSelfServiceResult {
+    let team = match (adminData.getTeam(teamId)) {
+        case Some(t) => if (t.deletedAt == 0) { t } else {
+            return teamSelfServiceErr("team_not_found", "团队不存在", teamId)
+        }
+        case None => return teamSelfServiceErr("team_not_found", "团队不存在", teamId)
+    }
+    // 0 = 「无组织包」哨兵值，允许；其余必须存在且未删
+    for (oid in orgIds) {
+        if (oid == 0) {
+            continue
+        }
+        let ok = match (adminData.getOrg(oid)) {
+            case Some(o) => o.deletedAt == 0
+            case None => false
+        }
+        if (!ok) {
+            return teamSelfServiceErr("org_not_found", "组织不存在（id=${oid}）", teamId)
+        }
+    }
+    adminData.setTeamOrganizations(teamId, orgIds, now)
+    teamSelfServiceOk("已更新关联组织（${orgIds.size} 个）", teamId)
+}
+
+// 设置团队关联的包（覆盖式）。校验：包在该组织下必须存在本地版本。
+public func setTeamPkgsChecked(adminData: AdminDataStore, pkgStore: PackageStore, teamId: Int64,
+                               pkgs: Array<(String, String)>, now: Int64): TeamSelfServiceResult {
+    let team = match (adminData.getTeam(teamId)) {
+        case Some(t) => if (t.deletedAt == 0) { t } else {
+            return teamSelfServiceErr("team_not_found", "团队不存在", teamId)
+        }
+        case None => return teamSelfServiceErr("team_not_found", "团队不存在", teamId)
+    }
+    for ((org, name) in pkgs) {
+        if (pkgStore.listVersions(org, name).size == 0) {
+            return teamSelfServiceErr("package_not_found", "包不存在：${org}::${name}", teamId)
+        }
+    }
+    adminData.setTeamPackages(teamId, pkgs, now)
+    teamSelfServiceOk("已更新关联包（${pkgs.size} 个）", teamId)
+}

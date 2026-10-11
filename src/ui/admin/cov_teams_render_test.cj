@@ -162,7 +162,8 @@ public class CovTeamsRenderTest {
         let (logs, total) = state.adminData.queryLogs(Some("admin"), "create_team", "", 0, 0, 0, 10)
         @Expect(total, 1)
         @Expect(logs[0].target, "core-team")
-        @Expect(logs[0].detail, "permission=write")
+        // detail 现在带上 owner 自助字段（迭代 6 新增）
+        @Expect(logs[0].detail, "permission=write ownerId=0 selfService=false")
         @Expect(covRender(page.render()).contains(page.msg.get()), true)
     }
 

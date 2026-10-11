@@ -42,15 +42,22 @@ public struct MyTeamRow {
     public let permission: String       // read/write/overwrite
     public let orgNames: ArrayList<String>
     public let packages: ArrayList<String>
+    // owner 自助相关：isOwner = 我是本队所有者；canSelfManage = owner 且自助已开启
+    // （**只是展示用**：真正的门是服务端 canManageTeam，UI 隐藏不算安全）
+    public let isOwner: Bool
+    public let canSelfManage: Bool
 
     public init(teamId: Int64, name: String, displayName: String, permission: String,
-                orgNames: ArrayList<String>, packages: ArrayList<String>) {
+                orgNames: ArrayList<String>, packages: ArrayList<String>,
+                isOwner!: Bool = false, canSelfManage!: Bool = false) {
         this.teamId = teamId
         this.name = name
         this.displayName = displayName
         this.permission = permission
         this.orgNames = orgNames
         this.packages = packages
+        this.isOwner = isOwner
+        this.canSelfManage = canSelfManage
     }
 
     /// 展示名（无显示名时用标识名）
@@ -133,7 +140,8 @@ public func myTeamRows(adminData: AdminDataStore, uid: Int64): ArrayList<MyTeamR
                 pkgs.add("${p.organization}::${p.packageName}")
             }
         }
-        rows.add(MyTeamRow(t.id, t.name, t.displayName, t.permission, orgNames, pkgs))
+        rows.add(MyTeamRow(t.id, t.name, t.displayName, t.permission, orgNames, pkgs,
+            isOwner: t.ownerId == uid, canSelfManage: t.ownerId == uid && t.selfService))
     }
     rows
 }

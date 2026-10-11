@@ -186,13 +186,26 @@
 .portal-group-title { font-size: 14px; font-weight: 600; color: #303133; margin: 20px 0 10px; padding-top: 14px; border-top: 1px solid #ebeef5; }
 .portal-group-title:first-child { margin-top: 0; padding-top: 0; border-top: none; }
 .portal-inline-row { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.portal-inline-row > * { margin-left: 0 !important; }
 .portal-inline-row .el-input { flex: 1; max-width: 320px; }
 .portal-inline { display: flex; gap: 8px; align-items: center; }
+.portal-inline > * { margin-left: 0 !important; margin-right: 0 !important; }
+
+/* 表格单元格内的按钮组（后台列表与门户面板共用）：裸 div 里按钮会随列宽任意折行，
+   必须给 flex + gap。行内允许折行（gap 同时作用于纵向），列宽继续收窄时不会挤成一坨。
+   注意 EP 的 .el-button + .el-button 自带 margin-left:12px，与 gap 叠加后总间距 20px、
+   还会把最后一个按钮挤到下一行 —— 这里**清掉自带 margin，间距只由 gap 决定**。 */
+.btn-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn-row > * { margin-left: 0 !important; margin-right: 0 !important; }
 .portal-dim { color: #909399; font-size: 13px; }
+/* 表格里的次要信息：不允许折行（列宽已按内容给足） */
+.nowrap-dim { color: #909399; font-size: 13px; white-space: nowrap; }
 .portal-table-wrap { margin-bottom: 4px; }
 .portal-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.portal-chips > * { margin-left: 0 !important; margin-right: 0 !important; }
 .portal-link-list { display: flex; flex-direction: column; gap: 8px; }
 .portal-link-row { display: flex; gap: 12px; align-items: center; font-size: 13px; color: #606266; }
+.portal-link-row > * { margin-left: 0 !important; }
 
 /* owner 自助面板用「子面板」而不是再套一张 Card：门户的团队区块本身已经是卡片，
    里面再放 Card 会出现两层阴影、层次也乱。子面板用浅底 + 细边与父卡片区分。 */

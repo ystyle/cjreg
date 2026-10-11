@@ -498,42 +498,55 @@ class TeamsPage <: Component {
             .emptyText("暂无数据")
             .stripe()
             .add(TableColumn<TeamRow>().label("ID").accessor({ r => r.doc.id.toString() }).width(50))
-            .add(TableColumn<TeamRow>().label("团队名").accessor({ r => r.doc.name }).minWidth(130))
-            .add(TableColumn<TeamRow>().label("显示名").accessor({ r => r.doc.displayName }).minWidth(130))
+            // 「团队名」与「显示名」合并成一列：有显示名时显示显示名、副行给出标识名，
+            // 避免两列内容高度重复还挤掉右侧的操作列
+            .add(TableColumn<TeamRow>().label("团队").minWidth(140).render({ r, i =>
+                if (r.doc.displayName.isEmpty()) {
+                    text(r.doc.name)
+                } else {
+                    div([
+                        text(r.doc.displayName),
+                        div([text(r.doc.name)], attrs: Some(HashMap<String, String>([("class", cls("portal-dim"))]))),
+                    ])
+                }
+            }))
             .add(TableColumn<TeamRow>().label("权限").width(90).render({ r, i =>
                 this.permTag(r.doc.permission)
             }))
-            .add(TableColumn<TeamRow>().label("所有者").width(120).render({ r, i =>
+            .add(TableColumn<TeamRow>().label("所有者").width(110).render({ r, i =>
                 if (r.doc.ownerId > 0) {
                     text(this.ownerNameOf(r.doc.ownerId))
                 } else {
                     text("-")
                 }
             }))
-            .add(TableColumn<TeamRow>().label("owner 自助").width(110).render({ r, i =>
+            .add(TableColumn<TeamRow>().label("owner 自助").width(100).render({ r, i =>
                 if (r.doc.selfService) {
                     Tag([text("已开启")]).kind(ComponentKind.Warning)
                 } else {
                     text("关闭")
                 }
             }))
-            .add(TableColumn<TeamRow>().label("成员").accessor({ r => r.members.toString() }).width(70))
-            .add(TableColumn<TeamRow>().label("组织").accessor({ r => r.orgs.toString() }).width(70))
-            .add(TableColumn<TeamRow>().label("包").accessor({ r => r.pkgs.toString() }).width(70))
-            .add(TableColumn<TeamRow>().label("操作").minWidth(380).render({ r, i =>
+                        // 三列计数合成一列，避免把操作列挤到视口外
+            .add(TableColumn<TeamRow>().label("关联").width(132).render({ r, i =>
+                div([text("成员 ${r.members}｜组织 ${r.orgs}｜包 ${r.pkgs}")],
+                    attrs: Some(HashMap<String, String>([("class", cls("nowrap-dim"))])))
+            }))
+            .add(TableColumn<TeamRow>().label("操作").width(400).render({ r, i =>
                 let id = r.doc.id
                 let editH: ActionHandler = { c => this.openEdit(c, id) }
                 let orgH: ActionHandler = { c => this.openOrgs(c, id) }
                 let pkgH: ActionHandler = { c => this.openPackages(c, id) }
                 let memberH: ActionHandler = { c => this.openMembers(c, id) }
                 let deleteH: ActionHandler = { c => this.askDelete(c, id) }
+                // 按钮组必须走 flex + gap：裸 div 里按钮会随列宽任意折行（实测折成 3 行）
                 div([
                     Button([text("编辑")]).size(ButtonSize.Small).onClick(editH),
                     Button([text("组织")]).size(ButtonSize.Small).onClick(orgH),
                     Button([text("包")]).size(ButtonSize.Small).onClick(pkgH),
                     Button([text("成员")]).size(ButtonSize.Small).onClick(memberH),
                     Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteH),
-                ])
+                ], attrs: Some(HashMap<String, String>([("class", cls("btn-row"))])))
             }))
     }
 

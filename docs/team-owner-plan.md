@@ -120,3 +120,73 @@
 - 「申请 → 管理员审批」流 —— 本期用 `selfService` 开关表达下放边界即可。
 - `OrgDoc.ownerId` 死字段的去留 —— 与本迭代无关，单独决定。
 - `checkPublishPermission` 的任何改动 —— §7.4 明确要求不动。
+
+
+---
+
+## 5. 验证结果（三种，全部实跑）
+
+### ① 单元测试：994 例全绿
+
+`cjpm test -j 16 --no-progress --parallel 1` → **TOTAL 994 / PASSED 994 / FAILED 0 / ERROR 0**
+（本迭代新增 58 例：纯函数 26 + handler HTTP 13 + 门户渲染 16 + CLI 3。）
+
+| 层 | 文件 | 例数 | 守住什么 |
+|---|---|---|---|
+| 纯函数 | `src/server/team_owner_service_test.cj` | 26 | canManageTeam 六态、自助写操作规则、owner 不带来权限、关联→权限串联 |
+| handler HTTP | `src/server/team_owner_handler_test.cj` | 13 | ★越权（非 owner / 自助关 / 匿名）、管理员超集、审计留痕 |
+| 门户渲染 | `src/ui/public/cov_team_owner_portal_test.cj` | 16 | 入口三态、面板交互，以及**绕过按钮直接调 action 仍被服务端守卫拒绝** |
+| CLI | `src/main_test.cj` | 3 | admin delete-user 的返回码与守卫 |
+
+### ② 界面集成测试：真实浏览器（agent-browser）
+
+环境：本机实例（`.smoke/owner-qa`，端口 18088），owner=`brian`。
+截图留档：`.qa-shots/owner/01–06-*.png`。
+
+| 步骤 | 结果 |
+|---|---|
+| owner 打开 `/me` | 团队表格出现「管理成员」按钮 ✅ |
+| 点开管理面板 | 成员列表显示 `brian [owner]`、操作列提示「需先转让」✅ |
+| 输入 `carl` → 加入团队 | 界面出现 carl；**服务端 API 核对**成员已落库 ✅ |
+| 管理员关闭 selfService | 按钮消失、改显「owner·自助未开」；**直连 API 返回 403** + 文案「未开启」✅ |
+| 转让所有权 | 确认框渲染；确认后 ownerId=3(carl)，brian 保留成员身份 ✅ |
+| 转让后换 brian 打开 | 看不到管理入口（仍能看到团队）；换 carl 打开 → 有入口 ✅ |
+
+### ③ 实际使用：生产实例 + 演示实例，三种角色
+
+生产 `~/docker/cjreg`（8066，470 包真实数据）。为不污染数据，用 `qa-*` 演示对象，验完清理。
+
+| 角色 | 操作 | 结果 |
+|---|---|---|
+| ① **owner** | 门户自助改关联（团队绑 `qaorg`） | ✅ 200「已更新关联组织（1 个）」 |
+| ② **成员** | 发布 `qaorg::qa-demo@1.0.0`（真实 200） | ✅ **HTTP 200，包 id 477 落库**；`/api/user/me/packages` 显示 `isOwner=true` |
+| ③ **非成员** | 发布同一组织下的包 | ✅ **HTTP 403** `no permission to publish` |
+
+三者对照证明：owner 自助**真的把发布权授予了成员**，且非成员拿不到 —— 权限链完整生效。
+审计留痕（`/api/admin/logs/admin?keyword=team`）：
+
+```
+set_team_links   actor=qa-owner  status=ok  detail=via=owner teamId=1 outcome=ok
+add_team_member  actor=qa-owner  status=ok  detail=via=owner teamId=1 outcome=ok
+create_team      actor=admin     status=ok  detail=id=1 ownerId=5 selfService=true
+```
+
+**收尾**：演示团队/组织/包已删除，演示用户用本次新增的 `admin delete-user` 清除；
+生产回到基线（470 包 / 4 个原有用户 / 无团队 / 上游不变）。
+
+## 6. 本迭代过程中发现并修掉的缺口
+
+1. **「owner 可改关联」缺失**（③ 阶段发现）：§7.4 要求 owner 可改本队成员**与关联**，
+   但初版只做了成员管理；团队-组织/包关联只有 cjxt 组件在写、没有 API ——
+   而「加人 = 授予发布权」正由关联范围决定（`effectivePermission` 按关联命中给权限）。
+   已补 `GET|PUT .../teams/:id/links`（管理端 + 门户各一套，共用 `canManageTeam`）与面板 UI。
+2. **没有可脚本化的用户删除**：管理端只有创建/改角色，删除用户只有 UI 路径。
+   已补 `cjreg admin delete-user`，并带上「团队 owner 需先转让」「最后一个管理员不可删」两道守卫。
+
+## 7. 与设计的差异（有意为之）
+
+- `TeamMemberDoc` **未加 `role` 字段**：owner 身份只放 `TeamDoc.ownerId`（单一来源），
+  避免「成员表说是 owner、团队表说不是」的两处不一致。
+- 额外加了 `selfService` 开关（§7.4 只写了「如需收敛，加开关」）：
+  默认关意味着**不开就不下放**，比默认开放更安全。
+- `OrgDoc.ownerId` 死字段**保留未动**：与本迭代无关，单独决定。

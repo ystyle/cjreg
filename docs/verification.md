@@ -7,7 +7,7 @@
 
 | 验证层次 | 手段 | 规模 | 结果 |
 |---|---|---|---|
-| 单元测试 | `cjpm test` | **936 个用例**（含 handler 级 HTTP 测试与页面渲染测试） | ✅ 全部通过 |
+| 单元测试 | `cjpm test` | **994 个用例**（含 handler 级 HTTP 测试与页面渲染测试） | ✅ 全部通过 |
 | 代码覆盖率 | `cjpm test --coverage` + `cjcov` | 87 个源文件 / 11249 行 | **91.9%**（详见 §3.2） |
 | 协议端到端 | `tests/e2e.sh` 双仓脚本 | 6 个真实依赖包 | ✅ 发布 → 拓扑 → 6/6 推送 → 目标仓校验 |
 | 权限矩阵 | curl（team 模式 + require_auth） | 15+ 分支 | ✅ 401/403/200/409 全部符合规格 |
@@ -37,7 +37,7 @@
 eval "$(cjvs env zsh)" && eval "$(cjvs stdx-env zsh)"
 cd cjreg && cjpm build -j 16
 
-# 1) 单元测试（936 用例）
+# 1) 单元测试（994 用例）
 cjpm test -j 16 --no-progress
 
 # 2) 覆盖率报告（HTML 输出到 .smoke/coverage）
@@ -63,12 +63,12 @@ EOF
 
 ## 3. 逐项结果与证据
 
-### 3.1 单元测试（936 用例全绿）
+### 3.1 单元测试（994 用例全绿）
 
 ```text
 $ cjpm test -j 16 --no-progress
-Summary: TOTAL: 936
-    PASSED: 936, SKIPPED: 0, ERROR: 0
+Summary: TOTAL: 994
+    PASSED: 994, SKIPPED: 0, ERROR: 0
     FAILED: 0
 ```
 
@@ -80,8 +80,8 @@ Summary: TOTAL: 936
 `auth`（pbkdf2、token、生命周期、多管理员约束）、`config`（配置解析/优先级/上游表）、
 `server`（协议端点、管理 API 全量、公开读 API、用户门户 API、发布裁决、发布计划与 SSE、
 代理回源传输层/制品层、流式发布、目标仓 token 解析）、
-`ui`（守卫、导航登录态、门户渲染、文档示例配置化、管理端与公开端页面渲染与交互）、
-根包 `main.cj`（CLI 参数解析与命令分派返回码）。
+`ui`（守卫、导航登录态、门户渲染、文档示例配置化、管理端与公开端页面渲染与交互、
+团队 owner 自助面板）、根包 `main.cj`（CLI 参数解析与命令分派返回码）。
 
 回归固化：官方索引 `index-version` 为字符串、cjpm meta 为 pretty 多行 JSON、sha256sum 位于嵌套 index、
 bstorm 重启 reindex、二进制制品不可走 UTF-8 文本流等 5 个兼容性坑均有对应用例。
@@ -363,6 +363,9 @@ $ bash tests/e2e.sh
 - 单测存在**已知上游抖动**：`Storm.inMemory()` 并发建实例偶发丢写（约 1/8 轮次会丢 1–4 例），
   与用例断言无关，详见 §4.8。完整跑通时为 **936/936 全绿**。
 - `tests/e2e.sh` 使用固定端口（18060/18070），需保证端口空闲。
+- **团队 owner 自助已落地**（迭代 6）：`TeamDoc.ownerId` + `selfService`（默认关）、
+  `canManageTeam` 一份裁决供三条入口共用、门户 `/me/teams` 自助管理成员与关联、
+  `admin delete-user` 带 owner 孤儿守卫。方案与三种验证记录见 `docs/team-owner-plan.md`。
 - 演示/冒烟数据目录位于 `.smoke/`（已 gitignore），不进仓库。
 - `analyze` 响应暂未输出 `dependency_range/local_versions/remote_versions/recommended_version`
   （发布计划 item 六态 `pending/running/publishing/waiting_index/completed/failed`、

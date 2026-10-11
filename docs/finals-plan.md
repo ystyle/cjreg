@@ -155,10 +155,28 @@ git push origin v0.1.0-submission     # 决赛写差异说明时以此 tag 为�
 - 验收：`cjcov` 报告 + `docs/verification.md` §3.2 / §3.1 已更新；用例纳入 CI。
 - 演示：展示覆盖率报告 before/after（41.1% → 91.9%）。
 
-### 迭代 6：团队所有者（owner 自助）
+### 迭代 6：团队所有者（owner 自助）—— ✅ 已完成（2026-10-11）
 
-- 目标：落地 `docs/user-portal-design.md` §7.4 路线 A —— `TeamDoc.ownerId`、`isTeamOwner` 守卫、owner 可在门户 `/me/teams` 管理本队成员（服务端守卫优先），管理员始终是超集。
-- 验收：5 条约束（服务端守卫 / 下放边界 / 生命周期 / owner≠自动 write / 入口与审计）各有单测；越权用例被拒。
+- **落地**：`docs/team-owner-plan.md`（方案 + 验证记录）。分支 `feat/team-owner`。
+  - `TeamDoc.ownerId` + `TeamDoc.selfService`（**默认关**：不开就不下放）；
+  - 裁决收口 `canManageTeam`（admin 超集 → owner 且自助开 → 否则拒），
+    供门户 action / 门户 API / 管理端 API **三条入口共用一份口径**；
+  - owner 可在门户 `/me/teams` 自助：加/移成员、转让所有权、改关联（组织/包）；
+  - `admin delete-user` 带 owner 孤儿守卫；管理端 `/admin/teams` 保持 admin-only。
+- **五条约束的落实**：
+  1. 服务端守卫 —— 身份取自服务端会话，越权用例逐条被拒（含「绕过 UI 直接调 action」）；
+  2. 下放边界 —— `selfService` 默认关且只有管理员能开；owner 不能开自己的开关；
+  3. 生命周期 —— 转让只给现有成员、旧 owner 保留成员身份、owner 不可被移出、
+     删除 owner 前必须转让（与「最后一个管理员不可降级」同构）；
+  4. owner ≠ 自动 write —— 不碰 `permission`、不写 `publisherId`，单测断言 `effectivePermission` 不因 owner 身份提升；
+  5. 入口与审计 —— 入口在门户、`/admin/teams` 保持 admin-only、owner 操作写 `AddLog`（actor=owner，detail 带 via）。
+- **验收（三种验证全部实跑）**：
+  1. **单元测试 994 例全绿**（本迭代新增 58 例，含 handler 级真实 HTTP 与门户渲染）；
+  2. **界面集成测试**：agent-browser 真实操作门户，六步全通过（截图 `.qa-shots/owner/01–06-*.png`）；
+  3. **生产实例三角色**：owner 自助改关联 ✅ → 成员**真实发布成功**（200，包 id 477）✅ →
+     非成员发布同组织 **403 被拒** ✅；验完清理，生产回到基线（470 包 / 4 用户 / 无团队）。
+- **过程中发现并修掉的两个缺口**：owner「改关联」能力缺失（§7.4 要求但与发布权强相关）、
+  缺少可脚本化的用户删除（补 `admin delete-user` + 两道守卫）。
 - 演示：owner 在门户加人 → 该成员可发布 → 移出后 403。
 
 ---

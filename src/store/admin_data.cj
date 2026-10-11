@@ -32,6 +32,12 @@ public class TeamDoc {
     public var displayName: String = ""
     public var description: String = ""
     public var permission: String = "read"  // read/write/overwrite
+    // 团队所有者（0 = 未指定）：owner 本身**不**带来任何发布权限（权限单元仍是 permission），
+    // 只决定「谁能自助管理本队成员/关联」。见 docs/team-owner-plan.md 约束 4。
+    public var ownerId: Int64 = 0
+    // 是否允许 owner 自助管理（**默认关**）：不设开关就等于把「加人 = 授予发布权」无条件下放。
+    // 必须由管理员在 /admin/teams 显式开启；owner 不能开自己的开关。
+    public var selfService: Bool = false
     public var createdAt: Int64 = 0
     public var updatedAt: Int64 = 0
     public var deletedAt: Int64 = 0
@@ -268,7 +274,7 @@ public class AdminDataStore {
     }
 
     // ===== 团队 =====
-    public func createTeam(name: String, now: Int64, displayName!: String = "", description!: String = "", permission!: String = "read"): Int64 {
+    public func createTeam(name: String, now: Int64, displayName!: String = "", description!: String = "", permission!: String = "read", ownerId!: Int64 = 0, selfService!: Bool = false): Int64 {
         let d = TeamDoc()
         d.id = this.nextTeam
         this.nextTeam++
@@ -276,22 +282,78 @@ public class AdminDataStore {
         d.displayName = displayName
         d.description = description
         d.permission = permission
+        d.ownerId = ownerId
+        d.selfService = selfService
         d.createdAt = now
         this.storm.save(d)
         return d.id
     }
 
-    public func updateTeam(id: Int64, displayName: String, description: String, permission: String, now: Int64): Bool {
+    public func updateTeam(id: Int64, displayName: String, description: String, permission: String, now: Int64,
+                           selfService!: ?Bool = None): Bool {
         match (this.storm.get<TeamDoc>(id)) {
             case Some(d) =>
                 d.displayName = displayName
                 d.description = description
                 d.permission = permission
+                // selfService 用 Option 区分「没传」（保持原值）与「显式传 false」（关闭）
+                match (selfService) {
+                    case Some(v) => d.selfService = v
+                    case None => ()
+                }
                 d.updatedAt = now
                 this.storm.save(d)
                 return true
             case None => return false
         }
+    }
+
+    // 设置/转让团队所有者（ownerId <= 0 = 清空）。只写一个字段，权限语义不受影响。
+    public func setTeamOwner(teamId: Int64, ownerId: Int64, now: Int64): Bool {
+        match (this.storm.get<TeamDoc>(teamId)) {
+            case Some(d) =>
+                d.ownerId = ownerId
+                d.updatedAt = now
+                this.storm.save(d)
+                return true
+            case None => return false
+        }
+    }
+
+    // 开启/关闭 owner 自助（仅管理员可调用，由调用方保证）
+    public func setTeamSelfService(teamId: Int64, enabled: Bool, now: Int64): Bool {
+        match (this.storm.get<TeamDoc>(teamId)) {
+            case Some(d) =>
+                d.selfService = enabled
+                d.updatedAt = now
+                this.storm.save(d)
+                return true
+            case None => return false
+        }
+    }
+
+    // 某人是否（未删）团队的所有者。ownerId <= 0 或团队已删 → 一律 false。
+    public func isTeamOwnerAt(teamId: Int64, userId: Int64): Bool {
+        if (userId <= 0) {
+            return false
+        }
+        match (this.storm.get<TeamDoc>(teamId)) {
+            case Some(d) => d.deletedAt == 0 && d.ownerId == userId
+            case None => false
+        }
+    }
+
+    // 某人是否为某团队的 owner（任一团队）；返回该团队 id（0 = 不是任何团队 owner）
+    public func ownedTeamOf(userId: Int64): Int64 {
+        if (userId <= 0) {
+            return 0
+        }
+        for (d in this.storm.all<TeamDoc>()) {
+            if (d.deletedAt == 0 && d.ownerId == userId) {
+                return d.id
+            }
+        }
+        0
     }
 
     public func listTeams(): ArrayList<TeamDoc> {

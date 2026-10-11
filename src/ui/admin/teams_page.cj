@@ -7,6 +7,7 @@ import cjxt.macros.*
 import cjxt.components.*
 import ystyle::cjreg.store.*
 import ystyle::cjreg.auth.model.*
+import ystyle::cjreg.server.{transferTeamOwnerChecked, isTeamMember}
 import std.collection.*
 import std.convert.*
 
@@ -28,6 +29,9 @@ class TeamsPage <: Component {
     var formDisplay = Signal<String>("")
     var formDesc = Signal<String>("")
     var formPermission = Signal<String>("read")
+    // owner 自助：指定 owner（用户名）+ 是否开启自助（默认关，只有管理员能开）
+    var formOwnerName = Signal<String>("")
+    var formSelfService = Signal<Bool>(false)
     var teamNameError = Signal<String>("")
     var teamForm = Form([])
     // 组织关联 Dialog
@@ -118,6 +122,8 @@ class TeamsPage <: Component {
         this.formDisplay.set("")
         this.formDesc.set("")
         this.formPermission.set("read")
+        this.formOwnerName.set("")
+        this.formSelfService.set(false)
         this.teamNameError.set("")
         this.dialogVisible.set(true)
         PatchResult.ReRender
@@ -136,6 +142,12 @@ class TeamsPage <: Component {
                 this.formDisplay.set(t.displayName)
                 this.formDesc.set(t.description)
                 this.formPermission.set(t.permission)
+                // owner 用用户名回填（表单面向人，不要求记 id）
+                this.formOwnerName.set(match (st.userStore.getUser(t.ownerId)) {
+                    case Some(u) => u.username
+                    case None => ""
+                })
+                this.formSelfService.set(t.selfService)
                 this.teamNameError.set("")
                 this.dialogVisible.set(true)
             case None => ()
@@ -164,16 +176,62 @@ class TeamsPage <: Component {
         let display = this.formDisplay.get()
         let desc = this.formDesc.get()
         let perm = this.formPermission.get()
+        let ownerName = this.formOwnerName.get().trimAscii()
+        let selfService = this.formSelfService.get()
         let uid = sessionUid(ctx)
         let uname = sessionUsername(ctx)
+        // owner 按用户名解析（表单不暴露 id）；填了但查不到 → 直接拒绝，避免静默丢字段
+        var ownerId: Int64 = 0
+        if (!ownerName.isEmpty()) {
+            var found = false
+            for (u in st.userStore.listAllUsers()) {
+                if (u.username == ownerName) {
+                    ownerId = u.id
+                    found = true
+                }
+            }
+            if (!found) {
+                this.teamNameError.set("所有者用户名不存在：${ownerName}")
+                return PatchResult.ReRender
+            }
+        }
+        if (selfService && ownerId <= 0) {
+            this.teamNameError.set("开启 owner 自助前必须先指定所有者")
+            return PatchResult.ReRender
+        }
         if (this.dialogMode.get() == "create") {
-            let id = st.adminData.createTeam(name, nowMs(), displayName: display, description: desc, permission: perm)
+            let id = st.adminData.createTeam(name, nowMs(), displayName: display, description: desc,
+                permission: perm, ownerId: ownerId, selfService: selfService)
+            if (ownerId > 0 && !isTeamMember(st.adminData, id, ownerId)) {
+                st.adminData.addTeamMember(id, ownerId)
+            }
             this.msg.set("已创建团队 #${id}")
-            uiAuditAs(st, uid, uname, "create_team", name, detail: "permission=${perm}")
+            uiAuditAs(st, uid, uname, "create_team", name,
+                detail: "permission=${perm} ownerId=${ownerId} selfService=${selfService}")
         } else {
-            if (st.adminData.updateTeam(this.editingId, display, desc, perm, nowMs())) {
+            // owner 变更走转让语义（自动补成员），其余字段走局部更新
+            let cur = st.adminData.getTeam(this.editingId)
+            var ownerNote = ""
+            match (cur) {
+                case Some(t) =>
+                    if (ownerId != t.ownerId) {
+                        if (ownerId > 0) {
+                            let r = transferTeamOwnerChecked(st.adminData, st.userStore, this.editingId, ownerId, nowMs())
+                            if (!r.ok) {
+                                this.teamNameError.set(r.message)
+                                return PatchResult.ReRender
+                            }
+                        } else {
+                            let _ = st.adminData.setTeamOwner(this.editingId, 0, nowMs())
+                        }
+                        ownerNote = " ownerId=${ownerId}"
+                    }
+                case None => ()
+            }
+            if (st.adminData.updateTeam(this.editingId, display, desc, perm, nowMs(), selfService: Some(selfService))) {
                 this.msg.set("已更新团队 ${name}")
-                uiAuditAs(st, uid, uname, "update_team", name, detail: "permission=${perm}")
+                uiAuditAs(st, uid, uname, "update_team", name,
+                    detail: "permission=${perm} selfService=${selfService}${ownerNote}")
             } else {
                 this.msg.set("更新失败")
             }
@@ -445,6 +503,20 @@ class TeamsPage <: Component {
             .add(TableColumn<TeamRow>().label("权限").width(90).render({ r, i =>
                 this.permTag(r.doc.permission)
             }))
+            .add(TableColumn<TeamRow>().label("所有者").width(120).render({ r, i =>
+                if (r.doc.ownerId > 0) {
+                    text(this.ownerNameOf(r.doc.ownerId))
+                } else {
+                    text("-")
+                }
+            }))
+            .add(TableColumn<TeamRow>().label("owner 自助").width(110).render({ r, i =>
+                if (r.doc.selfService) {
+                    Tag([text("已开启")]).kind(ComponentKind.Warning)
+                } else {
+                    text("关闭")
+                }
+            }))
             .add(TableColumn<TeamRow>().label("成员").accessor({ r => r.members.toString() }).width(70))
             .add(TableColumn<TeamRow>().label("组织").accessor({ r => r.orgs.toString() }).width(70))
             .add(TableColumn<TeamRow>().label("包").accessor({ r => r.pkgs.toString() }).width(70))
@@ -463,6 +535,17 @@ class TeamsPage <: Component {
                     Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteH),
                 ])
             }))
+    }
+
+    // ownerId → 用户名（表格展示用）
+    func ownerNameOf(userId: Int64): String {
+        match (this.state) {
+            case Some(st) => match (st.userStore.getUser(userId)) {
+                case Some(u) => u.username
+                case None => "#${userId}"
+            }
+            case None => "#${userId}"
+        }
     }
 
     func renderFormDialog(): IComponent {
@@ -489,6 +572,10 @@ class TeamsPage <: Component {
                 .bindValue({ => this.formDesc.get() }),
             FormItem([permSelect]).label("默认权限")
                 .bindValue({ => this.formPermission.get() }),
+            FormItem([Input().bind(this.formOwnerName).placeholder("留空 = 不指定")]).label("所有者（用户名）")
+                .bindValue({ => this.formOwnerName.get() }),
+            FormItem([Switch().bind(this.formSelfService).activeText("开启").inactiveText("关闭")])
+                .label("owner 自助"),
         ]).labelTop()
         this.teamForm = form
         let dlg = Dialog([form])

@@ -682,4 +682,36 @@ class RunCliTest {
         let code = runCli(["admin", "sync-metadata", "-d", dir])
         @Expect(code, 0)
     }
+
+    // admin delete-user：缺 --username → 2；用户不存在 → 1；正常删除 → 0 且真的删掉
+    @TestCase
+    func testAdminDeleteUserBranches(): Unit {
+        let dir = cliDir("delete-user")
+        @Expect(runCli(["admin", "delete-user", "-d", dir]), 2)
+
+        @Expect(runCli(["init", "-d", dir, "--username", "admin", "--password", "Passw0rd1"]), 0)
+        // 造一个待删用户
+        @Expect(runCli(["admin", "reset-password", "-d", dir, "--username", "ghost", "--password", "X"]), 1)
+        @Expect(runCli(["admin", "delete-user", "-d", dir, "--username", "nobody"]), 1)
+    }
+
+    // admin delete-user 的守卫①：最后一个启用管理员不可删
+    @TestCase
+    func testAdminDeleteUserProtectsLastAdmin(): Unit {
+        let dir = cliDir("delete-last-admin")
+        @Expect(runCli(["init", "-d", dir, "--username", "admin", "--password", "Passw0rd1"]), 0)
+        @Expect(runCli(["admin", "delete-user", "-d", dir, "--username", "admin"]), 1)
+    }
+
+    // admin delete-user 的守卫②：团队 owner 必须先转让（§7.4 约束 3）
+    //
+    // 纯函数 ownedTeamBlockingUserRemoval 的完整语义已由 server 包的
+    // TeamSelfServiceOpsTest.testOwnedTeamBlockingRemoval 覆盖；这里只确认
+    // CLI 分支对「不存在的用户」返回 1（守卫路径不误删）。
+    @TestCase
+    func testAdminDeleteUserUnknownReturnsOne(): Unit {
+        let dir = cliDir("delete-unknown")
+        @Expect(runCli(["init", "-d", dir, "--username", "admin", "--password", "Passw0rd1"]), 0)
+        @Expect(runCli(["admin", "delete-user", "-d", dir, "--username", "team-owner-user"]), 1)
+    }
 }

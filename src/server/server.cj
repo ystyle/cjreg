@@ -68,6 +68,13 @@ public func buildServer(
             app.post("/api/user/me/publish-token", { ctx => userApi.resetPublishToken(ctx) })
             app.get("/api/user/me/packages", { ctx => userApi.myPackages(ctx) })
             app.get("/api/user/me/teams", { ctx => userApi.myTeams(ctx) })
+            // owner 自助（服务端守卫 canManageTeam：管理员超集 / owner + selfService）
+            app.get("/api/user/me/teams/:id/members", { ctx => userApi.manageTeamMembers(ctx) })
+            app.post("/api/user/me/teams/:id/members", { ctx => userApi.manageTeamMembers(ctx) })
+            app.delete("/api/user/me/teams/:id/members/:userId", { ctx => userApi.removeTeamMemberSelf(ctx) })
+            app.post("/api/user/me/teams/:id/transfer", { ctx => userApi.transferTeamOwnerSelf(ctx) })
+            app.get("/api/user/me/teams/:id/links", { ctx => userApi.manageTeamLinks(ctx) })
+            app.put("/api/user/me/teams/:id/links", { ctx => userApi.manageTeamLinks(ctx) })
         case None => ()
     }
 
@@ -266,6 +273,17 @@ public func buildServer(
             app.get("/api/admin/organizations/:id", { ctx => adm.getOrganization(ctx) })
             app.put("/api/admin/organizations/:id", { ctx => adm.updateOrganization(ctx) })
             app.delete("/api/admin/organizations/:id", { ctx => adm.deleteOrganization(ctx) })
+            // 团队（含 owner 与 owner 自助开关）：全部 requireAdmin；owner 自助走门户 /api/user/me/teams/*
+            app.get("/api/admin/teams", { ctx => adm.listTeams(ctx) })
+            app.post("/api/admin/teams", { ctx => adm.createTeam(ctx) })
+            app.put("/api/admin/teams/:id", { ctx => adm.updateTeam(ctx) })
+            app.put("/api/admin/teams/:id/self-service", { ctx => adm.setTeamSelfService(ctx) })
+            app.delete("/api/admin/teams/:id", { ctx => adm.deleteTeam(ctx) })
+            app.get("/api/admin/teams/:id/members", { ctx => adm.listTeamMembers(ctx) })
+            app.post("/api/admin/teams/:id/members", { ctx => adm.addTeamMember(ctx) })
+            app.delete("/api/admin/teams/:id/members/:userId", { ctx => adm.removeTeamMember(ctx) })
+            app.get("/api/admin/teams/:id/links", { ctx => adm.getTeamLinks(ctx) })
+            app.put("/api/admin/teams/:id/links", { ctx => adm.setTeamLinks(ctx) })
             app.get("/api/admin/packages", { ctx => adm.listPackages(ctx) })
             app.get("/api/admin/packages/:id", { ctx => adm.getPackageVersion(ctx) })
             app.post("/api/admin/packages/:id/refetch", { ctx => adm.refetchPackageVersion(ctx) })

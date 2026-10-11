@@ -369,6 +369,7 @@ func cmdInit(dataDir: String, username: String, password: String, port: UInt16):
 //   sync-metadata：把索引聚合包缺的展示字段/README 从制品（.cjp）里回捞补齐
 func cmdAdmin(dataDir: String, sub: String, username: String, password: String, all: Bool): Int64 {
     let usage = "用法: cjreg admin reset-password --username <用户名> --password <新口令> [-d <数据目录>]\n" +
+        "      cjreg admin delete-user --username <用户名> [-d <数据目录>]\n" +
         "      cjreg admin sync-metadata [-d <数据目录>] [--all]"
     if (sub.isEmpty() || sub == "help") {
         println(usage)
@@ -376,6 +377,9 @@ func cmdAdmin(dataDir: String, sub: String, username: String, password: String, 
     }
     if (sub == "sync-metadata") {
         return cmdSyncMetadata(dataDir, all)
+    }
+    if (sub == "delete-user") {
+        return cmdDeleteUser(dataDir, username)
     }
     if (sub != "reset-password") {
         println("cjreg: 未知的 admin 子命令 ${sub}")
@@ -402,6 +406,53 @@ func cmdAdmin(dataDir: String, sub: String, username: String, password: String, 
             println("cjreg: 用户 ${username} 不存在（应急恢复不创建新用户）")
             return 1
     }
+}
+
+// admin delete-user：删除用户（应急/清理用）
+//
+// 守卫（§7.4 约束 3）：该用户是任一团队的 owner 时**拒绝删除**，必须先转让所有权 ——
+// 否则会留下无人能管理的团队（与「最后一个启用管理员不可降级」同构）。
+// 另外不允许删掉最后一个启用管理员（否则管理端会彻底锁死）。
+func cmdDeleteUser(dataDir: String, username: String): Int64 {
+    if (username.isEmpty()) {
+        println("cjreg: delete-user 需要 --username")
+        return 2
+    }
+    let stores = openStores(dataDir)
+    if (stores.isNone()) {
+        return 1
+    }
+    let (pkgStore, userStore, _) = stores.getOrThrow()
+    let target = match (userStore.getUserByUsername(username)) {
+        case Some(u) => u
+        case None =>
+            println("cjreg: 用户 ${username} 不存在")
+            userStore.storm.close()
+            return 1
+    }
+    // 守卫 1：团队 owner 必须先转让
+    let adminData = AdminDataStore(userStore.storm)
+    let blockingTeam = ownedTeamBlockingUserRemoval(adminData, target.id)
+    if (!blockingTeam.isEmpty()) {
+        println("cjreg: ${username} 是团队「${blockingTeam}」的所有者，请先转让所有权再删除")
+        userStore.storm.close()
+        return 1
+    }
+    // 守卫 2：不能删掉最后一个启用管理员
+    let authSvc = AuthService(userStore, 86400)
+    if (target.isAdmin && authSvc.countActiveAdmins() <= 1) {
+        println("cjreg: ${username} 是最后一个启用的管理员，拒绝删除")
+        userStore.storm.close()
+        return 1
+    }
+    let ok = userStore.removeUser(target.id)
+    userStore.storm.close()   // 必须 close 才落盘（badger flush）
+    if (ok) {
+        println("cjreg: 已删除用户 ${username}（id=${target.id}）")
+        return 0
+    }
+    println("cjreg: 删除用户 ${username} 失败")
+    1
 }
 
 // admin sync-metadata：存量包展示字段/README 回捞

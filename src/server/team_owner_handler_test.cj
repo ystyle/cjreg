@@ -401,3 +401,151 @@ class TeamPortalSelfServiceApiTest {
         }
     }
 }
+
+@Test
+class TeamAdminApiExtraTest {
+    // PUT /api/admin/teams/:id 的各条分支：局部更新、owner 变更（含非法）、清空 owner
+    @TestCase
+    func testAdminUpdateTeamBranches(): Unit {
+        let env = newHttpEnv()
+        try {
+            let token = seedAdminToken(env)
+            let _ = seedPlainUserToken(env, token, username: "u1", password: "U1Pass123")
+            let _ = seedPlainUserToken(env, token, username: "u2", password: "U2Pass123")
+            let tid = mkTeamViaApi(env, token, "upd", ownerName: "u1", selfService: true, permission: "read")
+            @Expect(tid > 0, true)
+            let uid2 = extractUserIdByName(bodyText(httpGet(env, "/api/admin/users", token: token)), "u2")
+
+            // ① 局部更新：只改 displayName，permission 与 selfService 保持
+            let r1 = httpPutJson(env, "/api/admin/teams/${tid}", "{\"displayName\":\"改名了\"}", token: token)
+            @Expect(r1.status, 200u16)
+            let list = bodyText(httpGet(env, "/api/admin/teams", token: token))
+            @Expect(list.contains("改名了"), true)
+            @Expect(list.contains("\"permission\":\"read\""), true)
+            @Expect(list.contains("\"selfService\":true"), true)
+
+            // ② 显式关闭 selfService
+            let r2 = httpPutJson(env, "/api/admin/teams/${tid}", "{\"selfService\":false}", token: token)
+            @Expect(r2.status, 200u16)
+            @Expect(bodyText(httpGet(env, "/api/admin/teams", token: token)).contains("\"selfService\":false"), true)
+
+            // ③ owner 变更为非成员 → 400（只能转给现有成员）
+            let r3 = httpPutJson(env, "/api/admin/teams/${tid}", "{\"ownerId\":" + uid2.toString() + "}", token: token)
+            @Expect(r3.status, 400u16)
+            @Expect(bodyText(r3).contains("成员"), true)
+
+            // ④ 清空 owner（ownerId = 0）
+            let r4 = httpPutJson(env, "/api/admin/teams/${tid}", "{\"ownerId\":0}", token: token)
+            @Expect(r4.status, 200u16)
+            @Expect(bodyText(httpGet(env, "/api/admin/teams", token: token)).contains("\"ownerId\":0"), true)
+
+            // ⑤ body 非法 → 400
+            @Expect(httpPutJson(env, "/api/admin/teams/${tid}", "junk", token: token).status, 400u16)
+        } finally {
+            env.close()
+        }
+    }
+
+    // 管理端关联端点：GET 空 → PUT 组织 → PUT 包 → 校验失败分支
+    @TestCase
+    func testAdminTeamLinks(): Unit {
+        let env = newHttpEnv()
+        try {
+            let token = seedAdminToken(env)
+            let tid = mkTeamViaApi(env, token, "links")
+            @Expect(tid > 0, true)
+
+            // 初始为空
+            let empty = httpGet(env, "/api/admin/teams/${tid}/links", token: token)
+            @Expect(empty.status, 200u16)
+            @Expect(bodyText(empty).contains("\"organizationIds\":[]"), true)
+
+            // 建组织并关联
+            let orgResp = httpPostJson(env, "/api/admin/organizations", "{\"name\":\"linkorg\"}", token: token)
+            let orgId = extractJsonInt(bodyText(orgResp), "id")
+            @Expect(orgId > 0, true)
+            let setOrgs = httpPutJson(env, "/api/admin/teams/${tid}/links",
+                "{\"organizationIds\":[" + orgId.toString() + "]}", token: token)
+            @Expect(setOrgs.status, 200u16)
+            @Expect(bodyText(httpGet(env, "/api/admin/teams/${tid}/links", token: token)).contains(orgId.toString()), true)
+
+            // 关联不存在的组织 → 400
+            @Expect(httpPutJson(env, "/api/admin/teams/${tid}/links",
+                "{\"organizationIds\":[99999]}", token: token).status, 400u16)
+
+            // 关联不存在的包 → 400
+            @Expect(httpPutJson(env, "/api/admin/teams/${tid}/links",
+                "{\"packages\":[{\"organization\":\"x\",\"name\":\"ghost\"}]}", token: token).status, 400u16)
+
+            // body 非法 → 400
+            @Expect(httpPutJson(env, "/api/admin/teams/${tid}/links", "junk", token: token).status, 400u16)
+            // 团队不存在 → 404
+            @Expect(httpGet(env, "/api/admin/teams/99999/links", token: token).status, 404u16)
+            @Expect(httpPutJson(env, "/api/admin/teams/99999/links", "{}", token: token).status, 404u16)
+
+            // 成员端点：不存在团队 404 / 加不存在的用户 404 / 非法 userId 400
+            @Expect(httpGet(env, "/api/admin/teams/99999/members", token: token).status, 404u16)
+            @Expect(httpPostJson(env, "/api/admin/teams/${tid}/members",
+                "{\"userId\":99999}", token: token).status, 404u16)
+            @Expect(httpPostJson(env, "/api/admin/teams/${tid}/members", "junk", token: token).status, 400u16)
+            @Expect(httpPostJson(env, "/api/admin/teams/99999/members", "{\"userId\":1}",
+                token: token).status, 404u16)
+        } finally {
+            env.close()
+        }
+    }
+
+    // 门户关联端点：owner 自助 PUT/GET；非 owner 403；非法 body 400
+    @TestCase
+    func testPortalTeamLinks(): Unit {
+        let env = newHttpEnv()
+        try {
+            let token = seedAdminToken(env)
+            let ownerToken = seedPlainUserToken(env, token, username: "linkown", password: "LinkOwn12")
+            let otherToken = seedPlainUserToken(env, token, username: "linkother", password: "LinkOth12")
+            let tid = mkTeamViaApi(env, token, "plinks", ownerName: "linkown", selfService: true)
+            @Expect(tid > 0, true)
+            let orgResp = httpPostJson(env, "/api/admin/organizations", "{\"name\":\"plinkorg\"}", token: token)
+            let orgId = extractJsonInt(bodyText(orgResp), "id")
+
+            // owner 设组织关联 → 200；GET 能看到
+            let set = httpPutJson(env, "/api/user/me/teams/${tid}/links",
+                "{\"organizationIds\":[" + orgId.toString() + "]}", token: ownerToken)
+            @Expect(set.status, 200u16)
+            @Expect(bodyText(httpGet(env, "/api/user/me/teams/${tid}/links", token: ownerToken)).contains(orgId.toString()), true)
+
+            // 非 owner → 403；GET 也 403
+            @Expect(httpPutJson(env, "/api/user/me/teams/${tid}/links",
+                "{\"organizationIds\":[]}", token: otherToken).status, 403u16)
+            @Expect(httpGet(env, "/api/user/me/teams/${tid}/links", token: otherToken).status, 403u16)
+
+            // owner 清空关联 → 200
+            @Expect(httpPutJson(env, "/api/user/me/teams/${tid}/links",
+                "{\"organizationIds\":[]}", token: ownerToken).status, 200u16)
+
+            // 非法 body → 400
+            @Expect(httpPutJson(env, "/api/user/me/teams/${tid}/links", "junk", token: ownerToken).status, 400u16)
+            // 团队不存在 → 404
+            @Expect(httpGet(env, "/api/user/me/teams/99999/links", token: ownerToken).status, 404u16)
+        } finally {
+            env.close()
+        }
+    }
+
+    // 管理端自助开关的更多分支：body 非法 400
+    @TestCase
+    func testSelfServiceBodyValidation(): Unit {
+        let env = newHttpEnv()
+        try {
+            let token = seedAdminToken(env)
+            let _ = seedPlainUserToken(env, token, username: "ssown", password: "SsOwn123")
+            let tid = mkTeamViaApi(env, token, "ssval", ownerName: "ssown", selfService: false)
+            @Expect(httpPutJson(env, "/api/admin/teams/${tid}/self-service", "junk", token: token).status, 400u16)
+            // 关闭自助不需要 owner（只有开启才要求）
+            @Expect(httpPutJson(env, "/api/admin/teams/${tid}/self-service", "{\"enabled\":false}",
+                token: token).status, 200u16)
+        } finally {
+            env.close()
+        }
+    }
+}

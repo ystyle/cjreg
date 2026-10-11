@@ -324,3 +324,108 @@ public class PortalOwnerPanelRenderTest {
         @Expect(logs[0].detail.contains("teamId=${tid}"), true)
     }
 }
+
+@Test
+public class PortalLinkPanelTest {
+    // owner 改组织关联：toggle 一次关联、再 toggle 取消
+    @TestCase
+    public func testToggleTeamOrg(): Unit {
+        let (state, owner, _, tid) = ownerPanelState(selfService: true)
+        let oid = state.adminData.createOrg("acme", "", owner.id, 1000)
+        let page = mountAs(state, owner)
+        let (actx, _) = portalActionCtx(state, userCtxMap(owner.id, owner.username, false))
+        let _ = page.openManageMembers(actx, tid, "面板团队")
+        @Expect(page.linkOrgs.get().size, 0)
+
+        // 关联
+        let _ = page.toggleTeamOrg(actx, oid)
+        @Expect(page.linkOrgs.get().size, 1)
+        @Expect(page.linkOrgs.get()[0], oid.toString())
+        @Expect(state.adminData.listTeamOrganizationIds(tid).size, 1)
+
+        // 再 toggle → 取消
+        let _ = page.toggleTeamOrg(actx, oid)
+        @Expect(page.linkOrgs.get().size, 0)
+        @Expect(state.adminData.listTeamOrganizationIds(tid).size, 0)
+    }
+
+    // owner 包关联：加（org::name 与裸名两种写法）+ 移除
+    @TestCase
+    public func testAddAndRemoveTeamPkg(): Unit {
+        let (state, owner, _, tid) = ownerPanelState(selfService: true)
+        // 造两个真实包：带组织 / 无组织
+        let a = PackageDoc()
+        a.organization = "acme"
+        a.name = "demo"
+        a.version = "1.0.0"
+        state.pkgStore.save(a)
+        let b = PackageDoc()
+        b.organization = ""
+        b.name = "plain"
+        b.version = "1.0.0"
+        state.pkgStore.save(b)
+
+        let page = mountAs(state, owner)
+        let (actx, _) = portalActionCtx(state, userCtxMap(owner.id, owner.username, false))
+        let _ = page.openManageMembers(actx, tid, "面板团队")
+
+        // org::name 写法
+        page.linkPkgInput.set("acme::demo")
+        let _ = page.addTeamPkg(actx)
+        @Expect(page.msgOk.get(), true)
+        @Expect(state.adminData.listTeamPackages(tid).size, 1)
+        @Expect(page.linkPkgInput.get(), "")
+
+        // 裸包名写法
+        page.linkPkgInput.set("plain")
+        let _ = page.addTeamPkg(actx)
+        @Expect(state.adminData.listTeamPackages(tid).size, 2)
+
+        // 移除第一个
+        let _ = page.removeTeamPkg(actx, "acme", "demo")
+        @Expect(state.adminData.listTeamPackages(tid).size, 1)
+
+        // 空输入 / 包不存在
+        page.linkPkgInput.set("  ")
+        let _ = page.addTeamPkg(actx)
+        @Expect(page.msgOk.get(), false)
+        page.linkPkgInput.set("acme::ghost")
+        let _ = page.addTeamPkg(actx)
+        @Expect(page.msgOk.get(), false)
+        @Expect(page.msg.get().contains("不存在"), true)
+    }
+
+    // 非 owner 直接调关联 action → 被服务端守卫拒绝，数据不变
+    @TestCase
+    public func testNonOwnerCannotChangeLinks(): Unit {
+        let (state, owner, member, tid) = ownerPanelState(selfService: true)
+        state.adminData.addTeamMember(tid, member.id)
+        let oid = state.adminData.createOrg("acme", "", owner.id, 1000)
+        let page = mountAs(state, member)
+        let (actx, _) = portalActionCtx(state, userCtxMap(member.id, member.username, false))
+        let _ = page.openManageMembers(actx, tid, "面板团队")
+
+        let _ = page.toggleTeamOrg(actx, oid)
+        @Expect(page.msgOk.get(), false)
+        @Expect(state.adminData.listTeamOrganizationIds(tid).size, 0)
+
+        page.linkPkgInput.set("acme::demo")
+        let _ = page.addTeamPkg(actx)
+        @Expect(page.msgOk.get(), false)
+        @Expect(state.adminData.listTeamPackages(tid).size, 0)
+    }
+
+    // 关联区块在面板里渲染出来（组织按钮 + 包输入框）
+    @TestCase
+    public func testLinkPanelRenders(): Unit {
+        let (state, owner, _, tid) = ownerPanelState(selfService: true)
+        let _ = state.adminData.createOrg("acme", "示例组织", owner.id, 1000)
+        let page = mountAs(state, owner)
+        let (actx, _) = portalActionCtx(state, userCtxMap(owner.id, owner.username, false))
+        let _ = page.openManageMembers(actx, tid, "面板团队")
+        let json = renderPortal(page)
+        @Expect(json.contains("关联范围"), true)
+        @Expect(json.contains("关联该包"), true)
+        @Expect(json.contains("acme"), true)
+    }
+}

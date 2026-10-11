@@ -88,7 +88,7 @@
   - 删除 owner 用户 → 409（先转让）。
 - **UI 渲染层**：门户团队区块的 owner 面板可见性三态（owner+开 / owner+关 / 非 owner）；
   管理端表单 `selfService` 开关渲染与提交。
-- **回归**：`cjpm test` 全量 936+ 例必须 0 FAILED / 0 ERROR（覆盖率不低于 91.9%）。
+- **回归**：`cjpm test` 全量 1002 例 0 FAILED / 0 ERROR，覆盖率 91.3%（≥90%）。
 
 ### ② 界面集成测试（真实浏览器）
 
@@ -126,16 +126,16 @@
 
 ## 5. 验证结果（三种，全部实跑）
 
-### ① 单元测试：994 例全绿
+### ① 单元测试：1002 例全绿
 
-`cjpm test -j 16 --no-progress --parallel 1` → **TOTAL 994 / PASSED 994 / FAILED 0 / ERROR 0**
-（本迭代新增 58 例：纯函数 26 + handler HTTP 13 + 门户渲染 16 + CLI 3。）
+`cjpm test -j 16 --no-progress --parallel 1` → **TOTAL 1002 / PASSED 1002 / FAILED 0 / ERROR 0**
+（本迭代新增 66 例：纯函数 31 + handler HTTP 17 + 门户渲染 20 + CLI 3。整体覆盖率 **91.3%**。）
 
 | 层 | 文件 | 例数 | 守住什么 |
 |---|---|---|---|
-| 纯函数 | `src/server/team_owner_service_test.cj` | 26 | canManageTeam 六态、自助写操作规则、owner 不带来权限、关联→权限串联 |
-| handler HTTP | `src/server/team_owner_handler_test.cj` | 13 | ★越权（非 owner / 自助关 / 匿名）、管理员超集、审计留痕 |
-| 门户渲染 | `src/ui/public/cov_team_owner_portal_test.cj` | 16 | 入口三态、面板交互，以及**绕过按钮直接调 action 仍被服务端守卫拒绝** |
+| 纯函数 | `src/server/team_owner_service_test.cj` | 31 | canManageTeam 六态、自助写操作规则、owner 不带来权限、关联→权限串联 |
+| handler HTTP | `src/server/team_owner_handler_test.cj` | 17 | ★越权（非 owner / 自助关 / 匿名）、管理员超集、审计留痕 |
+| 门户渲染 | `src/ui/public/cov_team_owner_portal_test.cj` | 20 | 入口三态、面板交互，以及**绕过按钮直接调 action 仍被服务端守卫拒绝** |
 | CLI | `src/main_test.cj` | 3 | admin delete-user 的返回码与守卫 |
 
 ### ② 界面集成测试：真实浏览器（agent-browser）

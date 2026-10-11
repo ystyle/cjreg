@@ -31,20 +31,6 @@ func fmtSize(bytes: Int64): String {
     return "${bytes / (k * k * k)} GB"
 }
 
-// 信号驱动的内容包装：cjxt 的 Dialog 保留首次构造的静态子节点（只有自带订阅的组件如 Table 才会更新），
-// 所以对话框里的动态内容必须包在「组件 + 信号」里 —— 组件 render 时读信号会登记依赖，信号变即重渲染。
-class SignalView <: Component {
-    let build: () -> IComponent
-
-    init(build: () -> IComponent) {
-        this.build = build
-    }
-
-    public func render(): IComponent {
-        this.build()
-    }
-}
-
 // 时间单元格：不换行。时间戳里有空格（"09-16 00:24"），单元格宽度不足时会折成两行、
 // 整张表跟着变高；列宽已按格式给足，这里再钉一次 white-space。
 func timeCell(t: String): IComponent {

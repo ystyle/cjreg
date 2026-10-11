@@ -207,11 +207,8 @@
 .portal-link-row { display: flex; gap: 12px; align-items: center; font-size: 13px; color: #606266; }
 .portal-link-row > * { margin-left: 0 !important; }
 
-/* owner 自助面板用「子面板」而不是再套一张 Card：门户的团队区块本身已经是卡片，
-   里面再放 Card 会出现两层阴影、层次也乱。子面板用浅底 + 细边与父卡片区分。 */
-.portal-subpanel { background: #fafbfc; border: 1px solid #ebeef5; border-radius: 12px; padding: 20px; margin-top: 18px; }
-.portal-subpanel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
-.portal-subpanel-title { font-size: 15px; font-weight: 600; color: #303133; }
+/* owner 自助改走对话框（.el-dialog，与管理端的成员/组织/包弹窗同一套交互），
+   原先内联展开用的 .portal-subpanel* 已随之下线。 */
 
 /* ===== 版本详情对话框（键值块 + README）===== */
 .kv-block { padding: 4px 0 8px; }

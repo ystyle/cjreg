@@ -158,3 +158,19 @@ public func statCard(value: String, label: String, icon: String, color: String):
     ], attrs: Some(HashMap<String, String>([("class", cls("stat-card")),
         ("style", "border-top: 3px solid ${color}")])))
 }
+
+// 信号驱动的内容包装（框架级）：cjxt 的 Dialog / Drawer 保留**首次构造**的静态子节点与 title
+// （只有自带订阅的组件如 Table 才会更新），所以对话框里的动态内容必须包在「组件 + 信号」里 ——
+// 组件 render 时读信号会登记依赖，信号一变即重渲染。
+// 管理端与门户的对话框都要用，故放框架包而不是某个站点面。
+public class SignalView <: Component {
+    let build: () -> IComponent
+
+    public init(build: () -> IComponent) {
+        this.build = build
+    }
+
+    public func render(): IComponent {
+        this.build()
+    }
+}

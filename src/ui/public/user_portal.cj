@@ -42,7 +42,8 @@ class UserPortalPage <: Component {
     var teamRows = Signal<ArrayList<MyTeamRow>>(ArrayList<MyTeamRow>())
 
     // ===== owner 自助（团队所有者管理本队成员）=====
-    // 当前正在管理的团队（0 = 面板未打开）
+    // 管理对话框显隐（Dialog.visible 要 Signal<Bool>）+ 当前正在管理的团队（0 = 未打开）
+    var manageVisible = Signal<Bool>(false)
     var manageTeamId = Signal<Int64>(0)
     var manageTeamName = Signal<String>("")
     // 该团队成员（打开面板时载入）
@@ -187,12 +188,16 @@ class UserPortalPage <: Component {
         this.manageTeamName.set(teamName)
         this.addMemberName.set("")
         this.reloadMembers()
+        this.manageVisible.set(true)
         PatchResult.ReRender
     }
 
     func closeManageMembers(ctx: ActionContext): PatchResult {
+        this.manageVisible.set(false)
         this.manageTeamId.set(0)
         this.memberRows.set(ArrayList<TeamMemberResp>())
+        this.linkOrgs.set(ArrayList<String>())
+        this.linkPkgs.set(ArrayList<String>())
         PatchResult.ReRender
     }
 
@@ -619,11 +624,9 @@ class UserPortalPage <: Component {
             } else {
                 div([table])
             },
-            if (this.manageTeamId.get() > 0) {
-                this.renderManagePanel()
-            } else {
-                div()
-            },
+            // owner 自助走对话框（与管理端 teams_page 的成员/组织/包弹窗同一套交互），
+            // 不再内联展开 —— 内联会把整个门户往下顶，且两端口径不一致。
+            this.renderManageDialog(),
         ], attrs: Some(HashMap<String, String>([("class", cls("portal-section"))])))
     }
 
@@ -632,14 +635,14 @@ class UserPortalPage <: Component {
     // 排版约定：面板本身是一张 Card（与后台同一套视觉），内部按「分组标题 + 内容 + 按钮行」组织；
     // 按钮行一律走 portal-inline-row / card-actions（flex + gap）——以前把按钮直接塞进裸 div，
     // 没有 flex 也没有 gap，所以挤成一坨、上下也没有呼吸感。
-    func renderManagePanel(): IComponent {
+    func renderManageDialog(): IComponent {
         let addMemberH: ActionHandler = { ctx => this.addMember(ctx) }
         let closeManageH: ActionHandler = { ctx => this.closeManageMembers(ctx) }
         let memberTable = Table<TeamMemberResp>()
             .data(this.memberRows)
             .stripe()
             .emptyText("该团队暂无成员")
-            .add(TableColumn<TeamMemberResp>().label("成员").minWidth(180).render({ r, i =>
+            .add(TableColumn<TeamMemberResp>().label("成员").width(260).render({ r, i =>
                 if (r.isOwner) {
                     div([
                         text(r.username),
@@ -649,7 +652,7 @@ class UserPortalPage <: Component {
                     text(r.username)
                 }
             }))
-            .add(TableColumn<TeamMemberResp>().label("操作").width(230).render({ r, i =>
+            .add(TableColumn<TeamMemberResp>().label("操作").width(240).render({ r, i =>
                 if (r.isOwner) {
                     div([text("所有者，需先转让")], attrs: Some(HashMap<String, String>([("class", cls("portal-dim"))])))
                 } else {
@@ -661,24 +664,29 @@ class UserPortalPage <: Component {
                     ], attrs: Some(HashMap<String, String>([("class", cls("portal-inline"))])))
                 }
             }))
-        div([
-            // 面板头：标题 + 收起（收起放右上角，比孤零零压在底部更符合直觉）
-            div([
-                div([text("管理团队成员 · ${this.manageTeamName.get()}")],
-                    attrs: Some(HashMap<String, String>([("class", cls("portal-subpanel-title"))]))),
-                Button("收起").size(ButtonSize.Small).onClick(closeManageH),
-            ], attrs: Some(HashMap<String, String>([("class", cls("portal-subpanel-head"))]))),
-            div([text("成员管理")], attrs: Some(HashMap<String, String>([("class", cls("portal-group-title"))]))),
-            div([
-                Input().bind(this.addMemberName).placeholder("要加入的用户名"),
-                Button("加入团队").size(ButtonSize.Small).kind(ButtonKind.Primary).onClick(addMemberH),
-            ], attrs: Some(HashMap<String, String>([("class", cls("portal-inline-row"))]))),
-            div([memberTable], attrs: Some(HashMap<String, String>([("class", cls("portal-table-wrap"))]))),
-            div([text("关联范围")], attrs: Some(HashMap<String, String>([("class", cls("portal-group-title"))]))),
-            div([text("团队绑定哪些组织/包，决定成员的有效发布权限。")],
-                attrs: Some(HashMap<String, String>([("class", cls("portal-hint"))]))),
-            this.renderLinkPanel(),
-        ], attrs: Some(HashMap<String, String>([("class", cls("portal-subpanel"))])))
+        // Dialog 的静态子节点是首次渲染的快照，且标题也是快照 → 正文与标题都走 SignalView
+        Dialog([
+            SignalView({ => div([
+                div([text("成员管理")], attrs: Some(HashMap<String, String>([("class", cls("portal-group-title"))]))),
+                div([
+                    Input().bind(this.addMemberName).placeholder("要加入的用户名"),
+                    Button("加入团队").size(ButtonSize.Small).kind(ButtonKind.Primary).onClick(addMemberH),
+                ], attrs: Some(HashMap<String, String>([("class", cls("portal-inline-row"))]))),
+                div([memberTable], attrs: Some(HashMap<String, String>([("class", cls("portal-table-wrap"))]))),
+                div([text("关联范围")], attrs: Some(HashMap<String, String>([("class", cls("portal-group-title"))]))),
+                div([text("团队绑定哪些组织/包，决定成员的有效发布权限。")],
+                    attrs: Some(HashMap<String, String>([("class", cls("portal-hint"))]))),
+                this.renderLinkPanel(),
+            ]) }),
+        ])
+            .visible(this.manageVisible)
+            .header([SignalView({ => text("管理团队成员 · ${this.manageTeamName.get()}") })])
+            .width("720px")
+            .top("8vh")
+            .closeOnClickModal(false)
+            .footer([
+                Button([text("关闭")]).onClick(closeManageH),
+            ])
     }
 
     // 关联范围：组织（点一下切换关联）+ 包（增删）。

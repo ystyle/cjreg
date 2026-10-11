@@ -85,6 +85,9 @@ public class PortalOwnerPanelRenderTest {
         let _ = page.openManageMembers(actx, tid, "面板团队")
         @Expect(page.manageTeamId.get(), tid)
         @Expect(page.manageTeamName.get(), "面板团队")
+        // 走对话框（与管理端同一套交互）：显隐由独立信号控制，且渲染出 el-dialog
+        @Expect(page.manageVisible.get(), true)
+        @Expect(renderPortal(page).contains("el-dialog"), true)
         let rows = page.memberRows.get()
         @Expect(rows.size, 2)
         var ownerMarked = false
@@ -99,6 +102,9 @@ public class PortalOwnerPanelRenderTest {
         let json = renderPortal(page)
         @Expect(json.contains("管理团队成员"), true)
         @Expect(json.contains("panelmember"), true)
+        // 对话框形态：标题走 SignalView（Dialog 的静态 title 是首帧快照），正文含表格与关联区块
+        @Expect(json.contains("关联范围"), true)
+        @Expect(json.contains("el-dialog"), true)
     }
 
     // 收起面板：清空状态
@@ -111,8 +117,12 @@ public class PortalOwnerPanelRenderTest {
         @Expect(page.memberRows.get().size, 1)
 
         let _ = page.closeManageMembers(actx)
+        @Expect(page.manageVisible.get(), false)
         @Expect(page.manageTeamId.get(), 0)
         @Expect(page.memberRows.get().size, 0)
+        // 关闭时关联状态一并清掉，下次打开不会带上次的残留
+        @Expect(page.linkOrgs.get().size, 0)
+        @Expect(page.linkPkgs.get().size, 0)
         @Expect(renderPortal(page).contains("管理团队成员"), false)
     }
 

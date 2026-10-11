@@ -179,6 +179,27 @@
 .portal-token-row .el-input { flex: 1; }
 .portal-search { max-width: 360px; margin-bottom: 16px; }
 
+/* owner 自助面板（门户 /me 的「管理团队成员」）：
+   面板用 Card 承载，内部按「分组标题 / 内容 / 按钮行」组织。
+   按钮行必须走下面这两个 flex 容器 —— 直接把按钮塞进裸 div 会没有 gap，
+   它们会挤在一起（这是修前的实际症状）。 */
+.portal-group-title { font-size: 14px; font-weight: 600; color: #303133; margin: 20px 0 10px; padding-top: 14px; border-top: 1px solid #ebeef5; }
+.portal-group-title:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+.portal-inline-row { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.portal-inline-row .el-input { flex: 1; max-width: 320px; }
+.portal-inline { display: flex; gap: 8px; align-items: center; }
+.portal-dim { color: #909399; font-size: 13px; }
+.portal-table-wrap { margin-bottom: 4px; }
+.portal-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.portal-link-list { display: flex; flex-direction: column; gap: 8px; }
+.portal-link-row { display: flex; gap: 12px; align-items: center; font-size: 13px; color: #606266; }
+
+/* owner 自助面板用「子面板」而不是再套一张 Card：门户的团队区块本身已经是卡片，
+   里面再放 Card 会出现两层阴影、层次也乱。子面板用浅底 + 细边与父卡片区分。 */
+.portal-subpanel { background: #fafbfc; border: 1px solid #ebeef5; border-radius: 12px; padding: 20px; margin-top: 18px; }
+.portal-subpanel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+.portal-subpanel-title { font-size: 15px; font-weight: 600; color: #303133; }
+
 /* ===== 版本详情对话框（键值块 + README）===== */
 .kv-block { padding: 4px 0 8px; }
 .kv-row { display: flex; gap: 12px; padding: 6px 0; border-bottom: 1px dashed #ebeef5; font-size: 13px; line-height: 1.6; }

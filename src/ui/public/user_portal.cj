@@ -627,50 +627,61 @@ class UserPortalPage <: Component {
         ], attrs: Some(HashMap<String, String>([("class", cls("portal-section"))])))
     }
 
-    // owner 自助面板：成员列表 + 加人 + 移出 + 转让
+    // owner 自助面板（迭代 6）：成员管理 + 关联范围。
+    //
+    // 排版约定：面板本身是一张 Card（与后台同一套视觉），内部按「分组标题 + 内容 + 按钮行」组织；
+    // 按钮行一律走 portal-inline-row / card-actions（flex + gap）——以前把按钮直接塞进裸 div，
+    // 没有 flex 也没有 gap，所以挤成一坨、上下也没有呼吸感。
     func renderManagePanel(): IComponent {
         let addMemberH: ActionHandler = { ctx => this.addMember(ctx) }
         let closeManageH: ActionHandler = { ctx => this.closeManageMembers(ctx) }
         let memberTable = Table<TeamMemberResp>()
             .data(this.memberRows)
             .stripe()
-            .add(TableColumn<TeamMemberResp>().label("成员").minWidth(160).render({ r, i =>
+            .emptyText("该团队暂无成员")
+            .add(TableColumn<TeamMemberResp>().label("成员").minWidth(180).render({ r, i =>
                 if (r.isOwner) {
-                    div([text(r.username), Tag([text("owner")]).kind(ComponentKind.Warning)])
+                    div([
+                        text(r.username),
+                        Tag([text("owner")]).kind(ComponentKind.Warning),
+                    ], attrs: Some(HashMap<String, String>([("class", cls("portal-inline"))])))
                 } else {
                     text(r.username)
                 }
             }))
-            .add(TableColumn<TeamMemberResp>().label("操作").width(200).render({ r, i =>
+            .add(TableColumn<TeamMemberResp>().label("操作").width(230).render({ r, i =>
                 if (r.isOwner) {
-                    text("（所有者，需先转让）")
+                    div([text("所有者，需先转让")], attrs: Some(HashMap<String, String>([("class", cls("portal-dim"))])))
                 } else {
                     let removeH: ActionHandler = { ctx => this.askRemoveMember(ctx, r.userId, r.username) }
                     let transferH: ActionHandler = { ctx => this.askTransferOwner(ctx, r.userId) }
                     div([
                         Button("移出").size(ButtonSize.Small).onClick(removeH),
                         Button("转让所有权").size(ButtonSize.Small).onClick(transferH),
-                    ])
+                    ], attrs: Some(HashMap<String, String>([("class", cls("portal-inline"))])))
                 }
             }))
         div([
-            div([text("管理团队成员 · ${this.manageTeamName.get()}")],
-                attrs: Some(HashMap<String, String>([("class", cls("portal-section-title"))]))),
+            // 面板头：标题 + 收起（收起放右上角，比孤零零压在底部更符合直觉）
+            div([
+                div([text("管理团队成员 · ${this.manageTeamName.get()}")],
+                    attrs: Some(HashMap<String, String>([("class", cls("portal-subpanel-title"))]))),
+                Button("收起").size(ButtonSize.Small).onClick(closeManageH),
+            ], attrs: Some(HashMap<String, String>([("class", cls("portal-subpanel-head"))]))),
+            div([text("成员管理")], attrs: Some(HashMap<String, String>([("class", cls("portal-group-title"))]))),
             div([
                 Input().bind(this.addMemberName).placeholder("要加入的用户名"),
-                Button("加入团队").size(ButtonSize.Small).onClick(addMemberH),
-                Button("收起").size(ButtonSize.Small).onClick(closeManageH),
-            ], attrs: Some(HashMap<String, String>([("class", cls("portal-hint"))]))),
-            if (this.memberRows.get().size == 0) {
-                emptyState("该团队暂无成员")
-            } else {
-                div([memberTable])
-            },
+                Button("加入团队").size(ButtonSize.Small).kind(ButtonKind.Primary).onClick(addMemberH),
+            ], attrs: Some(HashMap<String, String>([("class", cls("portal-inline-row"))]))),
+            div([memberTable], attrs: Some(HashMap<String, String>([("class", cls("portal-table-wrap"))]))),
+            div([text("关联范围")], attrs: Some(HashMap<String, String>([("class", cls("portal-group-title"))]))),
+            div([text("团队绑定哪些组织/包，决定成员的有效发布权限。")],
+                attrs: Some(HashMap<String, String>([("class", cls("portal-hint"))]))),
             this.renderLinkPanel(),
-        ], attrs: Some(HashMap<String, String>([("class", cls("portal-section"))])))
+        ], attrs: Some(HashMap<String, String>([("class", cls("portal-subpanel"))])))
     }
 
-    // 关联管理：组织（勾选/取消）+ 包（增删）。
+    // 关联范围：组织（点一下切换关联）+ 包（增删）。
     // 这一步决定成员的有效权限范围 —— 只改成员不改关联，等于没真正下放发布权。
     func renderLinkPanel(): IComponent {
         let st = match (this.state) {
@@ -678,18 +689,15 @@ class UserPortalPage <: Component {
             case None => return div()
         }
         let teamId = this.manageTeamId.get()
-        let orgRows = ArrayList<IComponent>()
+        let orgChips = ArrayList<IComponent>()
         for (o in st.adminData.listOrgs()) {
             let linked = this.linkOrgs.get().contains(o.id.toString())
             let label = if (o.displayName.isEmpty()) { o.name } else { "${o.name}（${o.displayName}）" }
             let toggleH: ActionHandler = { ctx => this.toggleTeamOrg(ctx, o.id) }
-            orgRows.add(div([
-                Button(if (linked) { "已关联 ✓" } else { "关联" })
-                    .size(ButtonSize.Small)
-                    .kind(if (linked) { ButtonKind.Primary } else { ButtonKind.Default })
-                    .onClick(toggleH),
-                text(" " + label),
-            ]))
+            orgChips.add(Button(if (linked) { "✓ ${label}" } else { label })
+                .size(ButtonSize.Small)
+                .kind(if (linked) { ButtonKind.Primary } else { ButtonKind.Default })
+                .onClick(toggleH))
         }
         let pkgRows = ArrayList<IComponent>()
         for (p in st.adminData.listTeamPackages(teamId)) {
@@ -699,27 +707,26 @@ class UserPortalPage <: Component {
             pkgRows.add(div([
                 text(if (orgName.isEmpty()) { pkgName } else { "${orgName}::${pkgName}" }),
                 Button("移除").size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(rmH),
-            ]))
+            ], attrs: Some(HashMap<String, String>([("class", cls("portal-link-row"))]))))
         }
         let addPkgH: ActionHandler = { ctx => this.addTeamPkg(ctx) }
         div([
-            div([text("关联范围（决定成员的有效发布权限）")],
-                attrs: Some(HashMap<String, String>([("class", cls("portal-section-title"))]))),
-            if (orgRows.size == 0) {
-                div([text("（当前没有组织）")])
+            if (orgChips.size == 0) {
+                div([text("当前没有可关联的组织（先在后台创建组织）")],
+                    attrs: Some(HashMap<String, String>([("class", cls("portal-hint"))])))
             } else {
-                div(orgRows.toArray())
+                div(orgChips.toArray(), attrs: Some(HashMap<String, String>([("class", cls("portal-chips"))])))
             },
             div([
                 Input().bind(this.linkPkgInput).placeholder("包名，如 acme::demo"),
                 Button("关联该包").size(ButtonSize.Small).onClick(addPkgH),
-            ]),
+            ], attrs: Some(HashMap<String, String>([("class", cls("portal-inline-row"))]))),
             if (pkgRows.size == 0) {
-                div([text("（尚未关联任何包）")])
+                div([text("尚未关联任何包")], attrs: Some(HashMap<String, String>([("class", cls("portal-hint"))])))
             } else {
-                div(pkgRows.toArray())
+                div(pkgRows.toArray(), attrs: Some(HashMap<String, String>([("class", cls("portal-link-list"))])))
             },
-        ], attrs: Some(HashMap<String, String>([("class", cls("portal-section"))])))
+        ])
     }
 
     // 移出确认

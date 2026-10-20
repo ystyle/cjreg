@@ -34,7 +34,7 @@
 
 - **路演脚本与答辩手册**：[`docs/roadshow-script.md`](roadshow-script.md)（10 分钟配时、上台前检查、六步现场演示、三档预案、12 条 Q&A、口袋卡）
 - **路演 PPT（12 页）**：[`docs/finals-roadshow-v0.3.0.pptx`](finals-roadshow-v0.3.0.pptx)（生成脚本 `scripts/make_roadshow_pptx.py`，可改后重出）
-- **演示视频分镜**：[`docs/demo-video.md`](demo-video.md)（九段分镜：部署 → 发布 → 多仓代理 → 权限 → 门户 → 审计/公开 API → 三级删除 → 版本与镜像）
+- **演示视频分镜（非决赛提交项）**：[`docs/demo-video.md`](demo-video.md) —— 视频是**初赛**必交材料；决赛规则里没有视频要求，路演以 **PPT + 现场演示 + 答辩** 为主，已录制的视频只作现场异常时的兜底素材
 - **一键演示环境**：`bash scripts/demo-data.sh`（起 A/B 双仓 + 演示组织/用户/包 + 发布计划推送，可重置）
   / `bash scripts/demo-live.sh {prepare|status|clean}`（生产主站 + 演示空站实景）
 - **路演结构**（10 分钟，按评分维度配时间）：

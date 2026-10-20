@@ -88,7 +88,9 @@ bash scripts/demo-live.sh reset-upstream   # 把演示空站清空重建（才�
 下载侧 `BlobStore.stream` + handler 直接 `body(stream)`；回源同样流式落盘。峰值内存与包体无关（200 MiB 实测 291 MiB）。
 
 **Q3 为什么选 bstorm / badger（LSM）而不是 SQLite？**
-纯仓颉实现（无 C 依赖，静态单二进制）、事务与恢复语义够用、内容寻址的 blob 与 KV 天然匹配；
+**直接原因是当时的生态约束：写这个项目时仓颉还没有完整可用的 SQLite 驱动**（原生绑定不成熟），
+所以选了当时唯一成熟的纯仓颉 LSM 方案 bstorm/badger —— 无 C 依赖、静态单二进制。
+事后看也合适：包/版本/审计都是 KV + 内容寻址 blob，事务与恢复语义够用；
 写入 `syncWrites` + 优雅关闭 flush 保证不丢已确认写入。
 
 **Q4 权限模型为什么是「首个发布者即 owner」？**

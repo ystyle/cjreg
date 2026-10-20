@@ -4,6 +4,7 @@ from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+from pptx.enum.shapes import MSO_SHAPE
 
 ACCENT = RGBColor(0x2B, 0x6C, 0xB0)
 DARK = RGBColor(0x1A, 0x20, 0x2C)
@@ -126,21 +127,80 @@ table(s, 0.55, 1.45, 12.2, rows, col_w=[1.7, 5.3, 5.2], size=13)
 
 # ---------- 4 架构 ----------
 s = prs.slides.add_slide(BLANK)
-title_bar(s, "技术方案：分层与关键取舍", "纯仓颉实现，静态单二进制；依赖 bstorm（KV）、cjxt（UI/WS）、tang（HTTP）")
-bullets(s, 0.7, 1.75, 6.0, 4.8, [
-    "protocol —— 官方发布/下载二进制协议、URL 分片",
-    "index —— NDJSON 生成与兼容解析",
-    "store —— bstorm 文档层（包/用户/上游/团队/审计）",
-    "server —— 发布裁决、代理回源、计划执行、handler",
-    "ui —— cjxt 页面（公共面 / 管理面分包子包）",
-    "protocol 与 handler 之间全部走 DTO 序列化",
-], size=16, space=10)
-bullets(s, 7.0, 1.75, 5.6, 4.8, [
-    "为什么不用 SQLite：LSM + 纯仓颉、无 C 依赖，单二进制",
-    "为什么自研 tar/gzip 解压：发布/回源要提取 README 与 cjpm.toml",
-    "为什么 UI 用 WS 补丁：声明式信号派生，前端零手写 DOM",
-    "发布链路全程流式：内存与包体解耦（决赛核心改造）",
-], size=16, color=GREY, space=10)
+title_bar(s, "技术方案：分层与关键取舍",
+          "纯仓颉实现 · 静态单二进制 · 依赖 bstorm（KV）/ cjxt（UI+WS）/ tang（HTTP）")
+
+
+def rrect(slide, x, y, w, h, fill, line=None):
+    sh = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(x), Inches(y), Inches(w), Inches(h))
+    sh.adjustments[0] = 0.08
+    sh.fill.solid()
+    sh.fill.fore_color.rgb = fill
+    if line is None:
+        sh.line.fill.background()
+    else:
+        sh.line.color.rgb = line
+        sh.line.width = Pt(0.75)
+    sh.shadow.inherit = False
+    return sh
+
+
+def shape_text(shape, lines, size=13, color=DARK, bold=False, align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.MIDDLE):
+    tf = shape.text_frame
+    tf.word_wrap = True
+    tf.vertical_anchor = anchor
+    tf.margin_left = Inches(0.12)
+    tf.margin_right = Inches(0.1)
+    tf.margin_top = Inches(0.04)
+    tf.margin_bottom = Inches(0.04)
+    first = True
+    for line, sz, c, b in lines:
+        p = tf.paragraphs[0] if first else tf.add_paragraph()
+        first = False
+        p.alignment = align
+        r = p.add_run()
+        r.text = line
+        r.font.size = Pt(sz)
+        r.font.bold = b
+        r.font.color.rgb = c
+    return shape
+
+
+# 左：分层（自顶向下 5 层，名称色块 + 说明）
+box(s, 0.55, 1.55, 7.4, 0.34, "分层（自顶向下）", size=13, color=GREY, bold=True)
+LAYERS = [
+    ("ui",       "cjxt 页面层 —— 公共面 / 管理面分子包", ACCENT),
+    ("server",   "发布裁决 · 代理回源 · 计划执行 · handler", ACCENT),
+    ("store",    "bstorm 文档层 —— 包 / 用户 / 上游 / 团队 / 审计", ACCENT),
+    ("index",    "NDJSON 生成与兼容解析", ACCENT),
+    ("protocol", "官方发布 / 下载二进制协议、URL 分片", ACCENT),
+]
+y0, hh, gap = 1.95, 0.74, 0.12
+for i, (name, desc, color) in enumerate(LAYERS):
+    y = y0 + i * (hh + gap)
+    rrect(s, 0.55, y, 7.4, hh, LIGHT, line=RGBColor(0xD5, 0xDE, 0xE8))
+    chip = rrect(s, 0.62, y + 0.13, 1.15, hh - 0.26, color)
+    shape_text(chip, [(name, 13, WHITE, True)], align=PP_ALIGN.CENTER)
+    box(s, 1.9, y + 0.16, 5.9, hh - 0.3, desc, size=13, color=DARK)
+box(s, 0.6, y0 + 5 * (hh + gap) - 0.02, 7.3, 0.34,
+    "层间数据一律 DTO 序列化（公开面 + 管理面）", size=12, color=GREY)
+
+# 右：三个关键取舍 + 一条决赛核心改造
+box(s, 8.25, 1.55, 4.55, 0.34, "关键取舍", size=13, color=GREY, bold=True)
+TRADES = [
+    ("为什么不用 SQLite？", "LSM + 纯仓颉、无 C 依赖，静态单二进制"),
+    ("为什么自研 tar / gzip？", "发布与回源要从制品里取 README、cjpm.toml"),
+    ("为什么 UI 走 WS 补丁？", "信号派生，前端零手写 DOM"),
+]
+ty, th, tgap = 1.95, 1.02, 0.14
+for i, (q, a) in enumerate(TRADES):
+    y = ty + i * (th + tgap)
+    card = rrect(s, 8.25, y, 4.55, th, LIGHT, line=RGBColor(0xD5, 0xDE, 0xE8))
+    shape_text(card, [(q, 13, ACCENT, True), (a, 12, DARK, False)], anchor=MSO_ANCHOR.MIDDLE)
+y_hl = ty + 3 * (th + tgap) + 0.06
+hl = rrect(s, 8.25, y_hl, 4.55, 0.98, ACCENT)
+shape_text(hl, [("决赛核心改造：发布链路全程流式", 13, WHITE, True),
+                ("内存与包体解耦（详见下页数字）", 12, WHITE, False)])
 
 # ---------- 5 流式发布 ----------
 s = prs.slides.add_slide(BLANK)

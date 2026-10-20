@@ -94,8 +94,14 @@ public class CovLogsRenderTest {
         let json = covRender(page.render())
         @Expect(json.contains("with-time"), true)
         @Expect(json.contains("\"-\""), true)
-        // 1700000000000 ms = 2023-11-15（本地时区），格式为 MM-dd HH:mm
-        @Expect(json.contains("11-15"), true)
+        // 期望值必须由**本机时区**算出：1700000000000 ms 在 +08 是 2023-11-15，
+        // 在 UTC 是 11-14 —— 写死月日会让 CI（UTC 容器）与开发机（+08）结论相反。
+        let expected = formatLogTime(1700000000000)
+        // 格式契约单独钉住：MM-dd HH:mm（11 字符，含 "-" 与 ":"），不依赖具体时区
+        @Expect(expected.size, "MM-dd HH:mm".size)
+        @Expect(expected.contains("-"), true)
+        @Expect(expected.contains(":"), true)
+        @Expect(json.contains(expected), true)
     }
 
     // 清理确认弹窗：askClear 打开、cancelClear 关闭（关着不渲染 Dialog 节点）

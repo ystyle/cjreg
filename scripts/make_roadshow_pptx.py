@@ -86,51 +86,6 @@ def table(slide, x, y, w, rows, col_w=None, header=True, size=14):
     return shape
 
 
-# ---------- 1 封面 ----------
-s = prs.slides.add_slide(BLANK)
-bg = s.shapes.add_shape(1, Inches(0), Inches(0), prs.slide_width, prs.slide_height)
-bg.fill.solid(); bg.fill.fore_color.rgb = ACCENT; bg.line.fill.background()
-box(s, 0.9, 2.0, 11.5, 1.0, "cjreg · 仓颉私有中心仓与多仓体系", size=40, color=WHITE, bold=True)
-box(s, 0.95, 3.05, 11.5, 0.6, "仓颉生态创新开发挑战赛 · 决赛路演", size=22, color=WHITE)
-box(s, 0.95, 4.35, 11.5, 0.5, "技术课题 ｜ 版本 v0.3.0（2026-10-20）", size=16, color=WHITE)
-box(s, 0.95, 4.85, 11.5, 0.5,
-    "https://atomgit.com/ystyle/cjreg    ghcr.io/ystyle/cjreg:v0.3.0    https://ystyle.top/cjreg/",
-    size=14, color=WHITE)
-
-# ---------- 2 问题与定位 ----------
-s = prs.slides.add_slide(BLANK)
-title_bar(s, "问题：官方中心仓很好，但它不解决这三件事")
-bullets(s, 0.8, 1.7, 11.8, 4.6, [
-    "① 内网 / 离线环境没有可用仓 —— 中心仓在公网，流水线与机器在内网",
-    "② 发布不可逆，同步不可控 —— 版本不能删除、不能覆盖；索引同步从几十分钟到几天，失败要等",
-    "③ 团队需要自己的仓与预演位 —— 预发布、内部包、灰度版本不该进公共仓",
-    "",
-    "cjreg 的定位：与官方协议互通的私有中心仓 + 多仓体系（不是替代，是补位）",
-], size=19)
-box(s, 0.8, 6.1, 11.8, 0.9,
-    "生产实例已在内网常驻运行，承载团队日常发布、门户与审计", size=15, color=GREY)
-
-# ---------- 3 能力地图 ----------
-s = prs.slides.add_slide(BLANK)
-title_bar(s, "能力地图：一条发布链路上的七件事")
-rows = [
-    ["环节", "能力", "关键实现"],
-    ["发布", "官方二进制协议互通；流式接收；幂等/冲突/越权判定", "分段解析 + 边读边算 sha256 + 原子落盘"],
-    ["索引 / 下载", "NDJSON 索引；流式下载；下载计数", "IndexService / BlobStore.stream"],
-    ["多仓", "官方 + 私有 + 团队仓；回源、缓存、解析诊断、重拉", "ProxyService / ResolveService / UpstreamProbe"],
-    ["发布计划", "选包自动补依赖（拓扑序）→ 版本对照 → 推送；六态 + SSE", "PublishPlanService / PublishExecutor"],
-    ["权限", "首个发布者 = owner；团队 write/overwrite；管理员直通", "effectivePermission 双栈裁决"],
-    ["门户 / 管理端", "用户门户（Token、我的包、我的团队）+ 管理后台", "cjxt 声明式页面 + WS 补丁"],
-    ["审计 / 公开 API", "发布/认证/管理审计（IP/UA）；公开只读 API 供 CI 集成", "LogDoc / /api/stats /api/packages"],
-]
-table(s, 0.55, 1.45, 12.2, rows, col_w=[1.7, 5.3, 5.2], size=13)
-
-# ---------- 4 架构 ----------
-s = prs.slides.add_slide(BLANK)
-title_bar(s, "技术方案：分层与关键取舍",
-          "纯仓颉实现 · 静态单二进制 · 依赖 bstorm（KV）/ cjxt（UI+WS）/ tang（HTTP）")
-
-
 def rrect(slide, x, y, w, h, fill, line=None):
     sh = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(x), Inches(y), Inches(w), Inches(h))
     sh.adjustments[0] = 0.08
@@ -164,6 +119,58 @@ def shape_text(shape, lines, size=13, color=DARK, bold=False, align=PP_ALIGN.LEF
         r.font.bold = b
         r.font.color.rgb = c
     return shape
+
+
+# ---------- 1 封面 ----------
+s = prs.slides.add_slide(BLANK)
+bg = s.shapes.add_shape(1, Inches(0), Inches(0), prs.slide_width, prs.slide_height)
+bg.fill.solid(); bg.fill.fore_color.rgb = ACCENT; bg.line.fill.background()
+box(s, 0.9, 2.0, 11.5, 1.0, "cjreg · 仓颉私有中心仓与多仓体系", size=40, color=WHITE, bold=True)
+box(s, 0.95, 3.05, 11.5, 0.6, "仓颉生态创新开发挑战赛 · 决赛路演", size=22, color=WHITE)
+box(s, 0.95, 4.35, 11.5, 0.5, "技术课题 ｜ 版本 v0.3.0（2026-10-20）", size=16, color=WHITE)
+box(s, 0.95, 4.85, 11.5, 0.5,
+    "https://atomgit.com/ystyle/cjreg    ghcr.io/ystyle/cjreg:v0.3.0    https://ystyle.top/cjreg/",
+    size=14, color=WHITE)
+
+# ---------- 2 问题与定位 ----------
+s = prs.slides.add_slide(BLANK)
+title_bar(s, "问题：官方中心仓很好，但它不解决这三件事")
+PROBLEMS = [
+    ("① 内网 / 离线没有仓", "中心仓在公网；流水线与机器在内网，离线时要带着依赖跑"),
+    ("② 发布不可逆、同步不可控", "版本不能删除、不能覆盖；索引同步几十分钟到几天，失败要等"),
+    ("③ 团队需要自己的仓与预演位", "预发布、内部包、灰度版本不该进公共仓"),
+]
+pw, pgap = 3.95, 0.22
+for i, (t, d) in enumerate(PROBLEMS):
+    x = 0.55 + i * (pw + pgap)
+    card = rrect(s, x, 1.75, pw, 2.0, LIGHT, line=RGBColor(0xD5, 0xDE, 0xE8))
+    shape_text(card, [(t, 16, ACCENT, True), (d, 13, DARK, False)], anchor=MSO_ANCHOR.MIDDLE)
+pos = rrect(s, 0.55, 4.15, 12.23, 1.2, ACCENT)
+shape_text(pos, [("cjreg 的定位：与官方协议互通的私有中心仓 + 多仓体系", 20, WHITE, True),
+                 ("不是替代，是补位 —— 官方仓照常用，缺的那一半由私有仓承接", 14, WHITE, False)])
+box(s, 0.6, 5.75, 12.1, 0.6,
+    "生产实例已在内网常驻：团队日常发布、门户取 Token、审计留痕；本机也能一条 compose 起一套",
+    size=14, color=GREY)
+
+# ---------- 3 能力地图 ----------
+s = prs.slides.add_slide(BLANK)
+title_bar(s, "能力地图：一条发布链路上的七件事")
+rows = [
+    ["环节", "能力", "关键实现"],
+    ["发布", "官方二进制协议互通；流式接收；幂等/冲突/越权判定", "分段解析 + 边读边算 sha256 + 原子落盘"],
+    ["索引 / 下载", "NDJSON 索引；流式下载；下载计数", "IndexService / BlobStore.stream"],
+    ["多仓", "官方 + 私有 + 团队仓；回源、缓存、解析诊断、重拉", "ProxyService / ResolveService / UpstreamProbe"],
+    ["发布计划", "选包自动补依赖（拓扑序）→ 版本对照 → 推送；六态 + SSE", "PublishPlanService / PublishExecutor"],
+    ["权限", "首个发布者 = owner；团队 write/overwrite；管理员直通", "effectivePermission 双栈裁决"],
+    ["门户 / 管理端", "用户门户（Token、我的包、我的团队）+ 管理后台", "cjxt 声明式页面 + WS 补丁"],
+    ["审计 / 公开 API", "发布/认证/管理审计（IP/UA）；公开只读 API 供 CI 集成", "LogDoc / /api/stats /api/packages"],
+]
+table(s, 0.55, 1.45, 12.2, rows, col_w=[1.7, 5.3, 5.2], size=13)
+
+# ---------- 4 架构 ----------
+s = prs.slides.add_slide(BLANK)
+title_bar(s, "技术方案：分层与关键取舍",
+          "纯仓颉实现 · 静态单二进制 · 依赖 bstorm（KV）/ cjxt（UI+WS）/ tang（HTTP）")
 
 
 # 左：分层（自顶向下 5 层，名称色块 + 说明）
@@ -207,17 +214,31 @@ s = prs.slides.add_slide(BLANK)
 title_bar(s, "核心难点 ①：流式发布 / 下载 / 回源（内存 O(1)）")
 rows = [
     ["指标", "初赛 v0.2.0", "决赛 v0.3.0"],
-    ["最大可发布包体", "≤32 MiB 稳定，48–50 MiB 偶发 OOM", "200 MiB 稳定（上限 500 MiB 可配）"],
-    ["200 MiB 发布耗时", "失败", "0.618 s（324 MiB/s）"],
-    ["发布峰值内存 VmHWM", "≈ 包体 2–3 倍", "恒定 291 MiB（2 / 32 / 200 MiB 一致）"],
+    ["最大可发布包体", "≤32 MiB；48–50 MiB 偶发 OOM", "200 MiB 稳定"],
+    ["200 MiB 发布", "失败", "0.618 s（324 MiB/s）"],
+    ["发布峰值内存", "≈ 包体 2–3 倍", "恒定 291 MiB"],
     ["200 MiB 下载", "Out of memory", "成功，sha256 一致"],
 ]
-table(s, 0.55, 1.5, 12.2, rows, col_w=[3.4, 4.4, 4.4], size=14)
-box(s, 0.6, 4.35, 12.0, 2.2,
-    "做法：按段解析头 → 边读边算 sha256 → 直接写临时文件 → 校验后 rename 原子落盘；\n"
-    "下载侧 BlobStream → handler 直接 body(stream)；回源同样流式落盘。\n"
-    "复现：bash scripts/bench.sh（桩上游 + k6，VmHWM 取 /proc/<pid>/status）",
-    size=15, color=DARK)
+table(s, 0.55, 1.5, 7.3, rows, col_w=[2.05, 2.7, 2.55], size=13)
+why = rrect(s, 0.55, 3.95, 7.3, 1.5, LIGHT, line=RGBColor(0xD5, 0xDE, 0xE8))
+shape_text(why, [("为什么重要", 14, ACCENT, True),
+                 ("整包驻留时峰值 ≈ 包体的 2–3 倍，撞上默认 256 MB 堆上限就失败；"
+                  "现在内存与包体解耦，发大包不再需要调 cjHeapSize", 12, DARK, False)])
+box(s, 0.6, 6.5, 12.1, 0.5,
+    "复现：bash scripts/bench.sh（桩上游 + k6；内存取 /proc/<pid>/status 的 VmHWM）",
+    size=13, color=GREY)
+
+# 右侧：做法三步 + 下载/回源
+box(s, 8.2, 1.5, 4.6, 0.34, "做法（发布链路）", size=13, color=GREY, bold=True)
+STEPS = [("①", "按段解析头，拿到长度与校验"), ("②", "边读边算 sha256，不缓存整包"),
+         ("③", "写临时文件 → 校验 → rename 原子落盘")]
+for i, (n, d) in enumerate(STEPS):
+    y = 1.9 + i * 0.9
+    card = rrect(s, 8.2, y, 4.6, 0.78, LIGHT, line=RGBColor(0xD5, 0xDE, 0xE8))
+    shape_text(card, [(f"{n}  {d}", 13, DARK, False)])
+note = rrect(s, 8.2, 4.65, 4.6, 1.0, ACCENT)
+shape_text(note, [("下载 / 回源同样流式", 14, WHITE, True),
+                  ("handler 直接 body(stream)；回源边收边落盘", 12, WHITE, False)])
 
 # ---------- 6 权限 ----------
 s = prs.slides.add_slide(BLANK)

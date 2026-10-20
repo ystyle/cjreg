@@ -3,7 +3,7 @@
   name = "cjreg"
   organization = "ystyle"
   description = "仓颉私有中心仓与多仓工具：多仓配置、依赖解析/冲突/版本强制替换、镜像/代理/仓库同步、一键部署"
-  version = "0.1.0"
+  version = "0.3.0"
   target-dir = ""
   script-dir = ""
   output-type = "executable"

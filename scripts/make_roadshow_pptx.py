@@ -272,16 +272,32 @@ box(s, 0.7, 5.3, 12.0, 1.5,
 # ---------- 8 迭代成果 ----------
 s = prs.slides.add_slide(BLANK)
 title_bar(s, "决赛阶段迭代成果（相比初赛 v0.2.0）")
-rows = [
-    ["维度", "初赛 v0.2.0", "决赛 v0.3.0", "变化"],
-    ["单测用例", "154", "1002", "×6.5"],
-    ["行覆盖率", "39.3%", "91.3%", "+52.0pp"],
-    ["发布计划", "四态 + 轮询", "六态 + SSE + 跳过", "新能力"],
-    ["团队管理", "仅管理员", "owner 自助（成员/转移/关联）", "新能力"],
-    ["交付", "宿主构建", "自包含多阶段镜像 Dockerfile.build", "新能力"],
-    ["工程结构", "admin_handler 1358 行", "122 行；UI 分子包、一页一文件；DTO 化", "可维护性"],
+KPI = [
+    ("单测用例", "154 → 1002", "×6.5"),
+    ("行覆盖率", "39.3% → 91.3%", "+52.0pp"),
+    ("最大可发布包体", "32 MiB → 200 MiB", "×6 以上"),
+    ("发布峰值内存", "≈3× 包体 → 291 MiB", "与包体解耦"),
 ]
-table(s, 0.55, 1.45, 12.2, rows, col_w=[2.6, 3.4, 4.4, 1.8], size=13)
+kw, kgap = 2.93, 0.18
+for i, (label, value, delta) in enumerate(KPI):
+    x = 0.55 + i * (kw + kgap)
+    card = rrect(s, x, 1.6, kw, 1.95, LIGHT, line=RGBColor(0xD5, 0xDE, 0xE8))
+    shape_text(card, [(label, 13, GREY, False), (value, 22, ACCENT, True), (delta, 13, DARK, False)],
+               align=PP_ALIGN.CENTER)
+box(s, 0.55, 3.85, 12.2, 0.34, "新增能力", size=13, color=GREY, bold=True)
+CAPS = [
+    ("发布计划六态 + SSE", "实时进度 · 索引 SHA256 校验 · 手动跳过"),
+    ("团队 owner 自助", "成员 / 转移 owner / 团队关联，门户弹窗"),
+    ("自包含构建镜像", "Dockerfile.build 多阶段，评审无需本地工具链"),
+]
+cw, cgap = 3.98, 0.16
+for i, (t, d) in enumerate(CAPS):
+    x = 0.55 + i * (cw + cgap)
+    card = rrect(s, x, 4.25, cw, 1.15, ACCENT)
+    shape_text(card, [(t, 14, WHITE, True), (d, 12, WHITE, False)])
+info = rrect(s, 0.55, 5.65, 12.2, 0.95, LIGHT, line=RGBColor(0xD5, 0xDE, 0xE8))
+shape_text(info, [("工程结构同期改造", 13, ACCENT, True),
+                  ("admin_handler 1358 → 122 行；ui 按站点面分子包、一页一文件；响应体统一 DTO 序列化；+80 个提交", 12, DARK, False)])
 
 # ---------- 9 质量与性能证据 ----------
 s = prs.slides.add_slide(BLANK)

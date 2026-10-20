@@ -227,3 +227,17 @@ services:
 
 > 需要更小体积可考虑：把底座换成带 `liburing2` 的 `debian:slim`，或用工具链镜像做多阶段自构建
 > （后者在 CI 中需要 cjxt 的仓库访问权）。
+
+## 自包含构建（无需本地仓颉工具链）
+
+仓库内提供 `Dockerfile.build`（多阶段）：构建阶段在容器里安装官方 SDK 编译，运行阶段与构建阶段**同一基础镜像**
+（保证 glibc 一致），评审或新机器上不必先装 `cjc/cjpm`：
+
+```shell
+docker build -f Dockerfile.build -t cjreg:selfbuild .
+docker run --rm -p 8060:8060 -v "$PWD/data:/data" cjreg:selfbuild
+```
+
+- 该文件里另有一个 `dev` target，供在容器内做构建/测试（已带 cmake/ninja/flatc 等 stdx 依赖）；
+- 当前官方镜像只提供 **linux/amd64**；arm64 与镜像瘦身仍在路线图中。
+

@@ -78,3 +78,20 @@ curl -s -X PUT http://127.0.0.1:8060/api/admin/organizations/1 \
 | 删除 | 组织下仍有包 → `409 has_packages`；仍被团队关联 → `409 referenced_by_teams`（错误消息列出团队名） |
 | 审计 | `create_org` / `update_org` / `delete_org`，含守卫失败 |
 | 公开视图 | `GET /api/organizations`（公开只读）会带上组织显示名；有包但未登记的组织以 `id=0` 出现 |
+
+## 团队所有者（owner 自助）
+
+团队可以有一个 **owner**（`ownerId`）；owner 或平台管理员都能管理该团队（`canManageTeam` 裁决），
+不必每次都找管理员。owner 在**用户门户**（`/user/...`）里就能完成：
+
+| 操作 | 门户接口 |
+|---|---|
+| 查看我所属的团队 | `GET /api/user/me/teams` |
+| 增删团队成员 | `GET/POST /api/user/me/teams/:id/members`、`DELETE .../members/:userId` |
+| 转移 owner | `POST /api/user/me/teams/:id/transfer` |
+| 团队关联的组织 / 包 | `GET/PUT /api/user/me/teams/:id/links` |
+
+- 转移 owner 会写审计 `transfer_team_owner`；
+- 团队可标记 `selfService`，用于区分「允许 owner 自助管理」与「仅管理员维护」；
+- CLI 侧另有 `cjreg admin delete-user`，删除用户前会检查他是否仍是某个团队的 owner（孤儿守卫会拒绝）。
+

@@ -22,8 +22,9 @@
 | `/api/admin/upstreams/:id` | DELETE | 删除上游（官方仓受保护） |
 | `/api/admin/upstreams/:id/test` | POST | 上游连通性测试（`name`/`organization` 可选；返回状态码/耗时/包名样本/中文摘要） |
 | `/api/admin/resolve` | GET | 多仓解析诊断（`name` / `organization` / `require` / `strict`） |
-| `/api/admin/publish-plans/analyze` | POST | 依赖拓扑 + 四分类 |
+| `/api/admin/publish-plans/analyze` | POST | 依赖拓扑 + 目标仓对照分类（`need_publish` / `already_exists` / `conflict` / `version_optional`；目标仓索引取不到时标 `target_error`） |
 | `/api/admin/publish-plans/execute` | POST | 按序推送到目标仓（`target_url` / `target_token`） |
+| `/api/admin/publish-plans/:id/events` | GET | **SSE 实时进度**：`event: progress` 推快照、`event: done` 收尾（轮询兜底保留） |
 | `/api/admin/logs/:kind` | GET | 审计日志查询（`kind` = `publish`/`admin`/`auth`/`all`；`keyword`/`status`/`from`/`to`/`offset`/`limit`） |
 | `/api/admin/logs/clean` | POST | 清理审计日志（`{kind?, before?}`，返回 `{"deleted":N}`） |
 | `/api/admin/organizations` | GET / POST | 组织列表（含包/版本/团队计数）/ 创建（`{name, displayName?, description?, isDefault?}`） |
@@ -43,6 +44,10 @@ Header：`Authorization: Bearer <会话 Token>`；审计日志字段见 [审计�
 | `/api/user/me/publish-token` | POST | 重置自己的发布 Token（旧 Token 立即失效） |
 | `/api/user/me/packages` | GET | 我发布过版本的包（`page`/`size`/`q`，含 owner 标记） |
 | `/api/user/me/teams` | GET | 我所属团队 + 权限 + 关联组织/包 |
+| `/api/user/me/teams/:id/members` | GET / POST | 查看 / 增删团队成员（owner 或管理员，`canManageTeam`） |
+| `/api/user/me/teams/:id/members/:userId` | DELETE | 移除成员 |
+| `/api/user/me/teams/:id/transfer` | POST | **转移团队 owner**（写审计 `transfer_team_owner`） |
+| `/api/user/me/teams/:id/links` | GET / PUT | 团队关联的组织 / 包 |
 
 ## 公开只读 API（C1–C5）
 
@@ -63,6 +68,7 @@ Header：`Authorization: Bearer <会话 Token>`；审计日志字段见 [审计�
 - 返回码：`200` 成功 / `400` 参数或格式错误 / `401` 未认证 / `403` 无权限 / `404` 不存在 / `409` 冲突；
 - 发布 Token 为**裸 token**（兼容 `Bearer <token>`），管理/用户 API 用 `Bearer <会话 Token>`。
 
-## 规划中
+## 尚未提供的端点
 
-组织 CRUD REST 端点、上游连通性测试端点等，见仓库 `docs/gap-analysis.md`。
+镜像预热/周期同步（`serve --sync-interval`）等仍在路线图中，见仓库 `docs/gap-analysis.md` 与
+`docs/finals-submission.md` §4.5（未实现功能与重要程度）。

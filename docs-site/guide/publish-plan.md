@@ -40,3 +40,29 @@
 ```
 A(18060) 发布 6 包 → analyze 展开拓扑 → execute 推送到 B(18070) → 校验 B 的索引/制品/依赖
 ```
+
+## 计划项状态（六态）
+
+| 状态 | 含义 |
+|---|---|
+| `pending` | 待执行（计划中断/重启后也回到这个状态，不会假装在跑） |
+| `running` | 正在推送到目标仓 |
+| `waiting_index` | 已推送成功，正在**等目标仓索引可见** |
+| `completed` | 完成 |
+| `failed` | 失败（带原因，例如目标仓 429、401、网络不可达） |
+| `skipped` | 人工跳过该包 |
+
+**「等索引」的完成判据**：目标仓里**版本出现、且 sha256 与本地一致**才算完成 —— 只看到版本号就判完成会在
+「索引先到、制品后到」时产生假完成。
+
+## 实时进度（SSE）
+
+```
+GET /api/admin/publish-plans/:id/events        # text/event-stream
+event: progress   data: {planId,status,completed,total,...,items:[...]}
+event: done       data: {planId,status}
+```
+
+- 管理端计划详情页用该流实时滚动进度，**轮询接口保留**作为兜底；
+- 每项也可在页面上**手动跳过**（`skipped`），跳过的包不参与后续统计。
+

@@ -11,7 +11,9 @@ cjreg 把上游做成**数据表 + priority 的多仓体系**（先行版只有�
 | `name` | 唯一标识 |
 | `url` | registry base（如 `https://pkg.cangjie-lang.cn/registry`） |
 | `priority` | 越小越优先；解析按优先级依次查询 |
-| `enabled` | 是否参与回源 |
+| `enabled` | **总闸**：关掉后既不回源、也不可作为发布目标 |
+| `proxyEnabled` | **读路径**：是否参与回源 / 镜像 / 解析诊断 / 重拉 |
+| `asTarget` | **写路径**：是否出现在发布计划的「目标仓」下拉里（默认关：推官方不可逆，需显式授权） |
 | `cacheTtl` | 索引缓存有效期（秒，默认 86400） |
 | `authToken` | 回源认证 **与** 发布计划推送认证（裸 token） |
 | `isOfficial` | 官方仓识别（URL 前缀匹配），受保护不可删除 |
@@ -66,3 +68,25 @@ curl -s -X POST "http://127.0.0.1:8060/api/admin/upstreams/1/test" \
 | 无响应（DNS/连接/超时） | ✗ | ✗ | 具体传输错误 |
 
 探测动作会写入审计日志（`test_upstream`），可在「审计日志 → 管理」里查看历史结果。
+
+## 一个实例对接多个仓（多仓体系）
+
+「多仓」不是「一个实例托管多个仓」，而是**一个 cjreg 实例同时对接多个外部仓**，且分两条互不相干的路：
+
+| 路径 | 判定 | 用途 |
+|---|---|---|
+| 读 | `enabled && proxyEnabled`（`proxySorted()`，按 `priority` 升序） | 回源索引/制品、解析诊断、重拉 |
+| 写 | `enabled && asTarget`（`planTargets()`，同样按优先级） | 发布计划的推送目标 |
+
+- 官方仓默认**参与回源**，但默认**不是**推送目标；
+- 新建上游默认 `proxyEnabled = true`、`asTarget = false`（推送不可逆，目标仓要显式授权）；
+- 旧文档缺这两个字段时按默认值 `true / true` 反序列化，升级后行为不变；但**新建**上游走 `true / false`。
+
+## 解析诊断 vs 版本对照（别混）
+
+- **解析诊断**回答「这个依赖能不能解析、从哪个上游解析到、版本与 sha 是多少」：按优先级遍历回源链、
+  取索引、找满足 `require` 的最高版本、命中即停，每步写进 `trace`，并标出跨仓同版本不同 sha 的 `conflict`；
+- **「该不该发、发到哪」由发布计划的版本对照回答**：创建计划时人先选目标仓，系统再去取目标仓索引，
+  把每个包分成 `need_publish / already_exists / conflict / version_optional`；目标仓索引取不到时单独标
+  `target_error`（不会假装"目标仓没有"）。
+

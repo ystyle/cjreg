@@ -19,7 +19,7 @@ import std.collection.*
 import std.sort.*
 
 // 服务端版本（公开统计的「构建信息」；与 CHANGELOG 的版本号保持一致）
-public let CJREG_SERVER_VERSION = "0.1.0"
+public let CJREG_SERVER_VERSION = "0.3.0"
 
 // ===== C1 统计 =====
 

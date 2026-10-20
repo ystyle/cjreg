@@ -3,7 +3,65 @@
 本文件记录 cjreg 的重要变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.3.0] - 2026-10-20
+
+### Added — 发布链路流式化（决赛迭代 1：内存 O(1)）
+
+- **发布**：`POST /pkg` 改为**边读边算 sha256 + 直接落临时文件**，峰值内存不再随包体增长
+  （实测发布 2 / 32 / 200 MiB 时进程 VmHWM **恒定 291 MiB**，此前 200 MiB 会撞默认 256 MB 堆上限失败）
+- **下载**：`BlobStore.stream` + `fetchArtifactStream` + handler 直接 `body(stream)`，
+  2 / 32 / 200 MiB 三档下载全部成功且 sha256 一致（此前护栏 1/3）
+- **回源**：回源制品改为流式落盘；另实现按 `Range` 分块取（实测未能解决大制品内存问题，真正解法是流式，结论记入 `docs/benchmark.md`）
+- 数据与口径见 `docs/benchmark.md` §7、`docs/verification.md` §3.8
+
+### Added — 发布计划六态 + SSE 进度流（决赛迭代 2）
+
+- 计划项状态补齐为六态：`pending` / `running` / `waiting_index` / `completed` / `failed` / `skipped`（**手动跳过**）
+- 新增 `GET /api/admin/publish-plans/:id/events`（SSE）：`event: progress` 推快照、`event: done` 收尾；轮询接口保留作兜底
+- 「等索引」的完成判据收紧为**版本出现且 sha256 一致**，避免索引先到、制品后到造成假完成
+
+### Added — 自包含构建镜像（决赛迭代 3）
+
+- `Dockerfile.build`：多阶段构建，**容器内安装官方 SDK 编译**，运行阶段与构建阶段同一基础镜像（glibc 一致）；
+  评审无需本地仓颉工具链即可 `docker build -f Dockerfile.build`
+- 增加 `dev` target（供构建/测试 stdx：cmake/ninja/flatc 与 flatbuffers 头文件/库链接）
+
+### Added — 性能基准报告（决赛迭代 4）
+
+- `scripts/bench.sh` + `scripts/bench-stub-upstream.py`（桩上游）+ k6 并发档，一键复现；报告 `docs/benchmark.md`
+- 关键结果：索引回源 → 本地命中 **16.16 ms → 2.74 ms（5.9×）**（桩计数证明重查轮零回源）；
+  并发 1/4/16/64 VU = **88 / 294 / 414 / 356 req/s**；发布吞吐 2/32/200 MiB = **74 / 278 / 324 MiB/s**
+
+### Added — 团队所有者（owner 自助，决赛迭代 6）
+
+- 数据模型与裁决：`canManageTeam`（owner 或平台管理员），团队新增 `ownerId` / `selfService`
+- 门户接口 `/api/user/me/teams/*`：成员增删、**转移 owner**、团队关联（组织/包）的读写；管理端转 owner 落审计 `transfer_team_owner`
+- 门户面板改为**弹窗**（与管理端口径一致），owner 可自助管理成员与关联
+- CLI 新增 `admin delete-user`（带 **owner 孤儿守卫**：仍是他人的团队 owner 时拒绝删除）
+- 方案与验证记录见 `docs/team-owner-plan.md`
+
+### Changed — 工程质量与可维护性（决赛迭代 5）
+
+- 单元测试 **179 → 1002 例**，行覆盖率 **39.3% → 91.3%**（90 个源文件 / 12312 行）
+- 新增**进程内 HTTP 测试夹具**（起真实服务 + 真实 client），覆盖协议端点、管理 API、包管理（含三级删除/重拉）、
+  公开读 API、用户门户与发布计划 handler；补齐 UI 各页渲染/交互单测；CLI 提取 `runCli` 后补子命令单测（41 例）
+- 响应体统一改为 **DTO 序列化**（公开面 + 管理面），清掉手工拼装 JSON 的工具函数
+- 包结构：`ui` 按站点面拆子包（framework / public / admin）并"一个页面一个文件"；
+  `admin_handler.cj` **1358 → 122 行**；`publish_plan_service.cj` / `proxy_service.cj` 按职责拆分
+- 测试稳定性：内存态 Storm 夹具改为**线程局部持有**（并发用例不再互相 `close`），消除间歇性失败
+
+### Fixed — UI 行为缺口（缺陷 5–8）与门户排版
+
+- 修掉被单测/浏览器 QA 抓出的四处补丁层行为缺口，逐条记录在 `docs/ui-gap-report.md`
+- 门户 owner 面板：按钮组统一走 flex（清掉 EP 自带 margin）、团队表格不再溢出、面板改弹窗
+
+### 计划中
+
+- 多架构镜像（`linux/amd64` + `linux/arm64`）与镜像瘦身（基线 507 MB）
+- 镜像预热/周期同步（`serve --sync-interval`）
+- K8s 部署清单（可选）
+
+## [0.2.0] - 2026-10-06
 
 ### Added — 组织 CRUD REST（管理 API）
 
@@ -116,14 +174,6 @@
   **空态**共用同一个提示槽（`listBody` 用的是带插图的 `emptyState`），于是"有 5 行数据 + 一张大插图 +
   一句摘要"叠在一起。现在两者分开：说明走普通提示行，空态插图只在确实没东西可看时出现。
 - 回归：`pages_plan_render_test.cj` 新增创建页 3 条（三张表表头 / 说明不算空态 / 真空态才给提示）。
-
-### 计划中
-
-- **发布链路流式化**（大包稳定 + 内存 O(1)）：当前 `POST /pkg` 整包读入内存（峰值 ≈ 包体 2–3 倍），
-  受仓颉 GC 堆默认 256 MB 限制，40 MiB 以上的包在默认配置下可能 OOM —— 详见 `docs/finals-plan.md` 迭代 1
-- 发布计划 item 六状态（`publishing`/`waiting_index`/`skipped`）与 SSE 进度流
-- 镜像预热/周期同步（`serve --sync-interval`）与性能基准报告
-- 团队所有者（owner 自助管理成员）——设计见 `docs/user-portal-design.md` §7.4
 
 ## [0.1.0] - 2026-09-12
 

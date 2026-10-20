@@ -126,16 +126,18 @@ GET    /api/user/me/teams           我所属团队 + 权限 + 关联组织/包
 | MemTable arena | 2 × memTableSize = **32 MB** | bstorm 默认 `memTableSize` 16 MB（badger 内部 arena = 2×，属原生内存） |
 | 仓颉 GC 堆上限 | **256 MB** | 仓颉运行时默认，全部托管对象都在此配额内 |
 
-`POST /pkg` 目前把**整个请求体读入内存**后再分段落盘，峰值约为包体的 2–3 倍 —— 发布 30 MB 以上的包前请调大堆上限：
+`POST /pkg`、下载与回源都是**流式**的：边读边算 sha256、直接落临时文件 / 转发给响应，
+**峰值内存与包体大小无关**（实测发布 2 / 32 / 200 MiB 时进程 VmHWM 恒定 ~291 MiB，
+下载 200 MiB 同样平稳，见 `docs/benchmark.md`）。因此发布大包**不需要再调大堆上限**：
 
 ```shell
+# 可选：仅在「高并发 + 大包」叠加、或需要更激进的回收策略时才调
 export cjHeapSize=2GB          # 提高 GC 堆上限（默认 256MB）
 export cjGCThreshold=1GB       # 触发 GC 的堆阈值（配套）
-export cjGCInterval=100ms      # GC 轮询间隔（配套）
 ```
 
-> 环境变量名以当前仓颉运行时版本为准；后续将改为流式解析（边读边算 sha256、直接落盘），彻底消除该限制。
-> 请求体上限本身由 `cjreg.toml` 的 `max_request_bytes` 控制（默认 500 MiB，`-1` 不限）。
+> 环境变量名以当前仓颉运行时版本为准。请求体上限由 `cjreg.toml` 的 `max_request_bytes` 控制
+> （默认 500 MiB，`-1` 不限）。
 
 **优雅关闭**：`serve` 已注册 SIGINT/SIGTERM（`Ctrl+C` / `docker stop` / `systemctl stop`）处理 ——
 收到信号后先停止 HTTP 服务，再关闭数据库（flush memtable 落盘成 SSTable），最后进程正常退出（exit 0）。

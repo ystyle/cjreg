@@ -32,7 +32,9 @@
 
 ## 3. 决赛演示材料
 
-- **现场演示脚本**：[`docs/demo-video.md`](demo-video.md)（九段分镜：部署 → 发布 → 多仓代理 → 权限 → 门户 → 审计/公开 API → 三级删除 → 版本与镜像）
+- **路演脚本与答辩手册**：[`docs/roadshow-script.md`](roadshow-script.md)（10 分钟配时、上台前检查、六步现场演示、三档预案、12 条 Q&A、口袋卡）
+- **路演 PPT（12 页）**：[`docs/finals-roadshow-v0.3.0.pptx`](finals-roadshow-v0.3.0.pptx)（生成脚本 `scripts/make_roadshow_pptx.py`，可改后重出）
+- **演示视频分镜**：[`docs/demo-video.md`](demo-video.md)（九段分镜：部署 → 发布 → 多仓代理 → 权限 → 门户 → 审计/公开 API → 三级删除 → 版本与镜像）
 - **一键演示环境**：`bash scripts/demo-data.sh`（起 A/B 双仓 + 演示组织/用户/包 + 发布计划推送，可重置）
   / `bash scripts/demo-live.sh {prepare|status|clean}`（生产主站 + 演示空站实景）
 - **路演结构**（10 分钟，按评分维度配时间）：
@@ -82,8 +84,11 @@
 - 关键难点 ①：**流式发布**（边读边算 sha256、直接落临时文件）+ 流式下载/回源 → 内存与包体解耦
 - 关键难点 ②：**权限双栈**（平台管理员 / 包 owner / 团队 write|overwrite）与首次发布者 owner 模型
 - 关键难点 ③：**索引等待**（版本出现 **且 sha256 一致** 才判完成）+ 六态 + SSE
-- 工具链：Cangjie 1.2.0 构建（`cjpm.toml` 声明 `cjc-version = 1.1.3`，本项目为可执行程序，
-  不向中心仓发布库制品；`v0.2.0` 及以前的二进制由 STS 1.1.3 构建）
+- 工具链：`v0.3.0` 用 Cangjie **1.2.0** 构建；`cjpm.toml` 声明 `cjc-version = 1.1.3`。
+  本项目是可执行程序、不向中心仓发布库制品，ABI 兼容不是约束。
+  **已在独立 worktree 用 STS 1.1.3 工具链验证 `v0.3.0`**：`cjpm build` 成功；全量 1002 例中 1000 通过，
+  2 例（`covPkg_masterRowShowsDeletedTag`、`covPlanDetail_doStartWithoutApp`）为 UI 异步用例的时序抖动
+  —— 同一二进制重跑即通过，且 1.2.0 下稳定全绿（复现方法见 §4.6）
 
 **实用价值与生态贡献（15 分）** —— 私网/离线环境可自建中心仓；预演仓（发布不可逆、中心仓同步不可控）；
 多仓体系与一键推送官方/私有仓；公开只读 API 便于 CI 与门户集成。
@@ -124,6 +129,29 @@
 | 大包上限 | 受 `max_request_bytes`（默认 500 MiB）与堆上限约束，200 MiB 已实测 | — |
 | 计划的 `publishing` 细分态 | 以 `running` 表达 | 低 |
 
+### 4.6 STS Cangjie 1.1.3 构建验证（独立 worktree，不动主工作树）
+
+```shell
+# 1) 在 tag v0.3.0 上开独立 worktree（避免切换主工作树的工具链）
+git -C cjreg worktree add ../cjreg-113 v0.3.0
+
+# 2) 直接用 1.1.3 安装目录构造环境（cjvs 的 switch 需要写临时目录，容器里可能不可用）
+S=~/.config/cjvs/store/1.1.3
+export CANGJIE_HOME=$S
+export PATH="$S/bin:$S/tools/bin:$S/debugger/bin:$PATH"
+export LD_LIBRARY_PATH="$S/runtime/lib/linux_x86_64_llvm:$S/runtime/lib/linux_x86_64_cjnative:$S/tools/lib:$S/debugger/third_party/lldb/lib"
+export CANGJIE_STDX_PATH=~/.config/cjvs/stdx/1.1.3.1/linux_x86_64_cjnative/static/stdx
+cjc --version   # Cangjie Compiler: 1.1.3
+
+# 3) 构建 + 全量测试
+cd ../cjreg-113 && cjpm build -j 16 && cjpm test -j 16 --no-progress
+```
+
+**结果**：`cjpm build` 成功；`cjpm test` 1000/1002 通过。两个失败/异常用例都属于 UI 异步路径
+（列表待办行的软删标记、计划「开始执行但无 app」的时序），用同一二进制重跑即通过；
+在 1.2.0 下这两例稳定全绿，因此判定为**测试的时序抖动，而非 1.1.3 功能不兼容**。
+验证完可清理：`git -C cjreg worktree remove ../cjreg-113 --force`。
+
 ## 5. 复现说明（评审自证）
 
 ```shell
@@ -147,8 +175,8 @@ docker pull ghcr.io/ystyle/cjreg:v0.3.0 && docker run --rm ghcr.io/ystyle/cjreg:
 
 ## 6. 决赛待办（按优先级）
 
-- [ ] 打 tag `v0.3.0` → Release 出二进制 + ghcr 镜像，回填 §1 的产物链接
-- [ ] 路演 PPT（按 §3 结构，10 分钟配时）
-- [ ] 现场演示彩排（含 §3 的三档预案）
+- [x] 打 tag `v0.3.0` → Release 出二进制 + ghcr 镜像（产物与镜像已验证，见 §1）
+- [x] 路演 PPT（12 页，按 §3 结构与 10 分钟配时）
+- [ ] 现场演示彩排（脚本见 `roadshow-script.md` §3/§4，含三档预案）
 - [ ] 覆盖率报告与 benchmark 原始输出归档为可点击材料
 - [ ] （可选）arm64 镜像、镜像瘦身

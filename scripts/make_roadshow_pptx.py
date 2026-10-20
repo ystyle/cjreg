@@ -259,15 +259,39 @@ bullets(s, 0.7, 4.55, 12.0, 2.0, [
 # ---------- 7 六态 + SSE ----------
 s = prs.slides.add_slide(BLANK)
 title_bar(s, "核心难点 ③：发布计划六态 + SSE 实时进度")
-bullets(s, 0.7, 1.7, 12.0, 3.2, [
-    "六态：pending → running → waiting_index（等索引）→ completed / failed；另有 skipped（手动跳过）",
-    "「等索引」判据：版本出现、且 sha256 一致，避免索引先到、制品后到造成假完成",
-    "SSE：GET /api/admin/publish-plans/:id/events（event: progress / done），轮询接口保留兜底",
-    "页面实时滚动；可手动跳过某项；中断后计划状态可恢复（保持 pending 而不是假 running）",
-], size=18, space=12)
-box(s, 0.7, 5.3, 12.0, 1.5,
-    "为什么需要它：发布不可逆 → 推送目标仓时「发没发成功」必须可见、可核验、可跳过，"
-    "否则一次网络抖动就让人不敢继续", size=15, color=GREY)
+box(s, 0.55, 1.38, 6.0, 0.32, "计划项状态机", size=13, color=GREY, bold=True)
+STATES = [("pending", "待执行", RGBColor(0x8A, 0x94, 0xA3)), ("running", "执行中", ACCENT),
+          ("waiting_index", "等索引（可见）", RGBColor(0xB4, 0x7A, 0x1F)),
+          ("completed", "完成", RGBColor(0x2F, 0x86, 0x5A))]
+sx, sw, sgap = 0.55, 2.55, 0.42
+for i, (name, cap, color) in enumerate(STATES):
+    x = sx + i * (sw + sgap)
+    chip = rrect(s, x, 1.75, sw, 0.8, color)
+    shape_text(chip, [(name, 15, WHITE, True)], align=PP_ALIGN.CENTER)
+    box(s, x, 2.6, sw, 0.3, cap, size=11, color=GREY, align=PP_ALIGN.CENTER)
+    if i < 3:
+        box(s, x + sw, 1.87, sgap, 0.5, "→", size=18, color=ACCENT, bold=True, align=PP_ALIGN.CENTER)
+
+box(s, 0.55, 3.02, 2.0, 0.3, "分支", size=12, color=GREY, bold=True)
+BR = [("failed", "任一步失败（带原因）", 0.55), ("skipped", "人工跳过该包", 4.4)]
+for name, cap, x in BR:
+    chip = rrect(s, x, 3.32, 1.55, 0.6, LIGHT, line=RGBColor(0xD5, 0xDE, 0xE8))
+    shape_text(chip, [(name, 14, DARK, True)], align=PP_ALIGN.CENTER)
+    box(s, x + 1.65, 3.4, 1.9, 0.4, cap, size=11, color=GREY)
+
+INFO = [
+    ("索引判据", "版本出现且 sha256 一致才算完成，索引先到的假完成被挡掉"),
+    ("SSE 事件", "GET /api/admin/publish-plans/:id/events，event: progress / done"),
+    ("可恢复", "中断后计划保持 pending，不会假装 running"),
+]
+cw, cgap = 3.98, 0.16
+for i, (t, d) in enumerate(INFO):
+    x = 0.55 + i * (cw + cgap)
+    card = rrect(s, x, 4.35, cw, 1.3, LIGHT, line=RGBColor(0xD5, 0xDE, 0xE8))
+    shape_text(card, [(t, 13, ACCENT, True), (d, 12, DARK, False)])
+box(s, 0.6, 5.95, 12.1, 0.9,
+    "为什么需要：发布不可逆 —— 推送目标仓时「发没发成功」必须可见、可核验、可跳过，"
+    "否则一次网络抖动就让人不敢继续", size=14, color=GREY)
 
 # ---------- 8 迭代成果 ----------
 s = prs.slides.add_slide(BLANK)
@@ -302,29 +326,52 @@ shape_text(info, [("工程结构同期改造", 13, ACCENT, True),
 # ---------- 9 质量与性能证据 ----------
 s = prs.slides.add_slide(BLANK)
 title_bar(s, "质量与性能：每个数字都可复现")
-bullets(s, 0.7, 1.65, 6.1, 4.8, [
-    "1002 个用例：逻辑单测 + 进程内 HTTP 夹具 + 页面渲染",
-    "91.3% 行覆盖（cjcov，HTML 报告进 CI artifact）",
+lp = rrect(s, 0.55, 1.5, 6.0, 4.4, LIGHT, line=RGBColor(0xD5, 0xDE, 0xE8))
+box(s, 0.8, 1.68, 5.5, 0.32, "测试与验证", size=13, color=ACCENT, bold=True)
+box(s, 0.78, 2.0, 5.6, 0.62, "1002 用例 · 91.3% 行覆盖", size=24, color=DARK, bold=True)
+bullets(s, 0.8, 2.75, 5.55, 2.9, [
+    "1002 例 = 逻辑单测 + 进程内 HTTP 夹具（真实服务 + 真实 client）+ 页面渲染断言",
+    "覆盖率：cjcov HTML 报告（CI artifact），逻辑层 85%–95%",
     "双仓 e2e 9 步：发布 6 包 → 拓扑推送 → 公开 API → 上游连通 → 三级删除 → 组织 CRUD",
-    "CI：构建 + 单测 + 覆盖率 + e2e + 文档站 + 容器冒烟",
-], size=16, space=10)
-bullets(s, 7.0, 1.65, 5.6, 4.8, [
-    "索引缓存命中：16.16 ms → 2.74 ms（5.9×，桩计数证明零回源）",
-    "发布吞吐：74 / 278 / 324 MiB/s（2 / 32 / 200 MiB）",
-    "并发：1/4/16/64 VU → 88 / 294 / 414 / 356 req/s（拐点 16 VU）",
-    "脚本：scripts/bench.sh + bench-stub-upstream.py + k6",
-], size=16, space=10)
+    "CI 六步：构建 / 单测 / 覆盖率 / e2e / 文档站 / 容器冒烟",
+], size=12, space=8)
+
+rp = rrect(s, 6.78, 1.5, 6.0, 4.4, LIGHT, line=RGBColor(0xD5, 0xDE, 0xE8))
+box(s, 7.03, 1.68, 5.5, 0.32, "性能（同一脚本可复现）", size=13, color=ACCENT, bold=True)
+PERF = [
+    ("索引命中 2.74 ms", "回源 16.16 ms → 5.9×（桩计数证明重查轮零回源）"),
+    ("发布吞吐 324 MiB/s", "2 / 32 / 200 MiB = 74 / 278 / 324 MiB/s"),
+    ("并发 414 req/s", "1/4/16/64 VU → 88 / 294 / 414 / 356（拐点 16 VU）"),
+    ("内存 291 MiB 恒定", "2 / 32 / 200 MiB 发布与 200 MiB 下载均平稳"),
+]
+for i, (big, desc) in enumerate(PERF):
+    y = 2.15 + i * 0.92
+    box(s, 7.03, y, 5.5, 0.36, big, size=16, color=DARK, bold=True)
+    box(s, 7.03, y + 0.34, 5.5, 0.4, desc, size=11, color=GREY)
+box(s, 0.6, 6.15, 12.1, 0.5,
+    "复现：bash scripts/bench.sh（桩上游 + k6）｜ cjpm test --coverage && cjcov … -e \"*_test.cj\"",
+    size=12, color=GREY)
 
 # ---------- 10 实用价值 ----------
 s = prs.slides.add_slide(BLANK)
-title_bar(s, "实用价值与落地")
-bullets(s, 0.8, 1.7, 12.0, 4.6, [
-    "内网常驻私有仓：团队日常发布、门户取 Token、管理后台维护团队与上游",
-    "预演仓：发布不可逆 → 先在私有仓预演，同一版本在管理员直通下可反复发",
-    "多仓体系：官方 / 私有 / 演示空站并存，解析诊断直接回答「该发哪个仓」",
-    "CI 集成：公开只读 API（/api/stats、/api/packages...）与 cjpm 客户端兼容",
-    "一键部署：docker compose + 数据卷 + 优雅关闭；镜像 ghcr.io/ystyle/cjreg:v0.3.0",
-], size=19, space=14)
+title_bar(s, "实用价值与落地：四类真实用法")
+VAL = [
+    ("内网常驻私有仓", "流水线与机器在内网：发布、拉依赖、门户取 Token 全在本地完成"),
+    ("预演仓", "发布不可逆，先在私有仓预演；管理员直通 overwrite，同版本可反复发"),
+    ("多仓体系", "官方 / 私有 / 演示站并存；解析诊断直接回答「这个包该发到哪」"),
+    ("CI 与工具链集成", "公开只读 API 取包索引与统计；cjpm 客户端无需改造；镜像一条命令起"),
+]
+vw, vh, vgx, vgy = 5.95, 1.8, 0.25, 0.2
+for i, (t, d) in enumerate(VAL):
+    x = 0.55 + (i % 2) * (vw + vgx)
+    y = 1.6 + (i // 2) * (vh + vgy)
+    card = rrect(s, x, y, vw, vh, LIGHT, line=RGBColor(0xD5, 0xDE, 0xE8))
+    shape_text(card, [(t, 16, ACCENT, True), (d, 13, DARK, False)])
+hl = rrect(s, 0.55, 5.55, 12.2, 0.95, ACCENT)
+shape_text(hl, [("把中心仓缺的那一半补上：内网可用 · 预演安全 · 多仓可查", 18, WHITE, True)])
+box(s, 0.6, 6.7, 12.1, 0.45,
+    "生产实例已常驻内网（团队真实在用）｜镜像 ghcr.io/ystyle/cjreg:v0.3.0｜tag v0.3.0",
+    size=13, color=GREY)
 
 # ---------- 11 限制与后续 ----------
 s = prs.slides.add_slide(BLANK)

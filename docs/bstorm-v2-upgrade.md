@@ -91,13 +91,26 @@
 - 实测（clean drill）：v1 建库（3 个演示包 + 1 用户 + 1 上游）→ v1 serve 停 → dump → v2 serve 迁移索引 → 停 →
   dump：`package_doc/upstream_doc/user_doc` 三个 JSONL **逐字节相同**，总行数 5→5，v2 启动 267ms。
 
-### 设计要点（P2：完整 backup / restore）
-- 备份产物：`metadata.jsonl.zip`（上述 dump 打包）+ `blobs.manifest`（文件名/大小/sha256，
-  **不打包 blobs 内容**——blobs 是内容寻址，26MB/453 文件，单独 rsync 更快）；
-- `restore`：目标空库 → 按表注册 schema（@Model 或 `createTable`）→ 批量 `save` 保留原 id →
-  校验 manifest 行数/sha256；blobs 必须已就位，恢复后校验引用完整性；
-- 注意：恢复后仍需一次 `reindex`（有索引时）；cjreg 无索引，等价于只写 schema；
-- 成本：1~2 天（含 e2e：发布一批包 → 备份 → 清库 → 恢复 → 下载校验）。
+### ✅ P2 已实现：`cjreg admin backup` / `restore`
+```shell
+# 停服务后：
+./target/release/bin/ystyle::cjreg admin backup  -d ./data --out /backup/cjreg-$(date +%F).tar.gz
+./target/release/bin/ystyle::cjreg admin restore -d ./empty-dir --from /backup/cjreg-2026-10-22.tar.gz
+# 只校验、不写文件：
+./target/release/bin/ystyle::cjreg admin restore -d ./empty-dir --from <file> --check-only
+```
+- **归档格式（tar.gz）**：`manifest.json`（format=`cjreg-backup/1`、时间、总行数、每表行数/字节、
+  是否含制品）+ `blobs.manifest.jsonl`（每行 sha256/size）+ 每表 `<table>.jsonl`（每行原始 JSON）
+  + `blobs/<sha256>`（制品内容，默认包含；`--no-blobs` 只备库与清单）；
+- **恢复语义**：目标目录必须是空目录（或只有 `cjreg.toml`）；已有 `cjreg.db` 时拒绝，`--force` 会先删
+  `cjreg.db` 与 `blobs/`；数据行按原 id/token 写入（JSON 自带主键），索引由 bstorm 维护；
+  按 1000 行/事务批量写回（`syncWrites` 下逐条提交太慢）；
+- **完整性**：manifest 行数必须与实际恢复行数一致；归档里每个 `blobs/<sha>` 落盘前先校验内容 sha256；
+  恢复后统计「包文档引用了但 blobs 缺失」的制品数并提示（不阻断，下载时会 404）；
+- **只读校验**：`--check-only` 走同一套解析/校验逻辑，但不打开数据库、不写任何文件；
+- **实测（CLI 端到端）**：v2 建库（3 包 + 1 用户 + 1 上游 + 1 个内容寻址制品）→ backup（5 行，归档 1.3KB）
+  → check-only 通过 → restore 到空目录（132ms）→ 恢复前后 dump 的 3 张表 JSONL **逐字节相同**、行数 5→5
+  → 直接 `serve` 校验包/用户/上游数量一致；`--force` 覆盖非空目录也验证通过。
 
 ### 为什么不建议把备份做成「升级的必经步骤」
 - 多一条要长期维护的代码路径与一个「恢复即改 id/顺序」的风险面；
@@ -144,5 +157,6 @@ cjreg 原来几乎全靠 `all<T>()` 全表扫 + 内存过滤。借这次升级�
 - [x] 按本方案把 cjreg 切到 bstorm 2.0.0（分支 `feat/bstorm-2`；等 10.31 路演后再合并）。
 - [x] bstorm 2.0.0 发布（私有仓 → 中心仓，已完成；v2 分支未合并到 master）。
 - [x] P1 只读 dump 工具（已实现 `admin dump`，含单测与 clean drill 验证）。
-- [ ] P2 完整 backup/restore 是否立项（独立灾备需求，不阻塞升级）。
+- [x] P2 完整 backup/restore 已实现（`admin backup` / `admin restore`，含 `--check-only`、`--no-blobs`、`--force`）。
+- [ ] 生产备份策略：按日 backup（含制品）留存几份、放哪台机器（blobs 会随发布增长，需观察归档大小）。
 - [ ] 升级后部署到生产（等合并节奏；先在生产数据副本上按 §四演练一遍）。

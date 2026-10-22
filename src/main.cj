@@ -30,13 +30,17 @@ func printUsage(): Unit {
     println("  serve   启动私有中心仓 HTTP 服务（发布/下载/索引 + 管理 API）")
     println("  init    初始化数据目录（空数据目录创建首个管理员 + 默认官方上游）")
     println("  admin   管理命令（reset-password 应急重置口令 / sync-metadata 回捞展示字段与 README /")
-    println("           dump 只读导出全部数据行为 JSONL，用于升级前后 diff 与灾备快照）")
+    println("           dump 只读导出数据行为 JSONL / backup 完整备份 tar.gz / restore 从备份恢复）")
     println()
     println("选项:")
     println("  -d, --data <dir>     数据目录（默认 ./data）")
     println("  -p, --port <n>       serve 端口（默认 8060；优先于配置文件）")
     println("  -c, --config <file>  配置文件（默认 <数据目录>/cjreg.toml）")
-    println("  --out <dir>           admin dump 的输出目录（必填）")
+    println("  --out <dir|file>      admin dump 的输出目录 / admin backup 的输出文件（必填）")
+    println("  --from <file>         admin restore 的备份文件（必填）")
+    println("  --force               admin restore 覆盖已有数据库目录")
+    println("  --no-blobs            admin backup 不打包制品内容（只备数据库与制品清单）")
+    println("  --check-only          admin restore 只校验备份，不写任何文件")
     println("  -h, --help           帮助")
     println()
     println("配置文件（可选，TOML）：")
@@ -57,6 +61,10 @@ func runCli(args: Array<String>): Int64 {
         Long("password", RequiredValue),
         Long("all", NoValue),
         Long("out", RequiredValue),
+        Long("from", RequiredValue),
+        Long("force", NoValue),
+        Long("no-blobs", NoValue),
+        Long("check-only", NoValue),
         Full("help", r'h', NoValue)
     ]
     var result: ParsedArguments
@@ -99,6 +107,11 @@ func runCli(args: Array<String>): Int64 {
         case Some(v) => outDir = v
         case None => ()
     }
+    var fromPath = ""
+    match (result.options.get("from")) {
+        case Some(v) => fromPath = v
+        case None => ()
+    }
     // 端口：命令行显式传入才记录（否则让配置文件/默认值决定）
     var cliPort: ?UInt16 = None
     match (result.options.get("port")) {
@@ -132,6 +145,12 @@ func runCli(args: Array<String>): Int64 {
             }
             if (sub == "dump") {
                 return cmdAdminDump(dataDir, outDir)
+            }
+            if (sub == "backup") {
+                return cmdAdminBackup(dataDir, outDir, !result.options.contains("no-blobs"))
+            }
+            if (sub == "restore") {
+                return cmdAdminRestore(dataDir, fromPath, result.options.contains("force"), result.options.contains("check-only"))
             }
             return cmdAdmin(dataDir, sub, username, password, result.options.contains("all"))
         case "admin-ui" =>
@@ -404,6 +423,67 @@ func cmdAdminDump(dataDir: String, outDir: String): Int64 {
     return 0
 }
 
+// admin backup：完整备份（数据行 JSONL + 制品清单 + 可选制品内容）→ tar.gz
+func cmdAdminBackup(dataDir: String, outFile: String, includeBlobs: Bool): Int64 {
+    if (outFile.isEmpty()) {
+        println("cjreg: admin backup 需要 --out <输出文件.tar.gz>")
+        return 2
+    }
+    let dbPath = "${dataDir}/cjreg.db"
+    if (!exists(Path(dbPath))) {
+        println("cjreg: 数据目录不存在或未初始化: ${dataDir}")
+        return 1
+    }
+    var storm: Storm
+    try {
+        storm = Storm.open(dbPath, syncWrites: true)
+    } catch (e: Exception) {
+        println("cjreg: 无法打开数据目录（请先停止服务，Badger 需要独占目录）: ${e.message}")
+        return 1
+    }
+    var result: BackupResult
+    try {
+        result = createBackup(storm, dataDir, outFile, includeBlobs: includeBlobs)
+    } catch (e: Exception) {
+        storm.close()
+        println("cjreg: 备份失败: ${e.message}")
+        return 1
+    }
+    storm.close()
+    println("cjreg: 备份完成 → ${result.archive}（共 ${result.totalRows} 行；制品 ${result.blobFiles} 个 / ${result.blobBytes} 字节；含制品内容=${result.includeBlobs}）")
+    for (t in result.tables) {
+        println("  ${t.table}: ${t.rows} 行")
+    }
+    return 0
+}
+
+// admin restore：从 tar.gz 恢复（默认要求目标目录为空；--force 先删现有 cjreg.db/blobs）
+func cmdAdminRestore(dataDir: String, fromPath: String, force: Bool, checkOnly: Bool): Int64 {
+    if (fromPath.isEmpty()) {
+        println("cjreg: admin restore 需要 --from <备份文件.tar.gz>")
+        return 2
+    }
+    var result: RestoreResult
+    try {
+        result = restoreBackup(dataDir, fromPath, force: force, checkOnly: checkOnly)
+    } catch (e: Exception) {
+        println("cjreg: 恢复失败: ${e.message}")
+        return 1
+    }
+    if (result.checkOnly) {
+        println("cjreg: 备份校验通过 → ${fromPath}（共 ${result.totalRows} 行；制品 ${result.blobFiles} 个）")
+    } else {
+        println("cjreg: 恢复完成 → ${result.dataDir}（共 ${result.totalRows} 行；制品 ${result.blobFiles} 个；缺失制品 ${result.missingBlobs} 个）")
+        if (result.missingBlobs > 0) {
+            println("  提示：备份不含制品内容（或制品不全），这些包在下载时会 404；需要制品时请做不带 --no-blobs 的完整备份")
+        }
+    }
+    for (t in result.tables) {
+        println("  ${t.table}: ${t.rows} 行")
+    }
+    return 0
+}
+
 // admin：应急管理 + 存量数据回捞
 //   reset-password：管理端锁死（管理员被禁用/降级）后的兜底通道
 //     语义：重置口令 + 强制 isAdmin=true + isActive=true；信任凭证 = 本地数据目录持有者
@@ -412,7 +492,9 @@ func cmdAdmin(dataDir: String, sub: String, username: String, password: String, 
     let usage = "用法: cjreg admin reset-password --username <用户名> --password <新口令> [-d <数据目录>]\n" +
         "      cjreg admin delete-user --username <用户名> [-d <数据目录>]\n" +
         "      cjreg admin sync-metadata [-d <数据目录>] [--all]\n" +
-        "      cjreg admin dump -d <数据目录> --out <输出目录>"
+        "      cjreg admin dump -d <数据目录> --out <输出目录>\n" +
+        "      cjreg admin backup -d <数据目录> --out <备份文件.tar.gz> [--no-blobs]\n" +
+        "      cjreg admin restore -d <目标目录> --from <备份文件.tar.gz> [--force] [--check-only]"
     if (sub.isEmpty() || sub == "help") {
         println(usage)
         return 2

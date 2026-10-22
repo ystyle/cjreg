@@ -39,7 +39,7 @@ services:
 ```
 
 - 镜像公开（`linux/amd64`），内置 Web 静态资源；容器以 **uid 1000** 运行，数据目录属主需可写。
-- 数据全在 `/data`：`cjreg.db` + `blobs/` + `cjreg.toml`；备份 = 拷贝目录，迁移 = 换机器。
+- 数据全在 `/data`：`cjreg.db` + `blobs/` + `cjreg.toml`；备份 = 拷贝目录或用 `admin backup` 打成 tar.gz，迁移 = 换机器（见[备份与恢复](/guide/backup)）。
 - 发布大包（>30MB）按机器内存调 `cjHeapSize`。
 
 ## 3. 从源码构建镜像（一键）
@@ -145,7 +145,7 @@ docker compose run --rm cjreg /app/cjreg init -d /data \
 └── cjreg.toml      # 服务端配置（改完 docker compose restart 生效）
 ```
 
-**备份/迁移 = 拷贝 `./data`**；换机器后 `docker compose up -d` 即可。
+**备份/迁移**：停服后拷贝 `./data`，或用 `admin backup` 生成可校验的 `tar.gz`；换机器后 `docker compose up -d` 即可。详见[备份与恢复](/guide/backup)。
 
 ## 5. 环境变量
 

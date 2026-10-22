@@ -29,8 +29,13 @@
 
 ## 数据怎么备份/迁移？
 
-整个数据目录（`cjreg.db` + `blobs/` + `cjreg.toml`）拷贝即可；换机器后直接 `serve`，索引与自增 id 会自动恢复。
-建议停服后拷贝（或依赖 `syncWrites` + 优雅关闭）。
+两种方式，都要求**先停服**（或依赖 `syncWrites` + 优雅关闭）：
+
+- 直接拷贝整个数据目录（`cjreg.db` + `blobs/` + `cjreg.toml`）；换机器后直接 `serve`，索引与自增 id 自动恢复；
+- 用 `cjreg admin backup -d ./data --out backup.tar.gz` 打成一个归档（含行数与制品 sha256 校验），
+  新机器 `cjreg admin restore -d ./empty --from backup.tar.gz` 恢复；另有只读导出 `admin dump` 用于升级前后 diff。
+
+详见[备份与恢复](/guide/backup)。
 
 ## 忘掉管理员口令 / 管理员被全部禁用？
 

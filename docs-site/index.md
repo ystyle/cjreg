@@ -27,8 +27,12 @@ features:
     details: 复用 cjdep 依赖拓扑排序，四分类（need_publish/version_optional/already_exists/conflict）；按序推送目标仓并校验 SHA-256；重启自动恢复。
   - title: 全栈仓颉 Web 界面
     details: 管理后台（用户/组织/团队/包/上游/发布计划/日志）与公开门户（首页/包列表/包详情/文档/个人门户）均由自研 cjxt 渲染，零 JS 构建链。
+  - title: 完整备份与恢复
+    details: admin backup 把数据库、制品与清单打成 tar.gz（行数与 sha256 校验），restore 到空目录即可还原；支持 --check-only 校验与 --no-blobs 轻量备份。
+  - title: 升级可 diff 的只读导出
+    details: admin dump 按表导出原始 JSONL（只读、不触发索引迁移），升级/迁移前后逐字节对比即可证明数据零变化。
   - title: 一个二进制即完整仓库
-    details: 嵌入式 bstorm（badger-cj）替代外部数据库，数据目录即数据；备份=拷贝目录，迁移=换机器；静态编译、优雅关闭。
+    details: 嵌入式 bstorm（badger-cj）替代外部数据库，数据目录即数据；备份=目录或 admin backup，迁移=换机器；静态编译、优雅关闭。
 ---
 
 ![公开门户：包列表与搜索](/images/portal-home.webp)

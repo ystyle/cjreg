@@ -35,6 +35,7 @@ export default defineConfig({
           { text: '内存与优雅关闭', link: '/guide/memory' },
           { text: '性能基准', link: '/guide/benchmark' },
           { text: '审计日志', link: '/guide/audit' },
+          { text: '备份与恢复', link: '/guide/backup' },
           { text: '常见问题', link: '/guide/faq' },
         ]},
       ],

@@ -81,8 +81,17 @@ public_url = "https://pkg.example.com"
 
 ## 备份与迁移
 
-停服（或依赖 `syncWrites` + 优雅关闭）后拷贝**整个数据目录**：`cjreg.db` + `blobs/` + `cjreg.toml`。
-容器部署就是拷 `./data`。
+两种方式，都要求**先停服**（Badger 独占数据目录）：
+
+- 直接拷贝**整个数据目录**（`cjreg.db` + `blobs/` + `cjreg.toml`）；容器部署就是拷 `./data`；
+- 用 `cjreg admin backup` 打成单个 `tar.gz`（含行数与制品 sha256 校验），新机器 `restore` 恢复。
+
+```shell
+cjreg admin backup  -d ./data --out ./backup/cjreg-$(date +%F).tar.gz
+cjreg admin restore -d ./empty --from ./backup/cjreg-2026-10-22.tar.gz
+```
+
+详见[备份与恢复](/guide/backup)。
 
 ## 配置项
 

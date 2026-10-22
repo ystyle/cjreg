@@ -14,7 +14,13 @@ cjreg <command> [options]
 
   serve      启动私有中心仓 HTTP 服务（发布/下载/索引 + 管理 API）
   init       初始化数据目录（空数据目录创建首个管理员 + 默认官方上游）
-  admin      应急管理（reset-password --username <u> --password <p>）
+  admin      管理命令：
+               reset-password --username <u> --password <p>   应急重置口令
+               delete-user --username <u>                      删除用户（团队 owner 需先转让）
+               sync-metadata [-d <dir>] [--all]                回捞 README/展示字段
+               dump -d <dir> --out <目录>                      只读导出数据行（升级前后 diff）
+               backup -d <dir> --out <文件.tar.gz> [--no-blobs] 完整备份（库 + 制品 + 校验）
+               restore -d <空目录> --from <文件.tar.gz> [--force] [--check-only] 从备份恢复/校验
 ```
 
 选项：
@@ -80,6 +86,24 @@ cjpm build -j 16
 
 > Docker/Compose/手动三种部署形态、卷与环境变量、优雅关闭与运维命令：
 > [docs-site/deploy](docs-site/deploy/index.md)（在线站点 `docs-site/`，VitePress 构建）。
+
+### 备份与恢复
+
+**先停服**（Badger 独占数据目录，`docker compose stop`），二选一：
+
+- **拷贝数据目录**（`cjreg.db` + `blobs/` + `cjreg.toml`），最直接；
+- **打归档**（推荐，带行数与制品 sha256 校验）：
+
+```bash
+# 完整备份（默认含 blobs/ 制品内容；--no-blobs 只备库与制品清单）
+./target/release/bin/ystyle::cjreg admin backup -d ./data --out ./backup/cjreg-$(date +%F).tar.gz
+# 只校验不落盘
+./target/release/bin/ystyle::cjreg admin restore -d ./empty --from ./backup/cjreg-2026-10-22.tar.gz --check-only
+# 恢复到空目录（已存在库时拒绝；--force 先删目标库与 blobs）
+./target/release/bin/ystyle::cjreg admin restore -d ./restored --from ./backup/cjreg-2026-10-22.tar.gz
+```
+
+升级前后可再用 `admin dump` 各自导出一次，逐表 diff 证明数据未变。详见[备份与恢复](https://ystyle.top/cjreg/guide/backup)。
 
 ### 管理 API（HTTP）
 

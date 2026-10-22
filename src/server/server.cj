@@ -302,6 +302,15 @@ public func buildServer(
             app.get("/api/admin/publish-plans/:id/events", { ctx => adm.planEvents(ctx) })
             // 手动跳过某一项（标记 skipped：执行器不再推送它，不计失败）
             app.post("/api/admin/publish-plans/:id/items/:itemId/skip", { ctx => adm.skipPlanItem(ctx) })
+            // 在线备份（全部 requireAdmin：归档含口令哈希/Token/审计日志）
+            app.get("/api/admin/backups", { ctx => adm.listBackups(ctx) })
+            app.post("/api/admin/backups", { ctx => adm.createBackupJob(ctx) })
+            app.get("/api/admin/backups/:file/download", { ctx => adm.downloadBackup(ctx) })
+            app.post("/api/admin/backups/:file/ticket", { ctx => adm.createDownloadTicket(ctx) })
+            app.post("/api/admin/backups/:file/apply-on-restart", { ctx => adm.markRestoreOnRestart(ctx) })
+            app.delete("/api/admin/backups/:file", { ctx => adm.deleteBackup(ctx) })
+            app.post("/api/admin/backups/restore-check", { ctx => adm.restoreCheck(ctx) })
+            app.delete("/api/admin/backups/restore-pending", { ctx => adm.cancelPendingRestore(ctx) })
             app.get("/api/admin/logs/:kind", { ctx => adm.queryLogs(ctx) })
             app.post("/api/admin/logs/clean", { ctx => adm.cleanLogs(ctx) })
         case None => ()

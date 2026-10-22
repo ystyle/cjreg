@@ -182,6 +182,15 @@ func openStores(dataDir: String): ?(PackageStore, BstormUserStore, BstormUpstrea
 func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
     setSiteName(cfg.siteName)   // 品牌文字（公开端导航 / 后台侧栏 / 登录页）
     let port = cfg.port
+    // 管理端标记的「下次重启应用恢复」：必须在打开数据库之前处理（会替换整个数据目录）
+    let applied = applyPendingRestore(dataDir)
+    if (!applied.fileName.isEmpty() && !applied.applied) {
+        println("cjreg: 待应用恢复未生效 —— ${applied.message}")
+        if (applied.message.contains("已回滚")) {
+            // 回滚成功 = 旧数据完好，可以继续用旧库启动；只是这次恢复没生效
+            println("cjreg: 已回滚到恢复前的数据，继续以现有数据启动")
+        }
+    }
     let stores = openStores(dataDir)
     if (stores.isNone()) {
         return 1
@@ -193,10 +202,12 @@ func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
     let proxySvc = ProxyService(pkgStore, blobStore, upSvc, tmpDir: dataDir + "/blobs")
     // 权限/审计数据单实例：UI（CjregState）与 HTTP handler 必须共用，否则 id 计数器各自递增会撞车
     let adminData = AdminDataStore(userStore.storm)
+    // 在线备份：复用已持有的 Storm（同一只读快照），因此不需要停服
+    let backupSvc = OnlineBackupService(pkgStore.storm, dataDir)
     let admin = AdminService(authSvc, upSvc, userStore, upStore,
         ResolveService(upSvc), Some(proxySvc), PublishPlanService(pkgStore),
         PublishExecutor(pkgStore, blobStore), adminData: Some(adminData),
-        pkgStore: Some(pkgStore), blobStore: Some(blobStore))
+        pkgStore: Some(pkgStore), blobStore: Some(blobStore), backupSvc: Some(backupSvc))
 
     // 同一 Tang 实例：协议路由 + cjxt 管理/公开页面（单进程共享 store）
     let app = buildServer(pkgStore, Some(admin), Some(upSvc), blobStore, config: cfg,
@@ -254,6 +265,8 @@ func cmdServe(dataDir: String, cfg: CjregConfig): Int64 {
             let st = CjregState(pkgStore, userStore, upStore, adminData, authSvc, app: Some(cjxtApp), config: cfg)
             st.blobStore = Some(blobStore)
             st.proxySvc = Some(proxySvc)
+            st.backupSvc = Some(backupSvc)
+            st.dataDir = dataDir
             st
         })
         .auth({ t => restoreAdminSession(authSvc, t) })
@@ -621,6 +634,8 @@ func cmdAdminUI(dataDir: String, cfg: CjregConfig): Int64 {
     let blobStore: BlobStore = DiskBlobStore(dataDir + "/blobs")
     // 回源代理（管理端「重拉」用）：与 serve 同构
     let proxySvc = ProxyService(pkgStore, blobStore, UpstreamService(upStore))
+    // 在线备份：admin-ui 也支持（同一个 Storm，同一只读快照）
+    let backupSvc = OnlineBackupService(pkgStore.storm, dataDir)
     let cjxtApp = App()
     cjxtApp
         .configure(AppConfig(title: cfg.siteName, cssBundle: "/css/bundle.css?v=5"))
@@ -630,6 +645,8 @@ func cmdAdminUI(dataDir: String, cfg: CjregConfig): Int64 {
             let st = CjregState(pkgStore, userStore, upStore, adminData, authSvc, app: Some(cjxtApp), config: cfg)
             st.blobStore = Some(blobStore)
             st.proxySvc = Some(proxySvc)
+            st.backupSvc = Some(backupSvc)
+            st.dataDir = dataDir
             st
         })
         .auth({ t => restoreAdminSession(authSvc, t) })

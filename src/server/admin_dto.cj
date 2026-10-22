@@ -854,3 +854,172 @@ public class RefetchResp <: JsonSerializable {
         w.endObject()
     }
 }
+
+// ===== 在线备份（admin/backups）=====
+
+// 一个归档文件：{"file":"..","size":N,"mtime":ms,"timeText":"10-22 15:30"}
+public class BackupArchiveResp <: JsonSerializable {
+    public let file: String
+    public let size: Int64
+    public let mtime: Int64
+    public let timeText: String
+
+    public init(file: String, size: Int64, mtime: Int64, timeText: String) {
+        this.file = file
+        this.size = size
+        this.mtime = mtime
+        this.timeText = timeText
+    }
+
+    public func toJson(w: JsonWriter): Unit {
+        w.startObject()
+        w.writeName("file").writeValue(file)
+        w.writeName("size").writeValue(size)
+        w.writeName("mtime").writeValue(mtime)
+        w.writeName("timeText").writeValue(timeText)
+        w.endObject()
+    }
+}
+
+// 一次备份任务：{"id","fileName","status","message","createdAt","timeText","totalRows","blobFiles","sizeBytes","includeBlobs"}
+public class BackupJobResp <: JsonSerializable {
+    public let id: String
+    public let fileName: String
+    public let status: String
+    public let message: String
+    public let createdAt: Int64
+    public let timeText: String
+    public let totalRows: Int64
+    public let blobFiles: Int64
+    public let sizeBytes: Int64
+    public let includeBlobs: Bool
+
+    public init(id: String, fileName: String, status: String, message: String, createdAt: Int64,
+                timeText: String, totalRows: Int64, blobFiles: Int64, sizeBytes: Int64, includeBlobs: Bool) {
+        this.id = id
+        this.fileName = fileName
+        this.status = status
+        this.message = message
+        this.createdAt = createdAt
+        this.timeText = timeText
+        this.totalRows = totalRows
+        this.blobFiles = blobFiles
+        this.sizeBytes = sizeBytes
+        this.includeBlobs = includeBlobs
+    }
+
+    public func toJson(w: JsonWriter): Unit {
+        w.startObject()
+        w.writeName("id").writeValue(id)
+        w.writeName("fileName").writeValue(fileName)
+        w.writeName("status").writeValue(status)
+        w.writeName("message").writeValue(message)
+        w.writeName("createdAt").writeValue(createdAt)
+        w.writeName("timeText").writeValue(timeText)
+        w.writeName("totalRows").writeValue(totalRows)
+        w.writeName("blobFiles").writeValue(blobFiles)
+        w.writeName("sizeBytes").writeValue(sizeBytes)
+        w.writeName("includeBlobs").writeValue(includeBlobs)
+        w.endObject()
+    }
+}
+
+// 备份页总览：{"busy":bool,"archives":[..],"jobs":[..],"pendingRestore":"..","pendingAt":ms}
+public class BackupListResp <: JsonSerializable {
+    public let busy: Bool
+    public let archives: ArrayList<BackupArchiveResp>
+    public let jobs: ArrayList<BackupJobResp>
+    public let pendingRestore: String
+    public let pendingAt: Int64
+
+    public init(busy: Bool, archives: ArrayList<BackupArchiveResp>, jobs: ArrayList<BackupJobResp>,
+                pendingRestore: String, pendingAt: Int64) {
+        this.busy = busy
+        this.archives = archives
+        this.jobs = jobs
+        this.pendingRestore = pendingRestore
+        this.pendingAt = pendingAt
+    }
+
+    public func toJson(w: JsonWriter): Unit {
+        w.startObject()
+        w.writeName("busy").writeValue(busy)
+        w.writeName("archives").startArray()
+        for (a in archives) {
+            a.toJson(w)
+        }
+        w.endArray()
+        w.writeName("jobs").startArray()
+        for (j in jobs) {
+            j.toJson(w)
+        }
+        w.endArray()
+        w.writeName("pendingRestore").writeValue(pendingRestore)
+        w.writeName("pendingAt").writeValue(pendingAt)
+        w.endObject()
+    }
+}
+
+// 触发备份请求：{"includeBlobs": bool}（缺省 true）
+public class CreateBackupRequest <: JsonDeserializable<CreateBackupRequest> {
+    public var includeBlobs: ?Bool = None
+
+    public init() {}
+
+    public static func fromJson(r: JsonReader): CreateBackupRequest {
+        let req = CreateBackupRequest()
+        r.startObject()
+        while (r.peek() != EndObject) {
+            let n = r.readName()
+            match (n) {
+                case "includeBlobs" => req.includeBlobs = Some(r.readValue<Bool>())
+                case _ => r.skip()
+            }
+        }
+        r.endObject()
+        req
+    }
+}
+
+// 校验结果：{"file":"..","totalRows":N,"blobFiles":N,"ok":true}
+public class RestoreCheckResp <: JsonSerializable {
+    public let file: String
+    public let totalRows: Int64
+    public let blobFiles: Int64
+    public let ok: Bool
+
+    public init(file: String, totalRows: Int64, blobFiles: Int64, ok: Bool) {
+        this.file = file
+        this.totalRows = totalRows
+        this.blobFiles = blobFiles
+        this.ok = ok
+    }
+
+    public func toJson(w: JsonWriter): Unit {
+        w.startObject()
+        w.writeName("file").writeValue(file)
+        w.writeName("totalRows").writeValue(totalRows)
+        w.writeName("blobFiles").writeValue(blobFiles)
+        w.writeName("ok").writeValue(ok)
+        w.endObject()
+    }
+}
+
+
+// 一次性下载票据：{"ticket":"..","file":"..","url":"/api/admin/backups/<file>/download?ticket=.."}
+public class DownloadTicketResp <: JsonSerializable {
+    public let ticket: String
+    public let file: String
+
+    public init(ticket: String, file: String) {
+        this.ticket = ticket
+        this.file = file
+    }
+
+    public func toJson(w: JsonWriter): Unit {
+        w.startObject()
+        w.writeName("ticket").writeValue(ticket)
+        w.writeName("file").writeValue(file)
+        w.endObject()
+    }
+}

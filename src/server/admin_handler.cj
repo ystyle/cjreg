@@ -28,6 +28,8 @@ public class AdminService {
     // 包库与制品库（三级删除闭环用：软删/恢复/硬删 + 制品清理）
     public var pkgStore: ?PackageStore
     public var blobStore: ?BlobStore
+    // 在线备份服务（None = 未注入，备份页不可用）
+    public var backupSvc: ?OnlineBackupService
 
     public init(auth: AuthService, upstreamSvc: UpstreamService,
                 userStore: UserStore, upstreamStore: UpstreamStore,
@@ -35,7 +37,8 @@ public class AdminService {
                 planSvc: PublishPlanService, executor: PublishExecutor,
                 adminData!: ?AdminDataStore = None,
                 pkgStore!: ?PackageStore = None,
-                blobStore!: ?BlobStore = None) {
+                blobStore!: ?BlobStore = None,
+                backupSvc!: ?OnlineBackupService = None) {
         this.auth = auth
         this.upstreamSvc = upstreamSvc
         this.userStore = userStore
@@ -47,6 +50,7 @@ public class AdminService {
         this.adminData = adminData
         this.pkgStore = pkgStore
         this.blobStore = blobStore
+        this.backupSvc = backupSvc
     }
 
     // 从 Authorization 头取 token

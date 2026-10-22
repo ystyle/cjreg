@@ -48,6 +48,7 @@ public func adminSidebar(activePath: String, siteName!: String = ""): IComponent
     entries.add(("/admin/teams", "团队管理"))
     entries.add(("/admin/users", "用户管理"))
     entries.add(("/admin/logs", "日志"))
+    entries.add(("/admin/backups", "备份与恢复"))
     let menu = Menu()
         .dark()
     for ((path, label) in entries) {

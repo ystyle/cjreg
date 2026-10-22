@@ -24,6 +24,10 @@ public class CjregState <: AppState {
     public var blobStore: ?BlobStore = None
     // 回源代理（管理端「重拉」用；None = 未注入，重拉不可用）
     public var proxySvc: ?ProxyService = None
+    // 在线备份服务（管理端备份页用；None = 未注入，备份页不可用）
+    public var backupSvc: ?OnlineBackupService = None
+    // 数据目录（备份页读写 .restore-pending 标记用）
+    public var dataDir: String = ""
     // 登录态
     public var currentUser: Signal<Option<User>> = Signal<Option<User>>(Option<User>.None)
     public var sessionToken: Signal<String> = Signal<String>("")

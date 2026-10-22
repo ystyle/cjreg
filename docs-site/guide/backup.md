@@ -16,10 +16,54 @@ data/
 | `admin backup` / `admin restore` | **完整备份与恢复**（数据库 + 制品内容，自带校验） | 单个 `tar.gz` |
 | `admin dump` | **只读导出**数据行为 JSONL，用于升级前后 diff、人工检查、二次处理 | 目录（每表一个 `.jsonl` + `manifest.json`） |
 
-> ⚠️ 两个命令都**必须停服后执行**：Badger 需要独占数据目录。Docker 部署先 `docker compose stop`，操作完再 `up -d`
-> （`stop` 走优雅关闭，会先把 memtable flush 落盘）。
+> ⚠️ 命令行 `admin backup` / `admin dump` **必须停服后执行**：它们要独占打开数据目录。
+> Docker 部署先 `docker compose stop`，操作完再 `up -d`（`stop` 走优雅关闭，会先把 memtable flush 落盘）。
+> **不想停服就用上面第 0 节的管理后台在线备份**。
 
-## 1. 完整备份（推荐日常使用）
+## 0. 管理后台：在线备份（不用停服）
+
+管理后台 **「备份与恢复」**（`/admin/backups`，仅管理员）可以在**服务运行中**直接备份：
+
+- **为什么能不停机**：备份在服务端进程内执行，复用已持有的数据库连接；底层整库扫描是**一个只读快照**
+  （一个只读事务 + 一个迭代器），导出的数据行是自洽的；制品是内容寻址不可变的，备份期间新发布的
+  制品不会被这次快照引用。
+- **操作**：勾选「含制品」→ 点「立即备份」→ 等任务完成 → 列表里出现归档，可直接下载/校验/删除。
+- **并发保护**：同一时间只允许一个备份任务（避免同时扫库把 IO 打满），重复点击返回 409。
+- **保留策略**：默认保留最近 7 份（`keepCount`），更早的自动清理；删除只作用于 `cjreg-*.tar.gz`。
+- **下载**：浏览器的 `<a>` 带不了 Bearer 头，下载走**一次性票据**（`POST /api/admin/backups/:file/ticket`
+  签发，5 分钟有效、用后即焚、绑定文件名），URL 里不会出现长期 session token。
+- **权限**：全部接口 `requireAdmin`；备份/下载/校验/标记恢复都写审计日志。归档含口令哈希、
+  发布 Token 与审计日志，请按敏感文件保管。
+
+对应接口：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/admin/backups` | 归档列表 + 最近任务 + 待恢复标记 |
+| POST | `/api/admin/backups` | 触发备份，body `{"includeBlobs": true}` |
+| POST | `/api/admin/backups/:file/ticket` | 签发一次性下载票据 |
+| GET | `/api/admin/backups/:file/download?ticket=…` | 流式下载 |
+| POST | `/api/admin/backups/restore-check` | 上传归档做校验（只读，不写库） |
+| POST | `/api/admin/backups/:file/apply-on-restart` | 标记「下次重启应用」 |
+| DELETE | `/api/admin/backups/restore-pending` | 取消待应用的恢复 |
+| DELETE | `/api/admin/backups/:file` | 删除归档 |
+
+### 恢复为什么不能在线做
+
+数据库对数据目录是**独占**的，而 store 在启动时构造一次、被路由/管理端/发布计划执行器/回源代理
+全进程持有——运行中替换整套存储等于在进程内重建服务，风险远大于收益。所以恢复是「半自动」：
+
+1. 上传或选择一个归档 → **校验**（只读：格式、行数、制品 sha256）；
+2. 点「重启时应用」→ 服务端写一个标记文件（`<dataDir>/.restore-pending`）；
+3. **重启服务**，启动流程在打开数据库**之前**执行替换：
+   - 现库与 `blobs/` 先挪到 `<dataDir>/.pre-restore-<时间戳>/`；
+   - 解压归档并校验；
+   - **任何失败自动回滚**：删掉半成品、把旧数据挪回、清掉标记，然后以旧数据正常启动。
+4. 成功则删掉标记，`.pre-restore-*` 留档供人工回滚。
+
+停机时间 = 一次普通重启。
+
+## 1. 完整备份（命令行，适合脚本/定时任务）
 
 ```shell
 # 停服

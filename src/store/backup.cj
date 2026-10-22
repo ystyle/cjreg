@@ -30,14 +30,17 @@ public class BackupResult {
     public let blobFiles: Int64
     public let blobBytes: Int64
     public let includeBlobs: Bool
+    // 打包期间被硬删、没能进归档的制品数（在线备份会有这种竞态；只告警不失败）
+    public let missingBlobs: Int64
 
-    init(archive: String, totalRows: Int64, tables: ArrayList<DumpTableStat>, blobFiles: Int64, blobBytes: Int64, includeBlobs: Bool) {
+    init(archive: String, totalRows: Int64, tables: ArrayList<DumpTableStat>, blobFiles: Int64, blobBytes: Int64, includeBlobs: Bool, missingBlobs: Int64) {
         this.archive = archive
         this.totalRows = totalRows
         this.tables = tables
         this.blobFiles = blobFiles
         this.blobBytes = blobBytes
         this.includeBlobs = includeBlobs
+        this.missingBlobs = missingBlobs
     }
 }
 
@@ -86,6 +89,7 @@ public func createBackup(storm: Storm, dataDir: String, archivePath: String, inc
         }
     }
 
+    var missingBlobs: Int64 = 0
     let out = File(archivePath, Write)
     try {
         let gz = CompressOutputStream(out, wrap: GzipFormat, bufLen: 8192)
@@ -95,9 +99,9 @@ public func createBackup(storm: Storm, dataDir: String, archivePath: String, inc
             let manifest = buildBackupManifest(dump, blobEntries.size, blobBytes, includeBlobs)
             tw.writeFile("manifest.json", manifest.toArray())
 
-            // 数据行（dump 产物里已经有每表一个 jsonl）
+            // 数据行（dump 产物里已经有每表一个 jsonl）：addFile 按 8KB 分块读，不整表进内存
             for (stat in dump.tables) {
-                tw.writeFile(stat.file, readAllBytes("${tmpDir}/${stat.file}"))
+                tw.addFile("${tmpDir}/${stat.file}", name: stat.file)
             }
 
             // 制品清单
@@ -107,10 +111,19 @@ public func createBackup(storm: Storm, dataDir: String, archivePath: String, inc
             }
             tw.writeFile("blobs.manifest.jsonl", bm.toString().toArray())
 
-            // 制品内容（可选）
+            // 制品内容（可选）：同样流式；备份期间被硬删的制品跳过并计数
             if (includeBlobs) {
                 for ((name, _) in blobEntries) {
-                    tw.writeFile("blobs/${name}", readAllBytes("${dataDir}/blobs/${name}"))
+                    let path = "${dataDir}/blobs/${name}"
+                    if (!exists(Path(path))) {
+                        missingBlobs++
+                        continue
+                    }
+                    try {
+                        tw.addFile(path, name: "blobs/${name}")
+                    } catch (e: Exception) {
+                        missingBlobs++
+                    }
                 }
             }
         } finally {
@@ -121,7 +134,7 @@ public func createBackup(storm: Storm, dataDir: String, archivePath: String, inc
         out.close()
     }
     removeIfExists(Path(tmpDir), recursive: true)
-    BackupResult(archivePath, dump.totalRows, dump.tables, Int64(blobEntries.size), blobBytes, includeBlobs)
+    BackupResult(archivePath, dump.totalRows, dump.tables, Int64(blobEntries.size), blobBytes, includeBlobs, missingBlobs)
 }
 
 /**
@@ -154,8 +167,8 @@ public func restoreBackup(dataDir: String, archivePath: String, force!: Bool = f
         }
     }
 
-    let archiveBytes = readAllBytes(archivePath)
-    let gz = DecompressInputStream(ByteBuffer(archiveBytes), wrap: GzipFormat, bufLen: 8192)
+    let archiveFile = File(archivePath, Read)
+    let gz = DecompressInputStream(archiveFile, wrap: GzipFormat, bufLen: 8192)
     let tr = Reader(gz)
     var manifestText = ""
     let tableLines = HashMap<String, ArrayList<String>>()
@@ -185,12 +198,6 @@ public func restoreBackup(dataDir: String, archivePath: String, force!: Bool = f
                 let _ = readTarEntry(tr, hdr.size)
             } else if (name.startsWith("blobs/")) {
                 let sha = name["blobs/".size..]
-                let data = readTarEntry(tr, hdr.size)
-                let actual = sha256Hex(data)
-                if (actual != sha) {
-                    throw Exception("制品校验失败（${sha} 内容 sha256=${actual}）")
-                }
-                blobCount++
                 if (!checkOnly) {
                     if (!blobsDirPrepared) {
                         if (exists(Path("${dataDir}/blobs"))) {
@@ -199,10 +206,10 @@ public func restoreBackup(dataDir: String, archivePath: String, force!: Bool = f
                         Directory.create(Path("${dataDir}/blobs"), recursive: true)
                         blobsDirPrepared = true
                     }
-                    let f = File("${dataDir}/blobs/${sha}", Write)
-                    f.write(data)
-                    f.close()
                 }
+                let target = if (checkOnly) { Option<String>.None } else { Some("${dataDir}/blobs/${sha}") }
+                verifyAndCopyTarEntry(tr, hdr.size, sha, target)
+                blobCount++
             } else if (name.endsWith(".jsonl")) {
                 let table = name[0..(name.size - 6)]
                 if (!isKnownTable(table)) {
@@ -216,8 +223,8 @@ public func restoreBackup(dataDir: String, archivePath: String, force!: Bool = f
                 tableLines[table] = lines
                 tableOrder.add(table)
             } else {
-                // 未知条目：读干，保证后续 header 不错位
-                let _ = readTarEntry(tr, hdr.size)
+                // 未知条目：流式读干，保证后续 header 不错位（也避免超大未知条目进内存）
+                skipTarEntry(tr, hdr.size)
             }
         }
     } finally {
@@ -227,6 +234,11 @@ public func restoreBackup(dataDir: String, archivePath: String, force!: Bool = f
         }
         try {
             gz.close()
+        } catch (e: Exception) {
+            ()
+        }
+        try {
+            archiveFile.close()
         } catch (e: Exception) {
             ()
         }
@@ -291,6 +303,78 @@ func readAllBytes(path: String): Array<Byte> {
     }
     f.close()
     data[0..got]
+}
+
+/** 读干一个 tar 条目（分块丢弃，避免占用内存）。 */
+func skipTarEntry<T>(tr: Reader<T>, size: Int64) where T <: InputStream {
+    let chunk = Array<Byte>(64 * 1024, repeat: 0)
+    var remaining = size
+    while (remaining > 0) {
+        let want = if (remaining < chunk.size) { remaining } else { chunk.size }
+        let n = tr.read(chunk[0..want])
+        if (n <= 0) {
+            break
+        }
+        remaining -= n
+    }
+}
+
+/**
+ * 校验并（可选）写出一个制品条目：边读边算 sha256，读完与文件名比对，不一致就删掉目标文件。
+ * 分块处理，单个大制品不会整块进内存。
+ */
+func verifyAndCopyTarEntry<T>(tr: Reader<T>, size: Int64, expectedSha: String, targetPath: ?String) where T <: InputStream {
+    let sha = SHA256()
+    var out: ?File = None
+    match (targetPath) {
+        case Some(p) =>
+            // 目标文件的父目录不存在时创建（依赖制品目录，通常已存在）
+            match (p.lastIndexOf('/')) {
+                case Some(slash) =>
+                    let parent = p[0..slash]
+                    if (!parent.isEmpty() && !exists(Path(parent))) {
+                        Directory.create(Path(parent), recursive: true)
+                    }
+                case None => ()
+            }
+            out = Some(File(p, Write))
+        case None => ()
+    }
+    let chunk = Array<Byte>(64 * 1024, repeat: 0)
+    var remaining = size
+    try {
+        while (remaining > 0) {
+            let want = if (remaining < chunk.size) { remaining } else { chunk.size }
+            let n = tr.read(chunk[0..want])
+            if (n <= 0) {
+                break
+            }
+            sha.write(chunk[0..n])
+            match (out) {
+                case Some(f) => f.write(chunk[0..n])
+                case None => ()
+            }
+            remaining -= n
+        }
+    } finally {
+        match (out) {
+            case Some(f) =>
+                try {
+                    f.close()
+                } catch (e: Exception) {
+                    ()
+                }
+            case None => ()
+        }
+    }
+    let actual = toHexString(sha.finish())
+    if (actual != expectedSha) {
+        match (targetPath) {
+            case Some(p) => if (exists(Path(p))) { removeIfExists(Path(p), recursive: false) }
+            case None => ()
+        }
+        throw Exception("制品校验失败（${expectedSha} 内容 sha256=${actual}）")
+    }
 }
 
 func readTarEntry<T>(tr: Reader<T>, size: Int64): Array<Byte> where T <: InputStream {

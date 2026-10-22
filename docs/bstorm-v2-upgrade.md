@@ -158,5 +158,6 @@ cjreg 原来几乎全靠 `all<T>()` 全表扫 + 内存过滤。借这次升级�
 - [x] bstorm 2.0.0 发布（私有仓 → 中心仓，已完成；v2 分支未合并到 master）。
 - [x] P1 只读 dump 工具（已实现 `admin dump`，含单测与 clean drill 验证）。
 - [x] P2 完整 backup/restore 已实现（`admin backup` / `admin restore`，含 `--check-only`、`--no-blobs`、`--force`）。
+- [x] P3 管理端备份页（**在线备份，不需要停服**）+ 恢复「上传校验 → 标记 → 重启应用（失败自动回滚）」。
 - [ ] 生产备份策略：按日 backup（含制品）留存几份、放哪台机器（blobs 会随发布增长，需观察归档大小）。
 - [ ] 升级后部署到生产（等合并节奏；先在生产数据副本上按 §四演练一遍）。

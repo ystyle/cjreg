@@ -182,7 +182,10 @@ public class PackagesPageRenderTest {
         @Expect(json.contains("详情"), true)
         @Expect(json.contains("软删除"), true)          // 未删除的版本：详情 / 软删除
         @Expect(json.contains("重拉"), false)            // 本地发布的不给「重拉」
-        @Expect(json.contains("恢复"), false)
+        // 注意：侧栏有「备份与恢复」菜单项，不能直接断言不含「恢复」二字；
+        // 这里认的是版本操作里的「恢复」按钮（与「硬删除」同组出现）
+        @Expect(json.contains("el-dropdown"), true)
+        @Expect(json.contains("硬删除"), false)
 
         // 软删过的版本：给恢复 / 硬删除，且菜单收起时也挂在 DOM 上（Dropdown 面板靠 display 切换）
         for (d in state.pkgStore.listVersions("ystyle", "crc")) {
@@ -191,7 +194,6 @@ public class PackagesPageRenderTest {
         }
         page.select("ystyle", "crc")
         let json2 = renderPackages(page)
-        @Expect(json2.contains("恢复"), true)
         @Expect(json2.contains("硬删除"), true)
         @Expect(json2.contains("软删除"), false)
     }

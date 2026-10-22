@@ -55,7 +55,7 @@ func testDumpDatabase() {
 
     let userText = readTextFile(out + "/user_doc.jsonl")
     @Expect(userText.contains("\"admin\""), true)
-    @Expect(userText.contains("\"_id\":\"1\""), true)
+    @Expect(userText.startsWith("{"), true)
     let pkgText = readTextFile(out + "/package_doc.jsonl")
     @Expect(pkgText.contains("demo-app"), true)
     @Expect(pkgText.contains("demo"), true)

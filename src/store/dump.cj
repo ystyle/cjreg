@@ -44,7 +44,7 @@ public class DumpResult {
 /**
  * 把 `storm` 数据库里的全部数据行导出到 `outDir`。
  *
- * 输出：每张表一个 `<table>.jsonl`（每行 `{"_id":"...","_json":<原始 JSON>}`），
+ * 输出：每张表一个 `<table>.jsonl`（每行一个原始 JSON 文档），
  * 外加 `manifest.json`（时间、总行数、每表行数/字节数、blobs 目录统计）。
  * 调用方负责先打开 Storm，并在导出后 close。
  */
@@ -85,13 +85,9 @@ public func dumpDatabase(storm: Storm, outDir: String, dataDir!: String = ""): D
         let fileName = dumpFileName(table)
         let sb = StringBuilder()
         for (idx in indexes) {
-            let keyText = String.fromUtf8(kvs[idx].keyBytes)
-            let id = splitIdOf(keyText)
-            sb.append("{\"_id\":\"")
-            sb.append(escapeJsonString(id))
-            sb.append("\",\"_json\":")
+            // 每行一个原始 JSON 文档（数据行本来就是 JSON）；restore 直接 decode 即可
             sb.append(String.fromUtf8(kvs[idx].value))
-            sb.append("}\n")
+            sb.append("\n")
         }
         let content = sb.toString().toArray()
         let f = File("${outDir}/${fileName}", Write)
@@ -138,15 +134,6 @@ func dataRowTableOf(keyText: String): ?String {
             }
             return Some(table)
         case None => return None
-    }
-}
-
-/** 数据 key 里的 id 部分（`<table>:primary:` 之后）。 */
-func splitIdOf(keyText: String): String {
-    let marker = ":primary:"
-    match (keyText.indexOf(marker)) {
-        case Some(pos) => keyText[(pos + marker.size)..]
-        case None => keyText
     }
 }
 
@@ -223,6 +210,6 @@ private func maybeAppendBlobStats(manifest: StringBuilder, dataDir: String): Uni
     manifest.append("  \"blobs\": {\"dir\": \"${escapeJsonString(blobsDir)}\", \"files\": ${count}}\n")
 }
 
-private func nowMs(): Int64 {
+func nowMs(): Int64 {
     DateTime.nowUTC().toUnixTimeStamp().toMilliseconds()
 }

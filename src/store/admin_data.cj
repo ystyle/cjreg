@@ -14,7 +14,7 @@ import std.sort.*
 @Model
 public class OrgDoc {
     @Id public var id: Int64 = 0
-    public var name: String = ""
+    @Index public var name: String = ""
     public var displayName: String = ""
     public var description: String = ""
     public var isDefault: Bool = false
@@ -47,7 +47,7 @@ public class TeamDoc {
 @Model
 public class TeamOrganizationDoc {
     @Id public var id: Int64 = 0
-    public var teamId: Int64 = 0
+    @Index public var teamId: Int64 = 0
     public var organizationId: Int64 = 0
     public var createdAt: Int64 = 0
 }
@@ -56,7 +56,7 @@ public class TeamOrganizationDoc {
 @Model
 public class TeamPackageDoc {
     @Id public var id: Int64 = 0
-    public var teamId: Int64 = 0
+    @Index public var teamId: Int64 = 0
     public var organization: String = ""
     public var packageName: String = ""
     public var createdAt: Int64 = 0
@@ -66,7 +66,7 @@ public class TeamPackageDoc {
 @Model
 public class TeamMemberDoc {
     @Id public var id: Int64 = 0
-    public var teamId: Int64 = 0
+    @Index public var teamId: Int64 = 0
     public var userId: Int64 = 0
 }
 
@@ -132,7 +132,7 @@ public class PlanDoc {
 @Model
 public class PlanItemDoc {
     @Id public var id: Int64 = 0
-    public var planId: Int64 = 0
+    @Index public var planId: Int64 = 0
     public var packageId: Int64 = 0
     public var packageOrg: String = ""
     public var packageName: String = ""
@@ -178,14 +178,6 @@ public class AdminDataStore {
         this.nextLog = 1
         this.nextPlan = 1
         this.nextPlanItem = 1
-        this.storm.reindex<OrgDoc>()
-        this.storm.reindex<TeamDoc>()
-        this.storm.reindex<TeamOrganizationDoc>()
-        this.storm.reindex<TeamPackageDoc>()
-        this.storm.reindex<TeamMemberDoc>()
-        this.storm.reindex<LogDoc>()
-        this.storm.reindex<PlanDoc>()
-        this.storm.reindex<PlanItemDoc>()
         recoverNextIds()
     }
 
@@ -261,6 +253,16 @@ public class AdminDataStore {
 
     public func getOrg(id: Int64): ?OrgDoc {
         this.storm.get<OrgDoc>(id)
+    }
+
+    /** 按名称查未删除组织（excludeId 用于改名时排除自身）。 */
+    public func findOrgByName(name: String, excludeId: Int64): ?OrgDoc {
+        for (d in this.storm.findBy<OrgDoc>("name", name)) {
+            if (d.deletedAt == 0 && d.id != excludeId) {
+                return Some(d)
+            }
+        }
+        None
     }
 
     public func deleteOrg(id: Int64, now: Int64): Bool {
@@ -382,10 +384,8 @@ public class AdminDataStore {
 
     // ---- 团队-组织关联（多对多；organizationId 0 = 无组织包）----
     public func setTeamOrganizations(teamId: Int64, orgIds: Array<Int64>, now: Int64): Unit {
-        for (d in this.storm.all<TeamOrganizationDoc>()) {
-            if (d.teamId == teamId) {
-                this.storm.delete(d)
-            }
+        for (d in this.storm.findBy<TeamOrganizationDoc>("teamId", teamId)) {
+            this.storm.delete(d)
         }
         for (oid in orgIds) {
             let d = TeamOrganizationDoc()
@@ -399,12 +399,9 @@ public class AdminDataStore {
     }
 
     public func listTeamOrganizations(teamId: Int64): ArrayList<TeamOrganizationDoc> {
-        let r = ArrayList<TeamOrganizationDoc>()
-        for (d in this.storm.all<TeamOrganizationDoc>()) {
-            if (d.teamId == teamId) {
-                r.add(d)
-            }
-        }
+        let r = this.storm.findBy<TeamOrganizationDoc>("teamId", teamId)
+        // 索引按 (teamId, id) 排序，与全表扫描的 id 顺序一致；显式排序兜住实现细节
+        sort(r, key: { d: TeamOrganizationDoc => d.id })
         return r
     }
 
@@ -418,10 +415,8 @@ public class AdminDataStore {
 
     // ---- 团队-包关联（organization 空串 = 无组织包）----
     public func setTeamPackages(teamId: Int64, pkgs: Array<(String, String)>, now: Int64): Unit {
-        for (d in this.storm.all<TeamPackageDoc>()) {
-            if (d.teamId == teamId) {
-                this.storm.delete(d)
-            }
+        for (d in this.storm.findBy<TeamPackageDoc>("teamId", teamId)) {
+            this.storm.delete(d)
         }
         for ((org, name) in pkgs) {
             let d = TeamPackageDoc()
@@ -436,21 +431,15 @@ public class AdminDataStore {
     }
 
     public func listTeamPackages(teamId: Int64): ArrayList<TeamPackageDoc> {
-        let r = ArrayList<TeamPackageDoc>()
-        for (d in this.storm.all<TeamPackageDoc>()) {
-            if (d.teamId == teamId) {
-                r.add(d)
-            }
-        }
+        let r = this.storm.findBy<TeamPackageDoc>("teamId", teamId)
+        sort(r, key: { d: TeamPackageDoc => d.id })
         return r
     }
 
     // ---- 团队成员 ----
     public func setTeamMembers(teamId: Int64, userIds: Array<Int64>): Unit {
-        for (d in this.storm.all<TeamMemberDoc>()) {
-            if (d.teamId == teamId) {
-                this.storm.delete(d)
-            }
+        for (d in this.storm.findBy<TeamMemberDoc>("teamId", teamId)) {
+            this.storm.delete(d)
         }
         for (uid in userIds) {
             let d = TeamMemberDoc()
@@ -472,18 +461,14 @@ public class AdminDataStore {
     }
 
     public func listTeamMembers(teamId: Int64): ArrayList<TeamMemberDoc> {
-        let r = ArrayList<TeamMemberDoc>()
-        for (d in this.storm.all<TeamMemberDoc>()) {
-            if (d.teamId == teamId) {
-                r.add(d)
-            }
-        }
+        let r = this.storm.findBy<TeamMemberDoc>("teamId", teamId)
+        sort(r, key: { d: TeamMemberDoc => d.id })
         return r
     }
 
     public func removeTeamMember(teamId: Int64, userId: Int64): Unit {
-        for (d in this.storm.all<TeamMemberDoc>()) {
-            if (d.teamId == teamId && d.userId == userId) {
+        for (d in this.storm.findBy<TeamMemberDoc>("teamId", teamId)) {
+            if (d.userId == userId) {
                 this.storm.delete(d)
             }
         }
@@ -707,12 +692,7 @@ public class AdminDataStore {
     }
 
     public func listPlanItems(planId: Int64): ArrayList<PlanItemDoc> {
-        let r = ArrayList<PlanItemDoc>()
-        for (d in this.storm.all<PlanItemDoc>()) {
-            if (d.planId == planId) {
-                r.add(d)
-            }
-        }
+        let r = this.storm.findBy<PlanItemDoc>("planId", planId)
         sort(r, lessThan: { a, b => a.order < b.order })
         return r
     }

@@ -12,7 +12,7 @@ import std.collection.*
 @Model
 public class UserDoc {
     @Id public var id: Int64 = 0
-    public var username: String = ""
+    @Index public var username: String = ""
     public var passwordHash: String = ""
     public var email: String = ""
     public var isAdmin: Bool = false
@@ -37,9 +37,6 @@ public class BstormUserStore <: UserStore {
     public init(storm: Storm) {
         this.storm = storm
         this.nextId = 1
-        // 持久存储重新打开后需重建索引，否则 all/find 返回空
-        this.storm.reindex<UserDoc>()
-        this.storm.reindex<UserTokenDoc>()
         recoverNextId()
     }
 
@@ -76,12 +73,10 @@ public class BstormUserStore <: UserStore {
     }
 
     public func getUserByUsername(username: String): ?User {
-        for (d in this.storm.all<UserDoc>()) {
-            if (d.username == username) {
-                return Some(toUser(d))
-            }
+        match (this.storm.one<UserDoc>("username", username)) {
+            case Some(d) => Some(toUser(d))
+            case None => None
         }
-        return None
     }
 
     public func getUser(id: Int64): ?User {

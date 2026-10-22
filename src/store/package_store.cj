@@ -5,6 +5,7 @@ import bstorm.*
 import bstorm.macros.*
 import stdx.encoding.json.stream.*
 import std.collection.*
+import std.sort.*
 
 // 包文档模型（bstorm @Model 自动生成 tableName/getPrimaryKey/getIndexes/JSON 序列化）
 @Model
@@ -13,7 +14,7 @@ public class PackageDoc {
 
     // meta-data.json 字段
     public var organization: String = ""
-    public var name: String = ""
+    @Index public var name: String = ""
     public var version: String = ""
     public var cjcVersion: String = ""
     public var description: String = ""
@@ -50,7 +51,6 @@ public class PackageStore {
     public init(storm: Storm) {
         this.storm = storm
         this.nextId = 1
-        this.storm.reindex<PackageDoc>()
         recoverNextId()
     }
 
@@ -84,14 +84,16 @@ public class PackageStore {
         this.storm.delete(doc)
     }
 
-    // 按名称找所有版本（含软删）
+    // 按名称找所有版本（含软删）：走 name 索引，组织在内存里再过滤一次；
+    // 结果按 id 升序，保持与 v1 全表扫描相同的顺序。
     public func listVersions(org: String, name: String): ArrayList<PackageDoc> {
         let result = ArrayList<PackageDoc>()
-        for (d in this.storm.all<PackageDoc>()) {
-            if (d.name == name && d.organization == org) {
+        for (d in this.storm.findBy<PackageDoc>("name", name)) {
+            if (d.organization == org) {
                 result.add(d)
             }
         }
+        sort(result, key: { d: PackageDoc => d.id })
         return result
     }
 

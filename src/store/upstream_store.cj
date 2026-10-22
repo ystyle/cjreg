@@ -16,7 +16,7 @@ import std.collection.*
 @Model
 public class UpstreamDoc {
     @Id public var id: Int64 = 0
-    public var name: String = ""
+    @Index public var name: String = ""
     public var url: String = ""
     public var enabled: Bool = true
     public var cacheTtl: Int64 = 86400
@@ -36,7 +36,6 @@ public class BstormUpstreamStore <: UpstreamStore {
     public init(storm: Storm) {
         this.storm = storm
         this.next = 1
-        this.storm.reindex<UpstreamDoc>()
         recoverNextId()
     }
 
@@ -78,12 +77,10 @@ public class BstormUpstreamStore <: UpstreamStore {
     }
 
     public func getByName(name: String): ?Upstream {
-        for (d in this.storm.all<UpstreamDoc>()) {
-            if (d.name == name) {
-                return Some(toUpstream(d))
-            }
+        match (this.storm.one<UpstreamDoc>("name", name)) {
+            case Some(d) => Some(toUpstream(d))
+            case None => None
         }
-        return None
     }
 
     public func listAll(): ArrayList<Upstream> {

@@ -552,12 +552,10 @@ func orgIdByName(adminData: AdminDataStore, org: String): Int64 {
     if (org.isEmpty()) {
         return 0
     }
-    for (o in adminData.listOrgs()) {
-        if (o.name == org) {
-            return o.id
-        }
+    match (adminData.findOrgByName(org, 0)) {
+        case Some(o) => o.id
+        case None => -1
     }
-    return -1
 }
 
 // 团队成员判定

@@ -96,12 +96,7 @@ public func validateOrgName(name: String): String {
 
 /// 按名称查未删除组织（excludeId 用于改名时排除自身）
 public func findOrgByName(adminData: AdminDataStore, name: String, excludeId: Int64): ?OrgDoc {
-    for (o in adminData.listOrgs()) {
-        if (o.name == name && o.id != excludeId) {
-            return Some(o)
-        }
-    }
-    None
+    adminData.findOrgByName(name, excludeId)
 }
 
 /// 组织下未软删的统计：(包名去重数, 版本数)

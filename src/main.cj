@@ -29,12 +29,14 @@ func printUsage(): Unit {
     println("命令:")
     println("  serve   启动私有中心仓 HTTP 服务（发布/下载/索引 + 管理 API）")
     println("  init    初始化数据目录（空数据目录创建首个管理员 + 默认官方上游）")
-    println("  admin   管理命令（reset-password 应急重置口令 / sync-metadata 回捞展示字段与 README）")
+    println("  admin   管理命令（reset-password 应急重置口令 / sync-metadata 回捞展示字段与 README /")
+    println("           dump 只读导出全部数据行为 JSONL，用于升级前后 diff 与灾备快照）")
     println()
     println("选项:")
     println("  -d, --data <dir>     数据目录（默认 ./data）")
     println("  -p, --port <n>       serve 端口（默认 8060；优先于配置文件）")
     println("  -c, --config <file>  配置文件（默认 <数据目录>/cjreg.toml）")
+    println("  --out <dir>           admin dump 的输出目录（必填）")
     println("  -h, --help           帮助")
     println()
     println("配置文件（可选，TOML）：")
@@ -54,6 +56,7 @@ func runCli(args: Array<String>): Int64 {
         Long("username", RequiredValue),
         Long("password", RequiredValue),
         Long("all", NoValue),
+        Long("out", RequiredValue),
         Full("help", r'h', NoValue)
     ]
     var result: ParsedArguments
@@ -91,6 +94,11 @@ func runCli(args: Array<String>): Int64 {
         case Some(v) => password = v
         case None => ()
     }
+    var outDir = ""
+    match (result.options.get("out")) {
+        case Some(v) => outDir = v
+        case None => ()
+    }
     // 端口：命令行显式传入才记录（否则让配置文件/默认值决定）
     var cliPort: ?UInt16 = None
     match (result.options.get("port")) {
@@ -121,6 +129,9 @@ func runCli(args: Array<String>): Int64 {
             var sub = ""
             if (result.nonOptions.size >= 2) {
                 sub = result.nonOptions[1]
+            }
+            if (sub == "dump") {
+                return cmdAdminDump(dataDir, outDir)
             }
             return cmdAdmin(dataDir, sub, username, password, result.options.contains("all"))
         case "admin-ui" =>
@@ -363,6 +374,36 @@ func cmdInit(dataDir: String, username: String, password: String, port: UInt16):
     return 0
 }
 
+// admin dump：只读导出全部数据行（JSONL），用于升级前后 diff 与灾备快照。
+//
+// 只读语义：直接扫原始 key（不登记 schema / 不重建索引），不会改动库内容；
+// Badger 需要独占数据目录，因此**必须先停服务**。
+func cmdAdminDump(dataDir: String, outDir: String): Int64 {
+    if (outDir.isEmpty()) {
+        println("cjreg: admin dump 需要 --out <输出目录>")
+        return 2
+    }
+    let dbPath = "${dataDir}/cjreg.db"
+    if (!exists(Path(dbPath))) {
+        println("cjreg: 数据目录不存在或未初始化: ${dataDir}")
+        return 1
+    }
+    var storm: Storm
+    try {
+        storm = Storm.open(dbPath, syncWrites: true)
+    } catch (e: Exception) {
+        println("cjreg: 无法打开数据目录（请先停止服务，Badger 需要独占目录）: ${e.message}")
+        return 1
+    }
+    let result = dumpDatabase(storm, outDir, dataDir: dataDir)
+    storm.close()
+    println("cjreg: dump 完成 → ${result.outDir}（共 ${result.totalRows} 行）")
+    for (t in result.tables) {
+        println("  ${t.table}: ${t.rows} 行, ${t.bytes} 字节 → ${t.file}")
+    }
+    return 0
+}
+
 // admin：应急管理 + 存量数据回捞
 //   reset-password：管理端锁死（管理员被禁用/降级）后的兜底通道
 //     语义：重置口令 + 强制 isAdmin=true + isActive=true；信任凭证 = 本地数据目录持有者
@@ -370,7 +411,8 @@ func cmdInit(dataDir: String, username: String, password: String, port: UInt16):
 func cmdAdmin(dataDir: String, sub: String, username: String, password: String, all: Bool): Int64 {
     let usage = "用法: cjreg admin reset-password --username <用户名> --password <新口令> [-d <数据目录>]\n" +
         "      cjreg admin delete-user --username <用户名> [-d <数据目录>]\n" +
-        "      cjreg admin sync-metadata [-d <数据目录>] [--all]"
+        "      cjreg admin sync-metadata [-d <数据目录>] [--all]\n" +
+        "      cjreg admin dump -d <数据目录> --out <输出目录>"
     if (sub.isEmpty() || sub == "help") {
         println(usage)
         return 2

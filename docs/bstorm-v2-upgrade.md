@@ -48,9 +48,10 @@
 
 ## 四、推荐升级路线（原地升级）
 
-### 前置
-- bstorm 2.0.0 先发布（私有仓预演 → 中心仓）：cjreg 依赖写 `"bstorm" = "2.0.0"`。
-- cjreg 侧改动：`cjpm.toml` 依赖版本 + `cjc-version` 1.1.3→1.2.0（编译验证需要，见 §三）。
+### 前置（✅ 已完成）
+- bstorm 2.0.0 已发布：私有仓（预演，可覆盖）→ 中心仓（索引/制品均已同步，sha256 与预演制品一致），tag `v2.0.0`。
+- cjreg 侧改动在分支 `feat/bstorm-2`：`"bstorm" = "2.0.0"` + `cjc-version` 1.2.0（编译验证需要，见 §三）；
+  同时去掉各 store 构造函数里 12 次 `reindex`（v2 的 schema/索引已持久化，不再需要每次启动重建）。
 - 构建新镜像并**保留旧镜像 tag**（回滚用）。
 
 ### 演练（生产数据副本，可提前做）
@@ -78,10 +79,17 @@
 - **不是**这次升级的必需品；是**通用灾备 + 未来跨存储引擎迁移 + 升级前后 diff** 的工具。
 - 优先级建议：P1 只读 dump（升级前 diff 用）；P2 完整 backup/restore。
 
-### 设计要点（P1：只读 dump）
-- `cjreg admin dump --data <dir> --out <dir>`：12 张表按 `all<T>()` 导出 `<table>.jsonl`
-  （每行原始 JSON，含主键）+ `manifest.json`（表名、行数、导出时间、cjreg/bstorm 版本）。
-- 用途：升级前后各 dump 一次 → `diff` 行数与内容，作为「无损」的硬证据；实现成本低（半天）。
+### ✅ P1 已实现：`cjreg admin dump`
+```shell
+# 先停服务（Badger 独占数据目录），再导出：
+./target/release/bin/ystyle::cjreg admin dump -d ./data --out /backup/dump-$(date +%F)
+```
+- 只读：直接扫原始 key，**不登记 schema、不触发索引迁移、不改数据行**，v1 旧库也能直接导；
+- 输出：数据行按表拆成 `<table>.jsonl`（每行 `{"_id":"...","_json":<原始 JSON>}`）
+  + `manifest.json`（导出时间、总行数、每表行数/字节数、blobs 目录与文件数）；内部族（`__schema:`/`__idx:` 等）不导；
+- 用途：升级前后各 dump 一次，比较 JSONL 与 manifest 即可证明「数据行零变化」；也可作灾备快照的元数据部分。
+- 实测（clean drill）：v1 建库（3 个演示包 + 1 用户 + 1 上游）→ v1 serve 停 → dump → v2 serve 迁移索引 → 停 →
+  dump：`package_doc/upstream_doc/user_doc` 三个 JSONL **逐字节相同**，总行数 5→5，v2 启动 267ms。
 
 ### 设计要点（P2：完整 backup / restore）
 - 备份产物：`metadata.jsonl.zip`（上述 dump 打包）+ `blobs.manifest`（文件名/大小/sha256，
@@ -95,6 +103,26 @@
 - 多一条要长期维护的代码路径与一个「恢复即改 id/顺序」的风险面；
 - 34MB 的库做目录快照本来就够快、够可靠；
 - 原地升级已验证零数据转换，导出/恢复反而引入人为错误。
+
+## 五之二、顺带的查询改造（分支 `feat/bstorm-2`）
+
+cjreg 原来几乎全靠 `all<T>()` 全表扫 + 内存过滤。借这次升级给热点加了索引（都是普通 `@Index`，
+不加 `@Unique`，避免存量数据有重复时迁移失败）：
+
+| 表 | 索引字段 | 改写的查询 |
+|---|---|---|
+| `user_doc` | `username` | 登录/注册/Token 刷新：`getUserByUsername` → `one()`（原来扫全表） |
+| `package_doc` | `name` | 索引/下载/发布：`listVersions(org,name)` → `findBy("name")` + 组织过滤（结果按 id 排序，顺序与 v1 一致） |
+| `upstream_doc` | `name` | 回源/上游按名查找：`getByName` → `one()` |
+| `org_doc` | `name` | 组织按名查找：`findOrgByName`/`orgIdByName` → `findBy("name")` |
+| `team_organization_doc` / `team_package_doc` / `team_member_doc` | `teamId` | 团队关联的列举/清理 |
+| `plan_item_doc` | `planId` | 发布计划项列举 |
+
+列表/分页/日志筛选这类「本来就要全表或读全量再排序」的查询保持原样；`LogDoc` 的时间范围+分页
+未来可以再加 `createdAt` 索引 + `orderBy`，这次不做。
+
+**升级代价**：首次用 v2 打开旧库时，这些索引会自动重建一次（扫表 + 写索引项；本机 34MB 库量级为秒级），
+之后持久化，不再重复。cjreg 构造函数里的 `reindex` 已删除（否则每次启动都会重建）。
 
 ## 六、风险与注意事项
 
@@ -113,7 +141,8 @@
 
 ## 七、待决策
 
-- [ ] 是否按本方案把 cjreg 切到 bstorm 2.0.0（我来提 MR：依赖升级 + 演练脚本/checklist）。
-- [ ] bstorm 2.0.0 发布节奏（私有仓预演 → 中心仓）。
-- [ ] 是否先做 P1 只读 dump 工具（升级前后 diff 用，建议做）。
+- [x] 按本方案把 cjreg 切到 bstorm 2.0.0（分支 `feat/bstorm-2`；等 10.31 路演后再合并）。
+- [x] bstorm 2.0.0 发布（私有仓 → 中心仓，已完成；v2 分支未合并到 master）。
+- [x] P1 只读 dump 工具（已实现 `admin dump`，含单测与 clean drill 验证）。
 - [ ] P2 完整 backup/restore 是否立项（独立灾备需求，不阻塞升级）。
+- [ ] 升级后部署到生产（等合并节奏；先在生产数据副本上按 §四演练一遍）。

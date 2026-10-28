@@ -1,4 +1,4 @@
-// 管理端创建发布计划（@Page /admin/publish-plans/create）
+// 管理端创建发布计划（@Page /admin/new-publish-plan）
 package ystyle::cjreg.ui.admin
 
 import ystyle::cjreg.ui.*
@@ -16,7 +16,17 @@ import std.convert.*
 import std.time.*
 
 // ===== 创建向导 =====
-@Page["/admin/publish-plans/create", "创建发布计划", requireAdmin]
+//
+// 路径为什么不在 `/admin/publish-plans/` 下面：详情页的路由是
+// `/admin/publish-plans/[id]`，与该前缀下**任何同深度**的静态路径都长得一样
+// （`/admin/publish-plans/create` 拆开是 4 段，`[id]` 也是 4 段，两者都"匹配"）。
+// cjxt ≤ 1.1.0 的 `RouteRegistry.resolve` 按注册顺序取第一个匹配项，而 `@Page` 的
+// 注册顺序由编译器决定 —— 实测参数路由先注册，创建页被详情页吃掉：点「创建发布计划」
+// 打开的却是详情页（`[id]` 拿到 "create"、计划 id 留在 0，显示"计划不存在或已删除"）。
+// 框架侧已改为字面路径优先（cjxt 1.1.2），但本仓当前依赖的 1.1.0 仍会踩；
+// 放到 `/admin` 下 3 段路径就没有同深度的参数路由，不依赖框架升级也能正确解析。
+// 等 cjxt 正式版带上该修复并升级后，可以改回 `/admin/publish-plans/create`。
+@Page["/admin/new-publish-plan", "创建发布计划", requireAdmin]
 class PublishPlanCreatePage <: Component {
     var state: Option<CjregState> = None
     var msg = Signal<String>("")

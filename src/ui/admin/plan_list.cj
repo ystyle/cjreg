@@ -101,7 +101,9 @@ class PublishPlansPage <: Component {
     }
 
     func gotoCreate(ctx: ActionContext): PatchResult {
-        ctx.route.push("/admin/publish-plans/create")
+        // `/admin` 下 3 段路径：不与详情页的 `/admin/publish-plans/[id]` 同深度，
+        // 不会被参数路由抢先匹配（见 plan_create.cj 的说明）
+        ctx.route.push("/admin/new-publish-plan")
         PatchResult.ReRender
     }
 

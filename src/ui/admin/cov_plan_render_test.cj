@@ -306,7 +306,7 @@ public class CovPlanListRenderTest {
         let page = mountPlanListCov(state)
         let (actx, nav) = covActx(state)
         let _ = page.gotoCreate(actx)
-        @Expect(nav[0], "/admin/publish-plans/create")
+        @Expect(nav[0], "/admin/new-publish-plan")
         let _ = page.gotoDetail(actx, pid)
         @Expect(nav[1], "/admin/publish-plans/${pid}")
     }

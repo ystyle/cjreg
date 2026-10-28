@@ -3,6 +3,17 @@
 本文件记录 cjreg 的重要变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Fixed — 「创建发布计划」被详情页路由吞掉
+
+- 创建页路径 `/admin/publish-plans/create` 与详情页 `/admin/publish-plans/[id]` **同深度**，
+  当前依赖的 cjxt 1.1.0 按注册顺序取第一个匹配项 → 点「创建发布计划」打开的却是详情页
+  （`[id]` 拿到 "create"、计划 id 留在 0），页面显示"计划不存在或已删除"。
+- 创建页改到 `/admin` 下的 3 段路径 **`/admin/new-publish-plan`**：没有同深度的参数路由可抢；
+  详情页 URL 与行为不变。新增 `plan_route_resolve_test.cj` 守这条解析。
+- 根因（静态路径应优先于参数路径）已在 cjxt 1.1.2 修复；本仓升级 cjxt 后可改回 `/create`。
+
 ## [0.3.0] - 2026-10-20
 
 ### Added — 发布链路流式化（决赛迭代 1：内存 O(1)）

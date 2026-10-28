@@ -248,7 +248,7 @@ docker pull ghcr.io/ystyle/cjreg:v0.1.0
 bash scripts/demo-record.sh prepare                  # 就绪：清空演示上游站 + 造数 + 同步空站 Token 到上游
 bash scripts/demo-record.sh term 02-deploy           # 终端镜头（scripts/demo-shots/term-*.sh）
 bash scripts/demo-record.sh web-admin 03-pkgs /packages 9      # 后台页（带管理员登录态）
-bash scripts/demo-record.sh web-ops 04-plan-create /publish-plans/create 20   # 按 scripts/demo-ops/*.ops 逐条操作界面
+bash scripts/demo-record.sh web-ops 04-plan-create /new-publish-plan 20   # 按 scripts/demo-ops/*.ops 逐条操作界面
 bash scripts/demo-record.sh pip web-dashboard web-dashboard term-04-resolve pip-04-resolve "cjpm update — 多仓解析"
 bash scripts/demo-record.sh preview                  # 按内置顺序拼接成 preview-all.mp4
 bash scripts/demo-record.sh final                    # 片头卡 + 每格字幕条 + 交叉淡化 + 静音音轨（配音直接替换）

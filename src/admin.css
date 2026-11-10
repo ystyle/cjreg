@@ -281,7 +281,7 @@
 [class~="el-card"] + [class~="el-card"] { margin-top: 16px; }
 
 /* 表格单元格里的下拉浮层：卡片与表格容器默认 overflow 隐藏会把面板裁掉 */
-[class~="el-card"], [class~="el-card__body"] { overflow: visible; }
+[class~="el-card"], [class~="el-card__body"] { overflow: visible !important; }
 .version-table-wrap, .version-table-wrap [class~="el-table"],
 .version-table-wrap [class~="el-table__inner-wrapper"],
 .version-table-wrap [class~="el-table__body-wrapper"] { overflow: visible !important; }

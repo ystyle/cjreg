@@ -791,17 +791,19 @@ public class CovPackagesActionsTest {
         let _ = covSeedPkg(state, "ystyle", "alpha", "1.0.0")
         let _ = covSeedPkg(state, "ystyle", "beta", "1.0.0")
         let page = mountPackagesCov(state)
+        // 行内不再绘制「● 选中包」标记（右栏抽屉已表明当前包），包名列恒为纯文本
         @Expect(covRender(page.render()).contains("● "), false)
         page.select("ystyle", "alpha")
         let json = covRender(page.render())
-        @Expect(json.contains("● ystyle::alpha"), true)
-        @Expect(json.contains("● ystyle::beta"), false)
+        @Expect(json.contains("● "), false)
+        // 选择状态本身仍在（右栏版本表按它渲染）
+        @Expect(json.contains("ystyle::alpha"), true)
 
-        // 切到 beta：高亮跟着走
+        // 切到 beta：选择状态跟着走，行内同样不出现标记
         page.select("ystyle", "beta")
         let json2 = covRender(page.render())
-        @Expect(json2.contains("● ystyle::beta"), true)
-        @Expect(json2.contains("● ystyle::alpha"), false)
+        @Expect(json2.contains("● "), false)
+        @Expect(json2.contains("ystyle::beta"), true)
     }
 
     // 组织下拉：只有非空组织进选项（"" 与"全部组织"分开）

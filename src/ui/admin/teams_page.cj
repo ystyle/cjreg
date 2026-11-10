@@ -728,7 +728,7 @@ class TeamsPage <: Component {
                     .emptyText("尚无成员")
                     .stripe()
                     .add(TableColumn<TeamMemberLink>().label("用户名").minWidth(220).accessor({ r => r.username }))
-                    .add(TableColumn<TeamMemberLink>().label("操作").width(90).render({ r, i =>
+                    .add(TableColumn<TeamMemberLink>().label("操作").width(120).render({ r, i =>
                         let uid = r.userId
                         let h: ActionHandler = { c => this.removeMember(c, uid) }
                         Button([text("移除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(h)

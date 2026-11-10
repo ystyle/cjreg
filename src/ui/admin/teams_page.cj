@@ -39,8 +39,8 @@ class TeamsPage <: Component {
     var orgSelect = Signal<ArrayList<String>>(ArrayList<String>())
     // 包关联 Dialog
     var pkgDialogVisible = Signal<Bool>(false)
-    var pkgSearch = Signal<String>("")
-    var pkgRows = Signal<ArrayList<PkgRow>>(ArrayList<PkgRow>())
+    var pkgPick = Signal<String>("")
+    var pkgRows = Signal<ArrayList<TeamPkgLink>>(ArrayList<TeamPkgLink>())
     // 成员关联 Dialog
     var memberDialogVisible = Signal<Bool>(false)
     var memberPick = Signal<String>("")
@@ -289,7 +289,7 @@ class TeamsPage <: Component {
     // ===== 包关联 =====
     func openPackages(ctx: ActionContext, id: Int64): PatchResult {
         this.editingId = id
-        this.pkgSearch.set("")
+        this.pkgPick.set("")
         this.refreshPkgs()
         this.pkgDialogVisible.set(true)
         PatchResult.ReRender
@@ -300,20 +300,20 @@ class TeamsPage <: Component {
         PatchResult.ReRender
     }
 
-    // 包关联列表：全量包 + 搜索过滤 + 关联标记。
-    // 读到的每个信号都被 pkgBinding 的 Effect 订阅 → 关键字一变就自动重算。
-    func filteredPkgs(): ArrayList<PkgRow> {
+    // 下拉候选：所有**未关联**的包（同 org+name 的多个版本只有一个候选）
+    func pkgOptions(): ArrayList<String> {
         let _ = this.pkgVersion.get()
-        let data = ArrayList<PkgRow>()
+        let opts = ArrayList<String>()
         let st = match (this.state) {
             case Some(x) => x
-            case None => return data
+            case None => return opts
         }
-        let kw = this.pkgSearch.get().trimAscii()
         let linked = st.adminData.listTeamPackages(this.editingId)
+        let seen = HashMap<String, Bool>()
         for (d in st.pkgStore.storm.all<PackageDoc>()) {
             if (d.deletedAt != 0) { continue }
-            if (kw != "" && !d.name.contains(kw)) { continue }
+            let key = pkgKeyText(d.organization, d.name)
+            if (seen.contains(key)) { continue }
             var isLinked = false
             for (p in linked) {
                 if (p.organization == d.organization && p.packageName == d.name) {
@@ -321,17 +321,40 @@ class TeamsPage <: Component {
                     break
                 }
             }
-            data.add(PkgRow(d, isLinked))
+            if (isLinked) { continue }
+            seen.add(key, true)
+            opts.add(key)
+        }
+        opts
+    }
+
+    // 表格内容：只列已关联的包
+    func filteredPkgs(): ArrayList<TeamPkgLink> {
+        let _ = this.pkgVersion.get()
+        let data = ArrayList<TeamPkgLink>()
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return data
+        }
+        for (p in st.adminData.listTeamPackages(this.editingId)) {
+            data.add(TeamPkgLink(p.organization, p.packageName))
         }
         data
     }
 
-    // 数据变了（换团队、关联/移除）就 bump：效果会重算并写回 pkgRows
     func refreshPkgs(): Unit {
         this.pkgVersion.update({ v => v + 1 })
     }
 
-    func togglePkg(ctx: ActionContext, org: String, name: String): PatchResult {
+    // 下拉 key 就是展示名 pkgKeyText 的输出（"org::name"；无组织时只有包名）
+    func splitPkgKey(key: String): (String, String) {
+        match (key.indexOf("::")) {
+            case Some(i) => (key[0..i], key[(i + 2)..key.size])
+            case None => ("", key)
+        }
+    }
+
+    func addPkg(ctx: ActionContext): PatchResult {
         let st = match (this.state) {
             case Some(x) => x
             case None => return PatchResult.ReRender
@@ -340,21 +363,42 @@ class TeamsPage <: Component {
             this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
-        let cur = st.adminData.listTeamPackages(this.editingId)
-        var found = false
-        let next = ArrayList<(String, String)>()
-        for (p in cur) {
-            if (p.organization == org && p.packageName == name) {
-                found = true
-            } else {
-                next.add((p.organization, p.packageName))
-            }
+        let key = this.pkgPick.get().trimAscii()
+        if (key.isEmpty()) {
+            this.msg.set("请先在下拉里选择包")
+            return PatchResult.ReRender
         }
-        if (!found) {
-            next.add((org, name))
+        let (org, name) = this.splitPkgKey(key)
+        let next = ArrayList<(String, String)>()
+        for (p in st.adminData.listTeamPackages(this.editingId)) {
+            next.add((p.organization, p.packageName))
+        }
+        next.add((org, name))
+        st.adminData.setTeamPackages(this.editingId, next.toArray(), nowMs())
+        uiAudit(st, ctx, "add_team_package", pkgKeyText(org, name), detail: "team#${this.editingId}")
+        this.msg.set("已关联 " + pkgKeyText(org, name))
+        this.pkgPick.set("")
+        this.refreshPkgs()
+        PatchResult.ReRender
+    }
+
+    func removePkg(ctx: ActionContext, org: String, name: String): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
+        }
+        let next = ArrayList<(String, String)>()
+        for (p in st.adminData.listTeamPackages(this.editingId)) {
+            if (p.organization == org && p.packageName == name) { continue }
+            next.add((p.organization, p.packageName))
         }
         st.adminData.setTeamPackages(this.editingId, next.toArray(), nowMs())
-        this.msg.set(if (!found) { "已关联 ${name}" } else { "已移除 ${name}" })
+        uiAudit(st, ctx, "remove_team_package", pkgKeyText(org, name), detail: "team#${this.editingId}")
+        this.msg.set("已移除 " + pkgKeyText(org, name))
         this.refreshPkgs()
         PatchResult.ReRender
     }
@@ -615,6 +659,20 @@ class TeamsPage <: Component {
             SelectOption([text("写入（可发布）")], "write"),
             SelectOption([text("覆盖（可覆盖版本）")], "overwrite"),
         ]).bind(this.formPermission).placeholder("默认权限")
+        let ownerOptions = ArrayList<IComponent>()
+        ownerOptions.add(SelectOption([text("（不指定）")], ""))
+        match (this.state) {
+            case Some(st) =>
+                for (u in st.userStore.listAllUsers()) {
+                    ownerOptions.add(SelectOption([text(u.username)], u.username))
+                }
+            case None => ()
+        }
+        let ownerSelect = Select(ownerOptions.toArray())
+            .bind(this.formOwnerName)
+            .filterable()
+            .clearable()
+            .placeholder("搜索用户名，留空 = 不指定")
         let form = Form([
             FormItem([nameInput]).label("团队名")
                 .bindValue({ => this.formName.get() })
@@ -626,7 +684,7 @@ class TeamsPage <: Component {
                 .bindValue({ => this.formDesc.get() }),
             FormItem([permSelect]).label("默认权限")
                 .bindValue({ => this.formPermission.get() }),
-            FormItem([Input().bind(this.formOwnerName).placeholder("留空 = 不指定")]).label("所有者（用户名）")
+            FormItem([ownerSelect]).label("所有者")
                 .bindValue({ => this.formOwnerName.get() }),
             FormItem([Switch().bind(this.formSelfService).activeText("开启").inactiveText("关闭")])
                 .label("owner 自助"),
@@ -674,32 +732,39 @@ class TeamsPage <: Component {
     }
 
     func renderPkgDialog(): IComponent {
+        let _ = this.pkgVersion.get()
+        let opts = ArrayList<IComponent>()
+        for (k in this.pkgOptions()) {
+            opts.add(SelectOption([text(k)], k))
+        }
+        let addH: ActionHandler = { c => this.addPkg(c) }
         let dlg = Dialog([
             div([
-                div([text("搜索包并关联/移除（权限走团队默认权限）")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
-                // 只 bind：过滤由 pkgBinding 的 Effect 跟着关键字重算。
-                // 旧写法在 input 的 action 里 refreshPkgs()，而前端先 action 后 bind
-                // （cjxt public/js/cangjie-ui.js:333 立即发 action，:490 的 bind 有 300ms 防抖），
-                // action 里读到的关键字还是上一次的 → 搜索框里打字等于没反应。
-                Input().bind(this.pkgSearch).placeholder("搜索包名"),
-                Table<PkgRow>()
+                div([text("搜索并选择包（团队按包授权，不区分版本）")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                div([
+                    div([Select(opts.toArray()).bind(this.pkgPick).filterable().clearable().placeholder("搜索包名")],
+                        attrs: Some(HashMap<String, String>([("class", cls("dialog-picker-grow"))]))),
+                    Button([text("添加")]).kind(ButtonKind.Primary).onClick(addH),
+                ], attrs: Some(HashMap<String, String>([("class", cls("dialog-picker-row"))]))),
+                div([text("已关联（" + this.pkgRows.get().size.toString() + "）")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                Table<TeamPkgLink>()
                     .data(this.pkgRows)
-                    .emptyText("暂无数据")
+                    .emptyText("尚未关联任何包")
                     .stripe()
-                    .add(TableColumn<PkgRow>().label("包").minWidth(280).render({ r, i =>
-                        text("${if (r.doc.organization.isEmpty()) { "-" } else { r.doc.organization }}/${r.doc.name}@${r.doc.version}")
+                    .add(TableColumn<TeamPkgLink>().label("包").minWidth(260).render({ r, i =>
+                        text(pkgKeyText(r.organization, r.name))
                     }))
-                    .add(TableColumn<PkgRow>().label("操作").width(100).render({ r, i =>
-                        let org = r.doc.organization
-                        let name = r.doc.name
-                        let toggleH: ActionHandler = { c => this.togglePkg(c, org, name) }
-                        Button([text(if (r.linked) { "移除" } else { "关联" })]).size(ButtonSize.Small).kind(if (r.linked) { ButtonKind.Danger } else { ButtonKind.Primary }).onClick(toggleH)
+                    .add(TableColumn<TeamPkgLink>().label("操作").width(120).render({ r, i =>
+                        let org = r.organization
+                        let name = r.name
+                        let h: ActionHandler = { c => this.removePkg(c, org, name) }
+                        Button([text("移除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(h)
                     })),
             ], attrs: Some(HashMap<String, String>([("class", cls("dialog-form"))]))),
         ])
             .visible(this.pkgDialogVisible)
             .title("团队包关联")
-            .width("560px")
+            .width("640px")
             .closeOnClickModal(false)
             .footer([
                 Button([text("关闭")]).onClick(closePackages),

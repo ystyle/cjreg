@@ -299,12 +299,13 @@ public class CovTeamsRenderTest {
         @Expect(ids[1], 42)
     }
 
-    // 包关联弹窗：全量包（软删的跳过）、关联标记、toggle 两个方向、搜索过滤
+    // 包关联弹窗：下拉候选只列未关联包（软删跳过、同包多版本只一个），表格只列已关联
     @TestCase
-    public func covTeams_pkgDialogToggleBothWays(): Unit {
+    public func covTeams_pkgDialogAddAndRemove(): Unit {
         let state = makePortalState("team")
         let tid = seedCovTeam(state, "pkg-team")
         let _ = covSeedPkg(state, "ystyle", "alpha", "1.0.0")
+        let _ = covSeedPkg(state, "ystyle", "alpha", "1.1.0")
         let _ = covSeedPkg(state, "ystyle", "beta", "1.0.0")
         let _ = covSeedPkg(state, "ystyle", "hidden", "1.0.0", deleted: true)
         let page = mountTeamsCov(state)
@@ -312,51 +313,39 @@ public class CovTeamsRenderTest {
 
         let _ = page.openPackages(actx, tid)
         @Expect(page.pkgDialogVisible.get(), true)
-        @Expect(page.pkgSearch.get(), "")
-        // 软删的包不进候选表
-        @Expect(page.pkgRows.get().size, 2)
+        @Expect(page.pkgPick.get(), "")
+        @Expect(page.pkgRows.get().size, 0)
+        @Expect(page.pkgOptions().size, 2)          // alpha（两次版本只一候选）+ beta
         let json = covRender(page.render())
         @Expect(json.contains("团队包关联"), true)
-        @Expect(json.contains("ystyle/alpha@1.0.0"), true)
-        // 未关联的行给「关联」按钮；提示语里那句"搜索包并关联/移除"是固定文案，不能用
-        // contains("移除") 判断按钮（会误命中）—— 用按钮的 Tag/kind 区分。
-        @Expect(json.contains("\"text\":\"关联\""), true)      // 行内「关联」按钮
-        @Expect(json.contains("\"text\":\"移除\""), false)     // 还没有「移除」按钮
-        // 反向对照：提示语里本来就含"关联/移除"这几个字，所以上面的断言必须按
-        // **完整文本节点**匹配，否则会恒真/恒假（踩过）。
-        @Expect(json.contains("搜索包并关联/移除"), true)
+        @Expect(json.contains("尚未关联任何包"), true)
 
-        // 关联 alpha
-        let _ = page.togglePkg(actx, "ystyle", "alpha")
-        @Expect(page.msg.get(), "已关联 alpha")
+        page.pkgPick.set("ystyle::alpha")
+        let _ = page.addPkg(actx)
+        @Expect(page.msg.get(), "已关联 ystyle::alpha")
         @Expect(state.adminData.listTeamPackages(tid).size, 1)
-        // 已关联的行换成「移除」按钮
-        @Expect(covRender(page.render()).contains("\"text\":\"移除\""), true)
+        @Expect(page.pkgRows.get().size, 1)
+        @Expect(page.pkgRows.get()[0].name, "alpha")
+        @Expect(page.pkgPick.get(), "")
+        @Expect(covRender(page.render()).contains("el-button--danger"), true)
 
-        // 再点一次 → 移除
-        let _ = page.togglePkg(actx, "ystyle", "alpha")
-        @Expect(page.msg.get(), "已移除 alpha")
-        @Expect(state.adminData.listTeamPackages(tid).size, 0)
-
-        // 关联两个之后逐个移除（保留另一个：next 列表的构造分支）
-        let _ = page.togglePkg(actx, "ystyle", "alpha")
-        let _ = page.togglePkg(actx, "ystyle", "beta")
-        @Expect(state.adminData.listTeamPackages(tid).size, 2)
-        let _ = page.togglePkg(actx, "ystyle", "alpha")
+        page.pkgPick.set("ystyle::beta")
+        let _ = page.addPkg(actx)
+        @Expect(page.pkgRows.get().size, 2)
+        let _ = page.removePkg(actx, "ystyle", "alpha")
+        @Expect(page.msg.get(), "已移除 ystyle::alpha")
         @Expect(state.adminData.listTeamPackages(tid).size, 1)
         @Expect(state.adminData.listTeamPackages(tid)[0].packageName, "beta")
 
-        // 搜索：只留命中的
-        page.pkgSearch.set("beta")
-        @Expect(page.pkgRows.get().size, 1)
-        @Expect(page.pkgRows.get()[0].doc.name, "beta")
-        @Expect(page.pkgRows.get()[0].linked, true)
+        page.pkgPick.set("")
+        let _ = page.addPkg(actx)
+        @Expect(page.msg.get(), "请先在下拉里选择包")
 
         let _ = page.closePackages(actx)
         @Expect(page.pkgDialogVisible.get(), false)
     }
 
-    // 包关联：无组织包在候选表里显示成 "-/name@version"
+    // 包关联：无组织包在候选里就是纯包名
     @TestCase
     public func covTeams_pkgDialogNoOrgLabel(): Unit {
         let state = makePortalState("team")
@@ -365,7 +354,11 @@ public class CovTeamsRenderTest {
         let page = mountTeamsCov(state)
         let (actx, _) = covActx(state)
         let _ = page.openPackages(actx, tid)
-        @Expect(covRender(page.render()).contains("-/snappy@1.0.1"), true)
+        @Expect(page.pkgOptions()[0], "snappy")
+        page.pkgPick.set("snappy")
+        let _ = page.addPkg(actx)
+        @Expect(state.adminData.listTeamPackages(tid).size, 1)
+        @Expect(state.adminData.listTeamPackages(tid)[0].organization, "")
     }
 
     // 成员关联弹窗：下拉候选只列非成员，表格只列已加入成员；添加/移除都写审计
@@ -508,7 +501,8 @@ public class CovTeamsRenderTest {
         @Expect(state.adminData.listTeamOrganizationIds(tid).size, 0)
 
         let _ = page.openPackages(plain, tid)
-        let _ = page.togglePkg(plain, "ystyle", "alpha")
+        let _ = page.pkgPick.set("ystyle::alpha")
+        let _ = page.addPkg(plain)
         @Expect(page.msg.get(), "无权限：需要管理员登录")
         @Expect(state.adminData.listTeamPackages(tid).size, 0)
 
@@ -525,7 +519,8 @@ public class CovTeamsRenderTest {
 
         // 未登录
         let anon = covAnonActx(state)
-        let _ = page.togglePkg(anon, "ystyle", "alpha")
+        let _ = page.pkgPick.set("ystyle::alpha")
+        let _ = page.addPkg(anon)
         @Expect(page.msg.get(), "无权限：需要管理员登录")
         @Expect(state.adminData.queryLogs(Option<String>.None, "", "", 0, 0, 0, 10)[1], 0)
     }
@@ -548,7 +543,8 @@ public class CovTeamsRenderTest {
         let _ = page.openOrgs(actx, 1)
         let _ = page.saveOrgs(actx)
         @Expect(page.msg.get(), "")
-        let _ = page.togglePkg(actx, "o", "n")
+        let _ = page.pkgPick.set("o::n")
+        let _ = page.addPkg(actx)
         let _ = page.addMember(actx)
         let _ = page.askDelete(actx, 1)
         let _ = page.confirmDelete(actx)
@@ -564,11 +560,11 @@ public class CovTeamsRenderTest {
         let page = mountTeamsCov(state)
         let (actx, _) = covActx(state)
         let _ = page.openPackages(actx, tid)
-        @Expect(page.pkgRows.get().size, 1)
+        @Expect(page.pkgRows.get().size, 0)
 
         page.onUnmount(mountCtx(state, userCtxMap(1, "admin", true)))
-        page.pkgSearch.set("nothing")
-        @Expect(page.pkgRows.get().size, 1)   // 绑定已 dispose，不再重算
+        page.refreshPkgs()
+        @Expect(page.pkgRows.get().size, 0)   // 绑定已 dispose，不再重算
     }
 
     // 重新挂载：rebind 走 Some 分支（先 dispose 旧绑定），订阅不叠加
@@ -583,10 +579,10 @@ public class CovTeamsRenderTest {
 
         page.onMount(mountCtx(state, userCtxMap(1, "admin", true)))
         let _ = page.openPackages(actx, tid)
-        page.pkgSearch.set("alpha")
-        @Expect(page.pkgRows.get().size, 1)
-        page.pkgSearch.set("")
-        @Expect(page.pkgRows.get().size, 1)
+        page.refreshPkgs()
+        @Expect(page.pkgRows.get().size, 0)
+        page.refreshPkgs()
+        @Expect(page.pkgRows.get().size, 0)
     }
 
     // 长文本：团队名/显示名/描述很长也直出

@@ -46,6 +46,17 @@ public struct TeamMemberLink {
     }
 }
 
+/// 团队「包」弹窗表格行：只带 org/name（团队按包授权，不区分版本）
+public struct TeamPkgLink {
+    public let organization: String
+    public let name: String
+
+    public init(organization: String, name: String) {
+        this.organization = organization
+        this.name = name
+    }
+}
+
 /// 团队-成员关联行：用户实体 + 是否已关联
 public struct MemberRow {
     public let user: User

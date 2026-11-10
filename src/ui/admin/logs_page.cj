@@ -17,7 +17,7 @@ import std.time.*
 
 // ===== 日志页 =====
 // 审计日志：类型/结果筛选 + 关键字搜索 + 分页 + 按类型清理（清理动作自身入审计）
-@Page["/admin/logs", "日志", requireAdmin]
+@Page["/admin/logs", "审计日志", requireAdmin]
 class LogsPage <: Component {
     var state: Option<CjregState> = None
     var rows = Signal<ArrayList<LogDoc>>(ArrayList<LogDoc>())

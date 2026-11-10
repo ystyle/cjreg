@@ -120,12 +120,12 @@ public class CovSecondWaveAdminTest {
         let (actx, _) = covActx(state)   // 操作者账号也会进成员候选表
         let _ = page.openPackages(actx, tid)
         let _ = page.openMembers(actx, tid)
-        @Expect(page.pkgRows.get().size, 1)
+        @Expect(page.pkgRows.get().size, 0)
         @Expect(page.memberRows.get().size, 0)   // 表格只列已加入成员
         // 两个绑定都存在时卸载：走两条 Some 分支
         page.onUnmount(mountCtx(state, userCtxMap(1, "admin", true)))
-        page.pkgSearch.set("nothing")
-        @Expect(page.pkgRows.get().size, 1)
+        page.refreshPkgs()
+        @Expect(page.pkgRows.get().size, 0)
         page.refreshMembers()
         @Expect(page.memberRows.get().size, 0)
     }

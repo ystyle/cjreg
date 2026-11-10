@@ -286,3 +286,11 @@
 .el-card + .el-card { margin-top: 16px; }
 /* 提示块与其后的普通文本（如「上传接口：…」）之间留间距 */
 .el-alert + p { margin-top: 12px; }
+
+/* 表格单元格里的下拉浮层：EP 的 .el-card / 卡片 body 默认 overflow 隐藏，会把面板裁掉
+   （备份页「操作」菜单只露出半截就是这个原因）。三处一起放开。 */
+.el-card { overflow: visible; }
+.el-card__body { overflow: visible; }
+.version-table-wrap, .version-table-wrap .el-table,
+.version-table-wrap .el-table__inner-wrapper,
+.version-table-wrap .el-table__body-wrapper { overflow: visible !important; }

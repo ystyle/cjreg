@@ -43,8 +43,8 @@ class TeamsPage <: Component {
     var pkgRows = Signal<ArrayList<PkgRow>>(ArrayList<PkgRow>())
     // 成员关联 Dialog
     var memberDialogVisible = Signal<Bool>(false)
-    var memberSearch = Signal<String>("")
-    var memberRows = Signal<ArrayList<MemberRow>>(ArrayList<MemberRow>())
+    var memberPick = Signal<String>("")
+    var memberRows = Signal<ArrayList<TeamMemberLink>>(ArrayList<TeamMemberLink>())
     // 删除确认
     var confirmVisible = Signal<Bool>(false)
     var pendingDeleteId: Int64 = 0
@@ -362,7 +362,7 @@ class TeamsPage <: Component {
     // ===== 成员关联 =====
     func openMembers(ctx: ActionContext, id: Int64): PatchResult {
         this.editingId = id
-        this.memberSearch.set("")
+        this.memberPick.set("")
         this.refreshMembers()
         this.memberDialogVisible.set(true)
         PatchResult.ReRender
@@ -373,26 +373,39 @@ class TeamsPage <: Component {
         PatchResult.ReRender
     }
 
-    // 成员列表：全量用户 + 搜索过滤 + 关联标记（派生逻辑同 filteredPkgs）
-    func filteredMembers(): ArrayList<MemberRow> {
+    // 下拉候选：尚未加入该团队的用户
+    func memberOptions(): ArrayList<String> {
         let _ = this.memberVersion.get()
-        let data = ArrayList<MemberRow>()
+        let opts = ArrayList<String>()
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return opts
+        }
+        let taken = HashMap<Int64, Bool>()
+        for (uid in st.adminData.listTeamMemberIds(this.editingId)) {
+            taken.add(uid, true)
+        }
+        for (u in st.userStore.listAllUsers()) {
+            if (taken.contains(u.id)) { continue }
+            opts.add(u.username)
+        }
+        opts
+    }
+
+    // 表格内容：只列已加入成员
+    func filteredMembers(): ArrayList<TeamMemberLink> {
+        let _ = this.memberVersion.get()
+        let data = ArrayList<TeamMemberLink>()
         let st = match (this.state) {
             case Some(x) => x
             case None => return data
         }
-        let kw = this.memberSearch.get().trimAscii()
-        let linked = st.adminData.listTeamMemberIds(this.editingId)
-        for (u in st.userStore.listAllUsers()) {
-            if (kw != "" && !u.username.contains(kw)) { continue }
-            var isLinked = false
-            for (uid in linked) {
-                if (uid == u.id) {
-                    isLinked = true
-                    break
-                }
+        for (uid in st.adminData.listTeamMemberIds(this.editingId)) {
+            let name = match (st.userStore.getUser(uid)) {
+                case Some(u) => u.username
+                case None => "#${uid}"
             }
-            data.add(MemberRow(u, isLinked))
+            data.add(TeamMemberLink(uid, name))
         }
         data
     }
@@ -401,7 +414,7 @@ class TeamsPage <: Component {
         this.memberVersion.update({ v => v + 1 })
     }
 
-    func toggleMember(ctx: ActionContext, userId: Int64): PatchResult {
+    func addMember(ctx: ActionContext): PatchResult {
         let st = match (this.state) {
             case Some(x) => x
             case None => return PatchResult.ReRender
@@ -410,27 +423,55 @@ class TeamsPage <: Component {
             this.msg.set("无权限：需要管理员登录")
             return PatchResult.ReRender
         }
-        let cur = st.adminData.listTeamMemberIds(this.editingId)
-        var found = false
-        let next = ArrayList<Int64>()
-        for (uid in cur) {
-            if (uid == userId) {
-                found = true
-            } else {
-                next.add(uid)
+        let name = this.memberPick.get().trimAscii()
+        if (name.isEmpty()) {
+            this.msg.set("请先在下拉里选择用户")
+            return PatchResult.ReRender
+        }
+        var uid: Int64 = 0
+        for (u in st.userStore.listAllUsers()) {
+            if (u.username == name) {
+                uid = u.id
             }
         }
-        if (!found) {
-            next.add(userId)
+        if (uid <= 0) {
+            this.msg.set("用户不存在：${name}")
+            return PatchResult.ReRender
+        }
+        let next = ArrayList<Int64>()
+        for (id in st.adminData.listTeamMemberIds(this.editingId)) {
+            next.add(id)
+        }
+        next.add(uid)
+        st.adminData.setTeamMembers(this.editingId, next.toArray())
+        uiAudit(st, ctx, "add_team_member", name, detail: "team#${this.editingId} members=${next.size}")
+        this.msg.set("已添加成员 ${name}")
+        this.memberPick.set("")
+        this.refreshMembers()
+        PatchResult.ReRender
+    }
+
+    func removeMember(ctx: ActionContext, userId: Int64): PatchResult {
+        let st = match (this.state) {
+            case Some(x) => x
+            case None => return PatchResult.ReRender
+        }
+        if (!st.isAdminSession(ctx)) {
+            this.msg.set("无权限：需要管理员登录")
+            return PatchResult.ReRender
+        }
+        let next = ArrayList<Int64>()
+        for (uid in st.adminData.listTeamMemberIds(this.editingId)) {
+            if (uid == userId) { continue }
+            next.add(uid)
         }
         st.adminData.setTeamMembers(this.editingId, next.toArray())
         let memberName = match (st.userStore.getUser(userId)) {
             case Some(u) => u.username
             case None => "#${userId}"
         }
-        uiAudit(st, ctx, if (!found) { "add_team_member" } else { "remove_team_member" }, memberName,
-            detail: "team#${this.editingId} members=${next.size}")
-        this.msg.set(if (!found) { "已添加成员" } else { "已移除成员" })
+        uiAudit(st, ctx, "remove_team_member", memberName, detail: "team#${this.editingId} members=${next.size}")
+        this.msg.set("已移除成员 ${memberName}")
         this.refreshMembers()
         PatchResult.ReRender
     }
@@ -667,25 +708,36 @@ class TeamsPage <: Component {
     }
 
     func renderMemberDialog(): IComponent {
+        let _ = this.memberVersion.get()
+        let opts = ArrayList<IComponent>()
+        for (name in this.memberOptions()) {
+            opts.add(SelectOption([text(name)], name))
+        }
+        let addH: ActionHandler = { c => this.addMember(c) }
         let dlg = Dialog([
             div([
-                div([text("搜索用户并添加/移除成员")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
-                Input().bind(this.memberSearch).placeholder("搜索用户名"),   // 同 pkgSearch：只 bind
-                Table<MemberRow>()
+                div([text("搜索并选择用户，添加到下方成员列表")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                div([
+                    div([Select(opts.toArray()).bind(this.memberPick).filterable().clearable().placeholder("搜索用户名")],
+                        attrs: Some(HashMap<String, String>([("class", cls("dialog-picker-grow"))]))),
+                    Button([text("添加")]).kind(ButtonKind.Primary).onClick(addH),
+                ], attrs: Some(HashMap<String, String>([("class", cls("dialog-picker-row"))]))),
+                div([text("成员（" + this.memberRows.get().size.toString() + "）")], attrs: Some(HashMap<String, String>([("class", cls("dialog-form-label"))]))),
+                Table<TeamMemberLink>()
                     .data(this.memberRows)
-                    .emptyText("暂无数据")
+                    .emptyText("尚无成员")
                     .stripe()
-                    .add(TableColumn<MemberRow>().label("用户名").accessor({ r => r.user.username }).minWidth(200))
-                    .add(TableColumn<MemberRow>().label("操作").width(100).render({ r, i =>
-                        let uid = r.user.id
-                        let toggleH: ActionHandler = { c => this.toggleMember(c, uid) }
-                        Button([text(if (r.linked) { "移除" } else { "添加" })]).size(ButtonSize.Small).kind(if (r.linked) { ButtonKind.Danger } else { ButtonKind.Primary }).onClick(toggleH)
+                    .add(TableColumn<TeamMemberLink>().label("用户名").minWidth(220).accessor({ r => r.username }))
+                    .add(TableColumn<TeamMemberLink>().label("操作").width(90).render({ r, i =>
+                        let uid = r.userId
+                        let h: ActionHandler = { c => this.removeMember(c, uid) }
+                        Button([text("移除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(h)
                     })),
             ], attrs: Some(HashMap<String, String>([("class", cls("dialog-form"))]))),
         ])
             .visible(this.memberDialogVisible)
             .title("团队成员管理")
-            .width("480px")
+            .width("560px")
             .closeOnClickModal(false)
             .footer([
                 Button([text("关闭")]).onClick(closeMembers),

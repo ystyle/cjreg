@@ -35,6 +35,17 @@ public struct PkgRow {
     }
 }
 
+/// 团队「成员」弹窗表格行：只带展示与移除所需的键
+public struct TeamMemberLink {
+    public let userId: Int64
+    public let username: String
+
+    public init(userId: Int64, username: String) {
+        this.userId = userId
+        this.username = username
+    }
+}
+
 /// 团队-成员关联行：用户实体 + 是否已关联
 public struct MemberRow {
     public let user: User

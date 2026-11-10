@@ -91,41 +91,24 @@ public class TeamDialogSearchTest {
         openTeamPackages(page, t2)
         @Expect(page.pkgRows.get()[0].linked, false)
     }
-
-    // 成员搜索：用户名过滤同样即时生效
+    // 成员：表格只列已加入成员，候选只列非成员（下拉 + 添加语义）
     @TestCase
-    public func testMemberSearchFiltersImmediately(): Unit {
+    public func testMemberRowsListOnlyLinked(): Unit {
         let state = makePortalState("team")
         let teamId = state.adminData.createTeam("core", 1000)
-        let _ = state.auth.createUser("alice", "AlicePass1", false, email: "a@example.com")
+        let uid = state.auth.createUser("alice", "AlicePass1", false, email: "a@example.com").getOrThrow().id
         let _ = state.auth.createUser("bob", "BobPass1", false, email: "b@example.com")
 
         let page = mountTeams(state)
         openTeamMembers(page, teamId)
-        @Expect(page.memberRows.get().size, 2)
-
-        page.memberSearch.set("bob")
-        @Expect(page.memberRows.get().size, 1)
-        @Expect(page.memberRows.get()[0].user.username, "bob")
-
-        // 首尾空白不参与匹配（trimAscii）
-        page.memberSearch.set("  alice ")
-        @Expect(page.memberRows.get().size, 1)
-        @Expect(page.memberRows.get()[0].user.username, "alice")
-    }
-
-    // 成员关联状态变更后同样要刷新
-    @TestCase
-    public func testMemberLinkStateRefreshesOnToggle(): Unit {
-        let state = makePortalState("team")
-        let teamId = state.adminData.createTeam("core", 1000)
-        let uid = state.auth.createUser("alice", "AlicePass1", false, email: "a@example.com").getOrThrow().id
-        let page = mountTeams(state)
-        openTeamMembers(page, teamId)
-        @Expect(page.memberRows.get()[0].linked, false)
+        @Expect(page.memberRows.get().size, 0)
 
         state.adminData.setTeamMembers(teamId, [uid])
         page.refreshMembers()
-        @Expect(page.memberRows.get()[0].linked, true)
+        @Expect(page.memberRows.get().size, 1)
+        @Expect(page.memberRows.get()[0].username, "alice")
+        let opts = page.memberOptions()
+        @Expect(opts.size, 1)
+        @Expect(opts[0], "bob")
     }
 }

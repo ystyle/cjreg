@@ -121,13 +121,13 @@ public class CovSecondWaveAdminTest {
         let _ = page.openPackages(actx, tid)
         let _ = page.openMembers(actx, tid)
         @Expect(page.pkgRows.get().size, 1)
-        @Expect(page.memberRows.get().size, 2)   // m1 + covadmin
+        @Expect(page.memberRows.get().size, 0)   // 表格只列已加入成员
         // 两个绑定都存在时卸载：走两条 Some 分支
         page.onUnmount(mountCtx(state, userCtxMap(1, "admin", true)))
         page.pkgSearch.set("nothing")
         @Expect(page.pkgRows.get().size, 1)
-        page.memberSearch.set("nothing")
-        @Expect(page.memberRows.get().size, 2)
+        page.refreshMembers()
+        @Expect(page.memberRows.get().size, 0)
     }
 
     @TestCase
@@ -405,17 +405,18 @@ public class CovSecondWaveAdminTest {
         let (actx, _) = covActx(state)
         let _ = page.openMembers(actx, tid)
 
-        // 移除 u1：u2 必须留下（走 else 分支的 next.add(uid)）
-        let _ = page.toggleMember(actx, u1)
-        @Expect(page.msg.get(), "已移除成员")
+        // 移除 u1：u2 必须留下（next 列表构造）
+        let _ = page.removeMember(actx, u1)
+        @Expect(page.msg.get(), "已移除成员 m1")
         let left = state.adminData.listTeamMemberIds(tid)
         @Expect(left.size, 1)
         @Expect(left[0], u2)
 
         // 再添加第三个成员
-        let u3 = state.auth.createUser("m3", "Pass123456", false).getOrThrow().id
-        let _ = page.toggleMember(actx, u3)
-        @Expect(page.msg.get(), "已添加成员")
+        let _ = state.auth.createUser("m3", "Pass123456", false).getOrThrow()
+        page.memberPick.set("m3")
+        let _ = page.addMember(actx)
+        @Expect(page.msg.get(), "已添加成员 m3")
         @Expect(state.adminData.listTeamMemberIds(tid).size, 2)
     }
 }

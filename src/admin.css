@@ -260,3 +260,8 @@
 
 
 
+
+/* 弹窗里的「下拉 + 添加」一行：下拉占满剩余宽度，按钮固定宽度不换行 */
+.dialog-picker-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.dialog-picker-grow { flex: 1 1 auto; min-width: 0; }
+

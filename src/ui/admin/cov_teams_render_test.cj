@@ -368,62 +368,60 @@ public class CovTeamsRenderTest {
         @Expect(covRender(page.render()).contains("-/snappy@1.0.1"), true)
     }
 
-    // 成员关联弹窗：用户列表、toggle 两个方向、查找不到用户时记 #id
+    // 成员关联弹窗：下拉候选只列非成员，表格只列已加入成员；添加/移除都写审计
     @TestCase
-    public func covTeams_memberDialogToggleBothWays(): Unit {
+    public func covTeams_memberDialogAddAndRemove(): Unit {
         let state = makePortalState("team")
         let tid = seedCovTeam(state, "member-team")
         let uid = state.auth.createUser("alice", "AlicePass1", false, email: "a@example.com").getOrThrow().id
         let _ = state.auth.createUser("bob", "BobPass123", false)
-        // 操作者账号也占一行
         let (actx, _) = covActx(state)
         let page = mountTeamsCov(state)
         let _ = page.openMembers(actx, tid)
         @Expect(page.memberDialogVisible.get(), true)
-        @Expect(page.memberSearch.get(), "")
-        @Expect(page.memberRows.get().size, 3)   // alice + bob + covadmin
-        let json = covRender(page.render())
-        @Expect(json.contains("团队成员管理"), true)
-        @Expect(json.contains("alice"), true)
-        @Expect(json.contains("a@example.com") || json.contains("alice"), true)
-        @Expect(json.contains("添加"), true)
+        @Expect(page.memberPick.get(), "")
+        @Expect(page.memberRows.get().size, 0)
+        @Expect(covRender(page.render()).contains("团队成员管理"), true)
 
-        // 添加
-        let _ = page.toggleMember(actx, uid)
-        @Expect(page.msg.get(), "已添加成员")
+        page.memberPick.set("alice")
+        let _ = page.addMember(actx)
+        @Expect(page.msg.get(), "已添加成员 alice")
         @Expect(state.adminData.listTeamMemberIds(tid).size, 1)
+        @Expect(page.memberRows.get()[0].username, "alice")
         @Expect(state.adminData.queryLogs(Some("admin"), "add_team_member", "", 0, 0, 0, 10)[1], 1)
-        @Expect(covRender(page.render()).contains("el-button--danger"), true)
 
-        // 移除
-        let _ = page.toggleMember(actx, uid)
-        @Expect(page.msg.get(), "已移除成员")
+        let _ = page.removeMember(actx, uid)
+        @Expect(page.msg.get(), "已移除成员 alice")
         @Expect(state.adminData.listTeamMemberIds(tid).size, 0)
         @Expect(state.adminData.queryLogs(Some("admin"), "remove_team_member", "", 0, 0, 0, 10)[1], 1)
+
+        page.memberPick.set("")
+        let _ = page.addMember(actx)
+        @Expect(page.msg.get(), "请先在下拉里选择用户")
 
         let _ = page.closeMembers(actx)
         @Expect(page.memberDialogVisible.get(), false)
     }
 
-    // 成员名字兜底：库里查不到该 uid 时审计里记「#id」而不是空名字
+    // 移除时库里查不到该 uid：审计里记「#id」而不是空名字
     @TestCase
-    public func covTeams_toggleMemberUnknownUserFallsBackToId(): Unit {
+    public func covTeams_removeMemberUnknownUserFallsBackToId(): Unit {
         let state = makePortalState("team")
         let tid = seedCovTeam(state, "ghost-team")
+        state.adminData.setTeamMembers(tid, [424242])
         let page = mountTeamsCov(state)
         let (actx, _) = covActx(state)
         let _ = page.openMembers(actx, tid)
-        let _ = page.toggleMember(actx, 424242)
-        @Expect(page.msg.get(), "已添加成员")
-        let (logs, total) = state.adminData.queryLogs(Some("admin"), "add_team_member", "", 0, 0, 0, 10)
+        @Expect(page.memberRows.get()[0].username, "#424242")
+        let _ = page.removeMember(actx, 424242)
+        let (logs, total) = state.adminData.queryLogs(Some("admin"), "remove_team_member", "", 0, 0, 0, 10)
         @Expect(total, 1)
         @Expect(logs[0].target, "#424242")
-        @Expect(logs[0].detail, "team#${tid} members=1")
     }
 
-    // 成员搜索：用户名过滤（含 trim 与"已在另一个团队的关联不串台"）
+    // 成员行跟着团队切换重算
     @TestCase
-    public func covTeams_memberSearchAndLinkedState(): Unit {
+    public func covTeams_memberRowsSwitchTeam(): Unit {
         let state = makePortalState("team")
         let t1 = seedCovTeam(state, "t1")
         let t2 = seedCovTeam(state, "t2")
@@ -433,14 +431,12 @@ public class CovTeamsRenderTest {
         let page = mountTeamsCov(state)
         let (actx, _) = covActx(state)
         let _ = page.openMembers(actx, t1)
-        page.memberSearch.set("carol")
         @Expect(page.memberRows.get().size, 1)
-        @Expect(page.memberRows.get()[0].linked, true)
+        @Expect(page.memberRows.get()[0].username, "carol")
 
         let _ = page.openMembers(actx, t2)
-        page.memberSearch.set("carol")
-        @Expect(page.memberRows.get().size, 1)
-        @Expect(page.memberRows.get()[0].linked, false)
+        @Expect(page.memberRows.get().size, 0)
+        @Expect(page.memberOptions().size >= 1, true)
     }
 
     // 删除确认：正文带团队名、取消、确认、不存在的 id 不弹
@@ -517,7 +513,8 @@ public class CovTeamsRenderTest {
         @Expect(state.adminData.listTeamPackages(tid).size, 0)
 
         let _ = page.openMembers(plain, tid)
-        let _ = page.toggleMember(plain, 1)
+        page.memberPick.set("nobody")
+        let _ = page.addMember(plain)
         @Expect(page.msg.get(), "无权限：需要管理员登录")
         @Expect(state.adminData.listTeamMemberIds(tid).size, 0)
 
@@ -552,7 +549,7 @@ public class CovTeamsRenderTest {
         let _ = page.saveOrgs(actx)
         @Expect(page.msg.get(), "")
         let _ = page.togglePkg(actx, "o", "n")
-        let _ = page.toggleMember(actx, 1)
+        let _ = page.addMember(actx)
         let _ = page.askDelete(actx, 1)
         let _ = page.confirmDelete(actx)
         @Expect(page.listHint(), "暂无团队，点击「新增团队」创建")

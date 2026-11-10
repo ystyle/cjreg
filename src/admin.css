@@ -258,10 +258,5 @@
 .version-table-wrap [class*="el-table__body-wrapper"],
 .version-table-wrap [class*="el-table__inner-wrapper"] { overflow: visible !important; }
 
-/* 叠加层顺序：cjxt 的 Dialog 与 Drawer 共用 `.el-overlay-dialog` 且都写死 z-index:2001，
-   所以「先在抽屉里、再开弹窗」时两者同层级，按 DOM 顺序抽屉会盖在弹窗上面
-   （包管理 → 详情抽屉 → 点版本 → 版本详情弹窗）。这里只抬高「这一层里确实是弹窗」的那个
-   overlay root：遮罩 2090（压住抽屉的 2001）、弹窗容器 2100；抽屉自身的层级不变。 */
-.el-overlay-root:has(.el-dialog) .el-overlay { z-index: 2090 !important; }
-.el-overlay-root:has(.el-dialog) .el-overlay-dialog { z-index: 2100 !important; }
+
 

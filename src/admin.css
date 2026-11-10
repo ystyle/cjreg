@@ -268,29 +268,23 @@
 
 /* 备份页：行内操作（下载 + 操作下拉）不换行、留间距 */
 .row-actions { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
-/* 卡片里的提示块（Alert）与前后内容之间留呼吸：原来紧贴按钮/表格 */
-.el-alert { margin: 12px 0; }
-.el-alert:first-child { margin-top: 0; }
-/* 「备份内容」表单行与工具栏之间也留一点间距 */
+
+/* 注意：本仓 CSS 管线会给 class 选择器加哈希后缀，EP 类名必须用属性选择器匹配
+   （同 .version-table-wrap 那组的写法），否则规则命中不到元素。 */
+
+/* 提示块（Alert）与前后内容留呼吸 */
+[class~="el-alert"] { margin: 12px 0; }
+[class~="el-alert"]:first-child { margin-top: 0; }
+[class~="el-alert"] + p { margin-top: 12px; }
+
+/* 卡片之间留间距 */
+[class~="el-card"] + [class~="el-card"] { margin-top: 16px; }
+
+/* 表格单元格里的下拉浮层：卡片与表格容器默认 overflow 隐藏会把面板裁掉 */
+[class~="el-card"], [class~="el-card__body"] { overflow: visible; }
+.version-table-wrap, .version-table-wrap [class~="el-table"],
+.version-table-wrap [class~="el-table__inner-wrapper"],
+.version-table-wrap [class~="el-table__body-wrapper"] { overflow: visible !important; }
+
+/* 工具栏与上方提示/下方表格的间距 */
 .toolbar { margin: 12px 0 16px; }
-
-
-/* 备份页：行内操作（下载 + 操作下拉）不换行、留间距 */
-.row-actions { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
-/* 卡片里的提示块（Alert）与前后内容留呼吸：原来紧贴按钮/表格 */
-.el-alert { margin: 12px 0; }
-.el-alert:first-child { margin-top: 0; }
-.toolbar { margin: 12px 0 16px; }
-
-/* 管理端卡片之间留间距（备份页两张卡原来紧贴） */
-.el-card + .el-card { margin-top: 16px; }
-/* 提示块与其后的普通文本（如「上传接口：…」）之间留间距 */
-.el-alert + p { margin-top: 12px; }
-
-/* 表格单元格里的下拉浮层：EP 的 .el-card / 卡片 body 默认 overflow 隐藏，会把面板裁掉
-   （备份页「操作」菜单只露出半截就是这个原因）。三处一起放开。 */
-.el-card { overflow: visible; }
-.el-card__body { overflow: visible; }
-.version-table-wrap, .version-table-wrap .el-table,
-.version-table-wrap .el-table__inner-wrapper,
-.version-table-wrap .el-table__body-wrapper { overflow: visible !important; }

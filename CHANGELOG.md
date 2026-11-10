@@ -5,6 +5,14 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-10
+
+### Changed
+
+- 依赖 `bstorm 2.0.1 → 2.1.0`，随之 `badgercj 1.6.22 → 2.3.0`：流式落盘默认开启（flush/compaction 不再持有整表副本）、
+  arena 批次预留封顶 2MB（64MB 表每张 arena 84.2 → 68.2MB）、表生命周期引用计数修复（修复 compaction 摘表即解映射导致的 `MmapFile is closed`）。
+- CI / Release 工具链 `cangjie 1.1.3 → 1.2.0`（badgercj 2.3.0 要求 cjc 1.2.0；1.2.0 与此前版本 ABI 不兼容）。
+
 ### Fixed — 「创建发布计划」被详情页路由吞掉
 
 - 创建页路径 `/admin/publish-plans/create` 与详情页 `/admin/publish-plans/[id]` **同深度**，

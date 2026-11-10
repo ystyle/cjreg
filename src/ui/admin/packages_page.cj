@@ -518,16 +518,10 @@ class PackagesPage <: Component {
             .emptyText("暂无数据")
             .stripe()
             // 包名给固定宽度就够（原先的 minWidth 让它把整行留白全吃掉）；多出来的空间给「描述」列
+            // 包名列恒为纯文本：右栏抽屉本身就表明"当前在看哪个包"，
+            // 行内再标「● 选中包」是重复信息，且点一次就变蓝会让整列看起来像被选中状态。
             .add(TableColumn<PackageRow>().label("包").width(220).render({ r, i =>
-                let label = pkgKeyText(r.organization, r.name)
-                let curOrg = this.selOrg.get()
-                let curName = this.selName.get()
-                let sel = curOrg == r.organization && curName == r.name
-                if (sel) {
-                    Tag([text("● " + label)]).kind(ComponentKind.Primary)
-                } else {
-                    text(label)
-                }
+                text(pkgKeyText(r.organization, r.name))
             }).showOverflowTooltip())
             .add(TableColumn<PackageRow>().label("描述").accessor({ r => r.latestDesc }).minWidth(220).showOverflowTooltip())
             .add(TableColumn<PackageRow>().label("最新版本").accessor({ r => r.latestVersion }).width(100))

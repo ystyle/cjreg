@@ -13,7 +13,10 @@
 # 另装 tzdata（时区/日志）与 ca-certificates（上游回源 TLS）。
 FROM archlinux:latest
 
-RUN pacman -Sy --noconfirm \
+# archlinux:latest 是滚动发行版：只 -Sy 会出现「半升级」状态，依赖解析必然失败
+# （实测 CI 报 failed to prepare transaction / could not satisfy dependencies）。
+# 必须整机升级 -Syu，且 --needed 避免重复安装。
+RUN pacman -Syu --noconfirm --needed \
         liburing \
         tzdata \
         ca-certificates \

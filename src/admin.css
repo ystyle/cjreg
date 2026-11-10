@@ -281,3 +281,8 @@
 .el-alert { margin: 12px 0; }
 .el-alert:first-child { margin-top: 0; }
 .toolbar { margin: 12px 0 16px; }
+
+/* 管理端卡片之间留间距（备份页两张卡原来紧贴） */
+.el-card + .el-card { margin-top: 16px; }
+/* 提示块与其后的普通文本（如「上传接口：…」）之间留间距 */
+.el-alert + p { margin-top: 12px; }

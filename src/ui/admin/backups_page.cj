@@ -245,6 +245,9 @@ class BackupsPage <: Component {
 
     // ===== 渲染 =====
     func renderList(): IComponent {
+        // 表格里的浮层（操作下拉）会被 EP 表格容器裁掉/压住：套 version-table-wrap
+        // （与包管理页同一套 CSS 放开 .cell / body-wrapper / td 的 overflow 与 z-index）
+        div([
         Table<BackupRow>()
             .data(this.rows)
             .emptyText("暂无备份，点「立即备份」创建")
@@ -267,6 +270,7 @@ class BackupsPage <: Component {
                         .onCommandCtx(onCmd),
                 ], attrs: Some(HashMap<String, String>([("class", cls("row-actions"))])))
             }))
+        ], attrs: Some(HashMap<String, String>([("class", cls("version-table-wrap"))])))
     }
 
     func renderPending(): IComponent {

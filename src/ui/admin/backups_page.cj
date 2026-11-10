@@ -41,6 +41,9 @@ class BackupsPage <: Component {
     var includeBlobs = Signal<Bool>(true)
     var pendingRestore = Signal<String>("")
     var dataVersion = Signal<Int64>(0)
+    // 删除确认框：归档不可恢复，删除前必须二次确认
+    var confirmVisible = Signal<Bool>(false)
+    var pendingDelete = Signal<String>("")
     // 恢复上传：粘贴归档路径 or 上传（服务端同机）→ 校验 → 标记重启应用
     var restoreFile = Signal<String>("")
     var restoreResult = Signal<String>("")
@@ -90,7 +93,8 @@ class BackupsPage <: Component {
         this.busy.set(s.busy())
         let list = ArrayList<BackupRow>()
         for ((name, size, _) in s.listArchives()) {
-            list.add(BackupRow(name, formatBytes(size), timeTextOf(name), "/api/admin/backups/${name}/download"))
+            list.add(BackupRow(name, formatBytes(size), timeTextOf(name),
+                "/api/admin/backups/${name}/download?ticket=${issueDownloadTicket(name)}"))
         }
         this.rows.set(list)
         this.pendingRestore.set(pendingRestoreInfo(this.dataDir())[0])
@@ -141,6 +145,7 @@ class BackupsPage <: Component {
         }
         match (s.archivePath(fileName)) {
             case Some(path) =>
+                this.restoreResult.set("校验中…（${fileName}）")
                 try {
                     let r = restoreBackup("", path, checkOnly: true)
                     this.restoreResult.set("校验通过：${r.totalRows} 行、制品 ${r.blobFiles} 个（${fileName}）")
@@ -151,6 +156,39 @@ class BackupsPage <: Component {
                 this.restoreResult.set("文件不存在：${fileName}")
         }
         PatchResult.ReRender
+    }
+
+    // 行内下拉的命令分发
+    func onRowCommand(ctx: ActionContext, fileName: String, cmd: String): Unit {
+        match (cmd) {
+            case "verify" => let _ = this.onVerify(ctx, fileName)
+            case "apply" => let _ = this.onApplyOnRestart(ctx, fileName)
+            case "delete" => let _ = this.askDelete(ctx, fileName)
+            case _ => ()
+        }
+    }
+
+    // 删除前确认（不可恢复，必须二次确认）
+    func askDelete(ctx: ActionContext, fileName: String): PatchResult {
+        this.pendingDelete.set(fileName)
+        this.confirmVisible.set(true)
+        PatchResult.ReRender
+    }
+
+    func cancelDelete(ctx: ActionContext): PatchResult {
+        this.confirmVisible.set(false)
+        this.pendingDelete.set("")
+        PatchResult.ReRender
+    }
+
+    func confirmDelete(ctx: ActionContext): PatchResult {
+        let name = this.pendingDelete.get()
+        this.confirmVisible.set(false)
+        this.pendingDelete.set("")
+        if (name.isEmpty()) {
+            return PatchResult.ReRender
+        }
+        this.onDelete(ctx, name)
     }
 
     /** 标记「下次重启应用这个归档」。恢复本身在重启时执行（含自动回滚）。 */
@@ -214,17 +252,20 @@ class BackupsPage <: Component {
             .add(TableColumn<BackupRow>().label("归档").accessor({ r => r.fileName }).minWidth(240))
             .add(TableColumn<BackupRow>().label("大小").accessor({ r => r.sizeText }).width(100))
             .add(TableColumn<BackupRow>().label("时间").accessor({ r => r.timeText }).width(130))
-            .add(TableColumn<BackupRow>().label("操作").width(300).render({ r, i =>
+            // 行内只留「下载」+「操作」下拉：四个按钮平铺会把操作列挤爆（「下载」曾被挤成两行）
+            .add(TableColumn<BackupRow>().label("操作").width(200).render({ r, i =>
                 let name = r.fileName
-                let verifyH: ActionHandler = { c => this.onVerify(c, name) }
-                let applyH: ActionHandler = { c => this.onApplyOnRestart(c, name) }
-                let deleteH: ActionHandler = { c => this.onDelete(c, name) }
+                let items = ArrayList<IComponent>()
+                items.add(DropdownItem().content("校验").command("verify"))
+                items.add(DropdownItem().content("重启时应用").command("apply").divided())
+                items.add(DropdownItem().content("删除").command("delete").divided())
+                let onCmd: (ActionContext, String) -> Unit = { ctx, cmd => this.onRowCommand(ctx, name, cmd) }
                 div([
                     Link([text("下载")]).href(r.downloadUrl),
-                    Button([text("校验")]).size(ButtonSize.Small).onClick(verifyH),
-                    Button([text("重启时应用")]).size(ButtonSize.Small).kind(ButtonKind.Warning).onClick(applyH),
-                    Button([text("删除")]).size(ButtonSize.Small).kind(ButtonKind.Danger).onClick(deleteH),
-                ], attrs: Some(HashMap<String, String>([("style", "display:flex;gap:8px;align-items:center;flex-wrap:nowrap;")])))
+                    Dropdown(Button([text("操作")]).size(ButtonSize.Small))
+                        .menu(items.toArray())
+                        .onCommandCtx(onCmd),
+                ], attrs: Some(HashMap<String, String>([("class", cls("row-actions"))])))
             }))
     }
 
@@ -274,6 +315,7 @@ class BackupsPage <: Component {
         adminLayout("/admin/backups", [
             div([text("备份与恢复")], attrs: Some(HashMap<String, String>([("class", cls("page-title"))]))),
             this.renderPending(),
+            this.renderConfirm(),
             adminCard("在线备份", [note, toolbar,
                 FormItem([Switch().bind(this.includeBlobs).activeText("含制品").inactiveText("仅数据库")])
                     .label("备份内容"),
@@ -288,6 +330,23 @@ class BackupsPage <: Component {
                     "命令行等价：cjreg admin restore -d <空目录> --from <归档> --check-only")]),
             ]),
         ])
+    }
+
+    // 删除确认（与 EP MessageBox 同语义：标题 + 正文 + 取消/确定）
+    func renderConfirm(): IComponent {
+        let cancelH: ActionHandler = { c => this.cancelDelete(c) }
+        let okH: ActionHandler = { c => this.confirmDelete(c) }
+        Dialog([
+            div([text("确定删除归档「" + this.pendingDelete.get() + "」吗？删除后不可恢复。")]),
+        ])
+            .visible(this.confirmVisible)
+            .title("删除备份")
+            .width("420px")
+            .closeOnClickModal(false)
+            .footer([
+                Button([text("取消")]).onClick(cancelH),
+                Button([text("删除")]).kind(ButtonKind.Danger).onClick(okH),
+            ])
     }
 
     func listHint(): String {

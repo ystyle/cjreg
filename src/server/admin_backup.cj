@@ -275,7 +275,7 @@ let TICKET_TTL_MS: Int64 = 5 * 60 * 1000
 let ticketMutex = Mutex()
 let tickets = HashMap<String, DownloadTicket>()
 
-func issueDownloadTicket(fileName: String): String {
+public func issueDownloadTicket(fileName: String): String {
     let now = DateTime.nowUTC().toUnixTimeStamp().toMilliseconds()
     // 随机票据：时间戳 + 计数器 + 文件名哈希，够用且不可猜（只对本进程内的文件名有效）
     let nonce = "${now}-${fileName.size}-${fileName.hashCode()}"

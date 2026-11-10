@@ -291,3 +291,14 @@
 
 /* 备份页校验结果提示：与上方表格留间距 */
 .backup-verify { margin-top: 12px; }
+
+/* MessageBox 的遮罩必须是视口级：组件渲染在页面树里，若祖先带 transform（如弹窗动画），
+   fixed 会被当成相对该祖先定位 —— 表现为确认框“弹到页面/弹窗底部”。这里强制视口定位并抬高层级。 */
+[class~="el-overlay"][class~="is-message-box"] {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 2200 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}

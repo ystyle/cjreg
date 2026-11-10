@@ -288,3 +288,6 @@
 
 /* 工具栏与上方提示/下方表格的间距 */
 .toolbar { margin: 12px 0 16px; }
+
+/* 备份页校验结果提示：与上方表格留间距 */
+.backup-verify { margin-top: 12px; }

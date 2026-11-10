@@ -310,8 +310,10 @@ class BackupsPage <: Component {
             .kind(AlertKind2.Info)
             .showIcon()
 
+        // 校验结果属于「在线备份」卡片（操作发生在那一行），不要跑到恢复卡片里
         let verifyBox = if (this.restoreResult.get() != "") {
-            Alert().children([text(this.restoreResult.get())]).kind(AlertKind2.Success).showIcon()
+            div([Alert().children([text(this.restoreResult.get())]).kind(AlertKind2.Success).showIcon()],
+                attrs: Some(HashMap<String, String>([("class", cls("backup-verify"))])))
         } else {
             div()
         }
@@ -323,8 +325,9 @@ class BackupsPage <: Component {
             adminCard("在线备份", [note, toolbar,
                 FormItem([Switch().bind(this.includeBlobs).activeText("含制品").inactiveText("仅数据库")])
                     .label("备份内容"),
-                listBody(this.listHint(), this.renderList())]),
-            adminCard("恢复", [verifyBox,
+                listBody(this.listHint(), this.renderList()),
+                verifyBox]),
+            adminCard("恢复", [
                 Alert()
                     .children([text("恢复步骤：① 上传或选择归档 → ② 校验（只读，不写库）→ ③ 标记「重启时应用」→ " +
                         "④ 重启服务，启动时替换数据；失败自动回滚。归档含口令哈希与 Token，请按敏感文件保管。")])

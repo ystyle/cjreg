@@ -260,3 +260,7 @@ app ──→ encryptUtils ──→ mathUtils, strUtils
 - **决赛迭代计划**（初赛基线 + 迭代项 + 差异性说明模板）：[docs/finals-plan.md](docs/finals-plan.md)
 - 用户门户设计：[docs/user-portal-design.md](docs/user-portal-design.md)
 - 可行性评估（仓颉重写 cjrepo）：`../cjdep/docs/eval-cjrepo-cangjie.md`
+
+## License
+
+MIT，见 [LICENSE](LICENSE)。

@@ -3,7 +3,7 @@
   name = "cjreg"
   organization = "ystyle"
   description = "仓颉私有中心仓与多仓工具：多仓配置、依赖解析/冲突/版本强制替换、镜像/代理/仓库同步、一键部署"
-  version = "0.5.0"
+  version = "0.5.1"
   target-dir = ""
   script-dir = ""
   output-type = "executable"
@@ -21,7 +21,7 @@
   "semver" = "0.0.3"
   "pbkdf2" = "1.0.0"
   "tang" = "1.0.6"
-  "bstorm" = "2.1.0"
+  "bstorm" = "2.1.1"
   "graph" = "1.0.1"
   "gjson" = "1.2.2"
   # 制品（.cjp = gzip + tar）内的 README / cjpm.toml 提取：tar 用自研 tar-cj（ystyle::tar）

@@ -1,5 +1,7 @@
 # cjreg
 
+> 🏆 仓颉生态创新开发挑战赛 · **优秀奖**作品（[获奖名单公示](https://mp.weixin.qq.com/s/FUmaK9HJYb1N3XFI8PTCsA)）
+
 **仓颉私有中心仓** —— 用仓颉写的单二进制 registry，给 `cjpm` 提供私有包托管、多上游代理、依赖拓扑发布计划与 Web 管理后台。官方中心仓协议互通，客户端零改动。
 
 [文档站](https://ystyle.top/cjreg/) · [快速开始](https://ystyle.top/cjreg/guide/) · [部署指南](https://ystyle.top/cjreg/deploy/) · [API 一览](https://ystyle.top/cjreg/api/) · [演示视频](https://www.bilibili.com/video/BV1e9pw6WELk/)

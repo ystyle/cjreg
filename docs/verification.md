@@ -349,7 +349,7 @@ $ bash tests/e2e.sh
 - **实测**：≤32 MiB 稳定通过；48–50 MiB 偶发 `Out of memory`（同一台机器上 48 MiB 失败过一次、50 MiB 随后成功
   → 与当时 GC 堆占用相关，**非体积阈值、非 cgroup 限制**：该进程无内存上限、机器可用内存 >20 GiB）。
 - **缓解（已文档化）**：发布大包前设置 `export cjHeapSize=2GB cjGCThreshold=1GB cjGCInterval=100ms`
-  —— 见 `README.md`「内存与优雅关闭」与 `cjreg.toml.example` 注释。
+  —— 见 `docs-site/guide/memory.md` 与 `cjreg.toml.example` 注释。
 - **根治（已落地，2026-10-06）**：`POST /pkg` 改为**流式接收**（`src/protocol/publish_intake.cj`）——
   读段头 → meta 段 → 再读制品段头 → 按 1 MiB 块边读边喂 SHA-256 并写入 `blobs/.tmp-*` 临时文件；
   读满后与 meta 声明的 `sha256sum` 比对，一致才由 `BlobStore.claimFile` **rename 原子进位**（内容寻址天然去重），

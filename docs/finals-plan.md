@@ -223,5 +223,5 @@ git push origin v0.1.0-submission     # 决赛写差异说明时以此 tag 为�
 | 演示视频（核心功能 + 使用链路）、统一作品提交模板（已提交） | 质量门槛（缺则不合格） | 待录 |
 | 覆盖率报告 + 低成本测试补强（handler / 公开页渲染） | 代码质量 30 分 | 待做 |
 
-> 说明：整包驻留内存与 `cjHeapSize` 的关系已在 `README.md`「内存与优雅关闭」与 `docs/verification.md` §5.1 如实说明，
+> 说明：整包驻留内存与 `cjHeapSize` 的关系已在 `docs-site/guide/memory.md` 与 `docs/verification.md` §5.1 如实说明，
 > 并明确「流式解析」列入决赛迭代 —— 既避免初赛被记为"未完成"，也为决赛留下可量化的提升点。

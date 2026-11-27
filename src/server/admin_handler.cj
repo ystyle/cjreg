@@ -30,6 +30,8 @@ public class AdminService {
     public var blobStore: ?BlobStore
     // 在线备份服务（None = 未注入，备份页不可用）
     public var backupSvc: ?OnlineBackupService
+    // 登录失败限速（进程内；防在线撞库，见安全测试报告 5.6）
+    public var loginLimiter = LoginLimiter()
 
     public init(auth: AuthService, upstreamSvc: UpstreamService,
                 userStore: UserStore, upstreamStore: UpstreamStore,
